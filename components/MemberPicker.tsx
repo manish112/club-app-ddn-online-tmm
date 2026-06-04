@@ -23,6 +23,7 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
 
   // Intro step
   const [intro, setIntro] = useState('');
+  const [city, setCity] = useState('');
   const [savingIntro, setSavingIntro] = useState(false);
 
   async function submitGuest(e: React.FormEvent) {
@@ -41,11 +42,12 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
   function handleThatSMe() {
     if (!selected) return;
     const member = members.find((m) => m.id === selected);
-    if (member?.introduction) {
+    if (member?.introduction && member?.city) {
       onSelect(selected);
       return;
     }
-    setIntro('');
+    setIntro(member?.introduction ?? '');
+    setCity(member?.city ?? '');
     setStep('intro');
   }
 
@@ -53,7 +55,7 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
     setSavingIntro(true);
     await supabase
       .from('members')
-      .update({ introduction: intro.trim() || null })
+      .update({ introduction: intro.trim() || null, city: city.trim() || null })
       .eq('id', selected);
     setSavingIntro(false);
     onSelect(selected);
@@ -133,7 +135,7 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
               TM {selectedMember?.display_name}
             </h2>
             <p className="text-stone-500 text-sm mb-4">
-              Add a short intro about yourself — others will see it when they sign in.
+              Complete your profile — others will see it when they sign in.
             </p>
 
             <textarea
@@ -148,6 +150,15 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
             <p className="text-right text-[10px] text-stone-300 -mt-1 mb-3">
               {intro.length}/300
             </p>
+
+            <input
+              type="text"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              placeholder="Your city (e.g. Dehradun)"
+              className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
+                         focus:outline-none focus:ring-2 focus:ring-maroon-700 mb-4"
+            />
 
             <div className="flex gap-2">
               <button

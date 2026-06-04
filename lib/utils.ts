@@ -1,4 +1,5 @@
 import type { Meeting, MeetingWithClaims, Member, RoleKey } from './types';
+import { ROLE_META } from './types';
 
 const TAG_ROLES: RoleKey[] = ['grammarian', 'ah_counter', 'timer', 'harkmaster'];
 
@@ -141,7 +142,7 @@ export function buildWhatsAppAgenda(
   const lines: string[] = [];
 
   lines.push('Please come forward to take the roles in the next meeting:');
-  lines.push(`WIC INDIA TOASTMASTERS Meeting #${meeting.number}`);
+  lines.push(`Dehradun Online Toastmasters Meeting #${meeting.number}`);
   lines.push('Speak, Lead, Inspire');
   lines.push(
     `🗓️ ${formatMeetingDate(meeting.date)}, ${formatTime(meeting.start_time)}- ${formatTime(meeting.end_time)} IST`
@@ -152,8 +153,17 @@ export function buildWhatsAppAgenda(
   // Prepared Speakers
   lines.push('🎙️ Prepared Speakers:');
   for (let i = 1; i <= meeting.speaker_slots; i++) {
-    const name = getClaimName('speaker', i);
+    const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === i);
+    const name = claim ? (membersById.get(claim.member_id) ? `TM ${membersById.get(claim.member_id)!.display_name}` : '') : '';
     lines.push(` ${i}. ${name}`);
+    if (claim) {
+      const details: string[] = [];
+      if (claim.path)         details.push(`Path: ${claim.path}`);
+      if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
+      if (claim.project)      details.push(`Project: ${claim.project}`);
+      if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
+      if (details.length > 0) lines.push(`    ${details.join(' | ')}`);
+    }
   }
   lines.push('');
 
@@ -180,6 +190,46 @@ export function buildWhatsAppAgenda(
   lines.push(`🔍 Ah-Counter- ${getClaimName('ah_counter', 1)}`);
   lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
   lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
+
+  // Introductions section
+  const roleOrder: { key: RoleKey; slots: number }[] = [
+    { key: 'speaker',    slots: meeting.speaker_slots },
+    { key: 'evaluator',  slots: meeting.evaluator_slots },
+    { key: 'tmod',       slots: 1 },
+    ...(meeting.meeting_type !== 'speakathon' ? [{ key: 'ttm' as RoleKey, slots: 1 }] : []),
+    { key: 'ge',         slots: 1 },
+    { key: 'grammarian', slots: 1 },
+    { key: 'ah_counter', slots: 1 },
+    { key: 'timer',      slots: 1 },
+    { key: 'harkmaster', slots: 1 },
+  ];
+
+  const introBlocks: string[] = [];
+  for (const { key, slots } of roleOrder) {
+    const meta = ROLE_META[key];
+    for (let slot = 1; slot <= slots; slot++) {
+      const claim = meeting.role_claims.find((c) => c.role_key === key && c.slot_index === slot);
+      if (!claim) continue;
+      const member = membersById.get(claim.member_id);
+      if (!member) continue;
+
+      const label = slots > 1
+        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
+        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
+      introBlocks.push(label);
+
+      if (member.introduction) introBlocks.push(member.introduction);
+      introBlocks.push('');
+    }
+  }
+
+  if (introBlocks.length > 0) {
+    lines.push('');
+    lines.push('─────────────────────────');
+    lines.push('📋 Role Player Introductions:');
+    lines.push('');
+    lines.push(...introBlocks);
+  }
 
   return lines.join('\n');
 }
