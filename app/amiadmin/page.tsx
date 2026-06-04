@@ -165,7 +165,7 @@ function MeetingForm({
       date: form.date,
       start_time: form.start_time + ':00',
       end_time: form.end_time + ':00',
-      theme: form.theme || null,
+      theme: form.theme.trim() || 'TBD',
       meeting_type: form.meeting_type,
       speaker_slots: parseInt(form.speaker_slots),
       evaluator_slots: parseInt(form.evaluator_slots),

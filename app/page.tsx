@@ -1,10 +1,12 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMeetings } from '@/hooks/useMeetings';
 import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { MemberAdviceModal } from '@/components/MemberAdviceModal';
+import { ThemeReminderModal } from '@/components/ThemeReminderModal';
+import type { MeetingWithClaims } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
 import { isMeetingPast, getAdjacentMemberRoles } from '@/lib/utils';
@@ -22,6 +24,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('next');
   const [announceDismissed, setAnnounceDismissed] = useState(true);
   const [showAdvice, setShowAdvice] = useState(false);
+  const [themeReminderMeeting, setThemeReminderMeeting] = useState<MeetingWithClaims | null>(null);
+  const themeReminderShown = useRef(false);
 
   useEffect(() => {
     if (!announcement) { setAnnounceDismissed(true); return; }
@@ -45,6 +49,27 @@ export default function Home() {
     sessionStorage.setItem(ADVICE_KEY(currentMember.id), '1');
   }, [loaded, loading, currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Remind TMoD to set a theme if it's missing or still "TBD".
+  // Uses a ref (not sessionStorage) so it fires on every page load/refresh.
+  useEffect(() => {
+    if (!loaded || loading || !currentMember || meetings.length === 0) return;
+    if (themeReminderShown.current) return;
+    const needsTheme = meetings
+      .filter((m) => !isMeetingPast(m))
+      .sort((a, b) => a.number - b.number)
+      .find((m) => {
+        const isTMoD = m.role_claims.some(
+          (c) => c.role_key === 'tmod' && c.member_id === currentMember.id
+        );
+        if (!isTMoD) return false;
+        const t = (m.theme ?? '').trim().toLowerCase();
+        return !t || t === 'tbd';
+      });
+    if (!needsTheme) return;
+    themeReminderShown.current = true;
+    setThemeReminderMeeting(needsTheme);
+  }, [loaded, loading, currentMember?.id, meetings]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // When a member signs in, switch to their profile tab so the dashboard is
   // the first thing they see. Reset to 'next' when they sign out.
   useEffect(() => {
@@ -57,6 +82,7 @@ export default function Home() {
 
   function handleSelect(id: string) {
     if (id !== 'guest') sessionStorage.removeItem(ADVICE_KEY(id));
+    themeReminderShown.current = false;
     identify(id);
   }
 
@@ -249,6 +275,14 @@ export default function Home() {
           member={currentMember}
           meetings={meetings}
           onClose={() => setShowAdvice(false)}
+        />
+      )}
+
+      {themeReminderMeeting && (
+        <ThemeReminderModal
+          meeting={themeReminderMeeting}
+          onSaved={() => { setThemeReminderMeeting(null); refetch(); }}
+          onLater={() => setThemeReminderMeeting(null)}
         />
       )}
     </div>

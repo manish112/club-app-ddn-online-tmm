@@ -180,9 +180,10 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
           <p className="text-xs font-semibold text-maroon-700 uppercase tracking-widest mb-0.5">
             Welcome back
           </p>
-          <h2 className="font-serif text-xl font-semibold text-stone-900 mb-4">
+          <h2 className="font-serif text-xl font-semibold text-stone-900 mb-0.5">
             TM {selectedMember?.display_name}
           </h2>
+          <p className="text-sm text-stone-500 mb-4">Introduce yourself to us</p>
 
           {/* Photo upload */}
           <div className="flex items-center gap-4 mb-4">

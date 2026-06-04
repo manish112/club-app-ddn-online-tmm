@@ -109,18 +109,21 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           {/* Photo upload */}
           <div className="flex items-center gap-4">
             <MemberAvatar member={previewMember} size={64} />
-            <label className={`cursor-pointer text-sm font-medium tap-target ${
-              uploading ? 'text-stone-300 pointer-events-none' : 'text-maroon-600 hover:text-maroon-800'
-            }`}>
-              {uploading ? 'Uploading…' : 'Change Photo'}
-              <input
-                type="file"
-                accept="image/jpeg,image/png"
-                className="hidden"
-                onChange={handlePhotoChange}
-                disabled={uploading}
-              />
-            </label>
+            <div>
+              <label className={`cursor-pointer text-sm font-medium tap-target ${
+                uploading ? 'text-stone-300 pointer-events-none' : 'text-maroon-600 hover:text-maroon-800'
+              }`}>
+                {uploading ? 'Uploading…' : 'Change Photo'}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  className="hidden"
+                  onChange={handlePhotoChange}
+                  disabled={uploading}
+                />
+              </label>
+              <p className="text-[10px] text-stone-400 mt-0.5">JPEG or PNG · max 2 MB</p>
+            </div>
           </div>
 
           {/* Gender */}

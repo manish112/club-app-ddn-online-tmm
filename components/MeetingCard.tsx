@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey } from '@/lib/types';
 import { getMeetingRoles } from '@/lib/types';
 import { formatMeetingDate, formatTime, isMeetingLocked, isMeetingPast } from '@/lib/utils';
@@ -20,9 +21,24 @@ interface Props {
 }
 
 export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, onChanged }: Props) {
+  const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
+  const [editingTheme, setEditingTheme] = useState(false);
+  const [themeInput, setThemeInput] = useState(meeting.theme ?? '');
+  const [savingTheme, setSavingTheme] = useState(false);
   const locked = isMeetingLocked(meeting);
   const past = isMeetingPast(meeting);
+
+  const isTMoD = !!memberId &&
+    meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
+
+  async function saveTheme() {
+    setSavingTheme(true);
+    await supabase.from('meetings').update({ theme: themeInput.trim() || null }).eq('id', meeting.id);
+    setSavingTheme(false);
+    setEditingTheme(false);
+    onChanged();
+  }
 
   const claimsMap = new Map(
     meeting.role_claims.map((c) => [`${c.role_key}:${c.slot_index}`, c])
@@ -107,23 +123,61 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         )}
       </div>
 
-      {/* Theme band — meeting's headline, visually prominent */}
-      {meeting.theme && (
+      {/* Theme band — editable by TMoD */}
+      {(meeting.theme || isTMoD) && (
         <div className={`px-4 py-3 border-b flex items-start gap-3
           ${past
             ? 'bg-stone-50 border-stone-100'
             : 'bg-gradient-to-r from-maroon-50 to-yellow-100 border-maroon-100'}`}
         >
           <span className="text-2xl leading-none shrink-0 mt-0.5">🌐</span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-maroon-600/70">
               Theme
             </p>
-            <p className={`font-serif text-base sm:text-lg font-bold leading-snug
-              ${past ? 'text-stone-600' : 'text-maroon-800'}`}
-            >
-              {meeting.theme}
-            </p>
+            {editingTheme ? (
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  value={themeInput}
+                  onChange={(e) => setThemeInput(e.target.value)}
+                  placeholder="Enter meeting theme…"
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveTheme(); if (e.key === 'Escape') setEditingTheme(false); }}
+                  className="flex-1 min-w-0 border border-maroon-200 rounded-lg px-2 py-1 text-sm
+                             text-stone-800 bg-white focus:outline-none focus:ring-2 focus:ring-maroon-600"
+                />
+                <button onClick={saveTheme} disabled={savingTheme}
+                  className="text-xs font-semibold text-maroon-700 hover:text-maroon-900
+                             tap-target disabled:opacity-40 shrink-0">
+                  {savingTheme ? '…' : 'Save'}
+                </button>
+                <button
+                  onClick={() => { setEditingTheme(false); setThemeInput(meeting.theme ?? ''); }}
+                  className="text-xs text-stone-400 hover:text-stone-600 tap-target shrink-0">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {meeting.theme ? (
+                  <p className={`font-serif text-base sm:text-lg font-bold leading-snug
+                    ${past ? 'text-stone-600' : 'text-maroon-800'}`}>
+                    {meeting.theme}
+                  </p>
+                ) : (
+                  <p className="text-sm text-stone-400 italic">No theme set yet</p>
+                )}
+                {isTMoD && (
+                  <button
+                    onClick={() => setEditingTheme(true)}
+                    className="text-base tap-target shrink-0 opacity-60 hover:opacity-100 transition-opacity"
+                    title="Edit theme"
+                  >
+                    ✏️
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
