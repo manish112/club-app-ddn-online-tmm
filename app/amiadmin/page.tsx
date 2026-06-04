@@ -621,7 +621,7 @@ function AdminPanel() {
         )}
       </div>
 
-      <SiteFooter />
+      <SiteFooter members={members} />
     </div>
   );
 }

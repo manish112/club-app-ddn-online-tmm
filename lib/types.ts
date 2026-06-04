@@ -62,6 +62,7 @@ export interface Member {
   city: string | null;
   gender: 'male' | 'female' | 'other' | null;
   avatar_url: string | null;
+  show_phone_in_contact: boolean;
   created_at: string;
 }
 

@@ -259,7 +259,7 @@ export default function Home() {
         })()}
       </main>
 
-      <SiteFooter />
+      <SiteFooter members={members} />
 
       {showPicker && (
         <MemberPicker

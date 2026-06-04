@@ -1,4 +1,6 @@
 import Image from 'next/image';
+import type { Member, LeadershipRole } from '@/lib/types';
+import { LEADERSHIP_ROLES } from '@/lib/types';
 
 function WhatsAppIcon() {
   return (
@@ -8,7 +10,26 @@ function WhatsAppIcon() {
   );
 }
 
-export function SiteFooter() {
+// Roles shown in Contact Us, in display order (club_mentor excluded)
+const CONTACT_ROLE_ORDER: LeadershipRole[] = ['president', 'vp_education', 'secretary', 'vp_pr'];
+
+function waLink(phone: string) {
+  const digits = phone.replace(/\D/g, '');
+  return `https://wa.me/${digits}`;
+}
+
+interface Props {
+  members: Member[];
+}
+
+export function SiteFooter({ members }: Props) {
+  const contacts = CONTACT_ROLE_ORDER
+    .map((role) => members.find((m) => m.active && m.leadership_role === role))
+    .filter((m): m is Member => !!m);
+
+  const roleLabel = (role: LeadershipRole) =>
+    LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
+
   return (
     <footer className="bg-navy-700 border-t border-white/10 mt-8 py-8 px-4">
       <div className="max-w-2xl mx-auto space-y-6">
@@ -16,55 +37,55 @@ export function SiteFooter() {
         {/* Venue */}
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">Venue</p>
-          <p className="text-sm font-medium text-white/80">
-            💻 Online
-          </p>
+          <p className="text-sm font-medium text-white/80">💻 Online</p>
           <p className="text-xs text-white/40 mt-0.5">
             Meeting link will be shared on your registered email 6 hours before the meeting
           </p>
         </div>
 
         {/* Contacts */}
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Contact us</p>
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <WhatsAppIcon />
-              <div>
-                <p className="text-sm font-medium text-white/80">TM Sarah</p>
-                <p className="text-xs text-white/40">Club President</p>
-              </div>
-            </div>
-            <a
-              href="https://wa.me/919922990599"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 group"
-            >
-              <WhatsAppIcon />
-              <div>
-                <p className="text-sm font-medium text-white/80 group-hover:text-green-400 transition-colors">
-                  TM Manish Singh
-                </p>
-                <p className="text-xs text-white/40">VP Education · +91 99229 90599</p>
-              </div>
-            </a>
-            <div className="flex items-center gap-3">
-              <WhatsAppIcon />
-              <div>
-                <p className="text-sm font-medium text-white/80">TM Deepika Tiwari</p>
-                <p className="text-xs text-white/40">Secretary</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <WhatsAppIcon />
-              <div>
-                <p className="text-sm font-medium text-white/80">TM Bhavika</p>
-                <p className="text-xs text-white/40">VP Public Relations</p>
-              </div>
+        {contacts.length > 0 && (
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Contact us</p>
+            <div className="space-y-3">
+              {contacts.map((m) => {
+                const showPhone = m.show_phone_in_contact && !!m.phone;
+                const label = roleLabel(m.leadership_role!);
+                const subtitle = showPhone ? `${label} · ${m.phone}` : label;
+
+                if (showPhone) {
+                  return (
+                    <a
+                      key={m.id}
+                      href={waLink(m.phone!)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-3 group"
+                    >
+                      <WhatsAppIcon />
+                      <div>
+                        <p className="text-sm font-medium text-white/80 group-hover:text-green-400 transition-colors">
+                          TM {m.display_name}
+                        </p>
+                        <p className="text-xs text-white/40">{subtitle}</p>
+                      </div>
+                    </a>
+                  );
+                }
+
+                return (
+                  <div key={m.id} className="flex items-center gap-3">
+                    <WhatsAppIcon />
+                    <div>
+                      <p className="text-sm font-medium text-white/80">TM {m.display_name}</p>
+                      <p className="text-xs text-white/40">{subtitle}</p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </div>
+        )}
 
         {/* Attribution */}
         <div className="border-t border-white/10 pt-5 space-y-2">

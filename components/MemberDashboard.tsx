@@ -28,6 +28,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [email, setEmail] = useState(member.email ?? '');
   const [city, setCity] = useState(member.city ?? '');
   const [gender, setGender] = useState<'male' | 'female' | 'other' | ''>(member.gender ?? '');
+  const [showPhone, setShowPhone] = useState(member.show_phone_in_contact ?? false);
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(member.avatar_url);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -71,6 +72,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       email: email.trim() || null,
       city:  city.trim()  || null,
       gender: gender || null,
+      show_phone_in_contact: showPhone,
     }).eq('id', member.id);
     setSaving(false);
     setEditing(false);
@@ -83,6 +85,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     setEmail(member.email ?? '');
     setCity(member.city ?? '');
     setGender(member.gender ?? '');
+    setShowPhone(member.show_phone_in_contact);
     setLocalAvatarUrl(member.avatar_url);
     setCropSrc(null);
     setEditing(false);
@@ -164,6 +167,17 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
               placeholder="+91 98765 43210"
               className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
                          focus:outline-none focus:ring-2 focus:ring-maroon-700 placeholder:text-stone-300" />
+            {member.leadership_role && phone.trim() && (
+              <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showPhone}
+                  onChange={(e) => setShowPhone(e.target.checked)}
+                  className="w-4 h-4 accent-maroon-700 rounded"
+                />
+                <span className="text-xs text-stone-500">Show my phone number in Contact Us</span>
+              </label>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium text-stone-500 block mb-1">Email</label>
