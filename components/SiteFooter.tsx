@@ -16,27 +16,27 @@ export function SiteFooter() {
         {/* Venue */}
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">Venue</p>
-          <a
-            href="https://share.google/Td5Lif2DhdrSAkyVV"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group"
-          >
-            <p className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">
-              📍 World Integrity Centre Dehradun
-            </p>
-            <p className="text-xs text-white/40 mt-0.5 group-hover:text-white/60 transition-colors">
-              111, 2, Rajpur Rd, Hathibarkala Salwala, Dehradun, Uttarakhand 248001
-            </p>
-          </a>
+          <p className="text-sm font-medium text-white/80">
+            💻 Online
+          </p>
+          <p className="text-xs text-white/40 mt-0.5">
+            Meeting link will be shared on your registered email 6 hours before the meeting
+          </p>
         </div>
 
         {/* Contacts */}
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Contact us</p>
           <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <WhatsAppIcon />
+              <div>
+                <p className="text-sm font-medium text-white/80">TM Sarah</p>
+                <p className="text-xs text-white/40">Club President</p>
+              </div>
+            </div>
             <a
-              href="https://wa.me/919015935985"
+              href="https://wa.me/919922990599"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-3 group"
@@ -44,30 +44,30 @@ export function SiteFooter() {
               <WhatsAppIcon />
               <div>
                 <p className="text-sm font-medium text-white/80 group-hover:text-green-400 transition-colors">
-                  TM Prakash
+                  TM Manish Singh
                 </p>
-                <p className="text-xs text-white/40">Club President · +91 90159 35985</p>
+                <p className="text-xs text-white/40">VP Education · +91 99229 90599</p>
               </div>
             </a>
-            <a
-              href="https://wa.me/919068805581"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 group"
-            >
+            <div className="flex items-center gap-3">
               <WhatsAppIcon />
               <div>
-                <p className="text-sm font-medium text-white/80 group-hover:text-green-400 transition-colors">
-                  TM Dash
-                </p>
-                <p className="text-xs text-white/40">VP Public Relations · +91 90688 05581</p>
+                <p className="text-sm font-medium text-white/80">TM Deepika Tiwari</p>
+                <p className="text-xs text-white/40">Secretary</p>
               </div>
-            </a>
+            </div>
+            <div className="flex items-center gap-3">
+              <WhatsAppIcon />
+              <div>
+                <p className="text-sm font-medium text-white/80">TM Bhavika</p>
+                <p className="text-xs text-white/40">VP Public Relations</p>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Attribution */}
-        <div className="border-t border-white/10 pt-5">
+        <div className="border-t border-white/10 pt-5 space-y-2">
           <a
             href="https://kedarneuralchains.com"
             target="_blank"
@@ -85,6 +85,7 @@ export function SiteFooter() {
               className="h-5 w-auto opacity-30 group-hover:opacity-60 transition-opacity"
             />
           </a>
+          <p className="text-xs text-white/30 text-center">further developed by TM Manish Singh</p>
         </div>
 
       </div>

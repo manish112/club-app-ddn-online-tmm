@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { SiteFooter } from '@/components/SiteFooter';
-import type { Member, MeetingWithClaims, MeetingType, Ballot, VoteResult, TTSpeaker, GuestRegistration, Announcement } from '@/lib/types';
+import type { Member, MeetingWithClaims, MeetingType, Ballot, VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole } from '@/lib/types';
+import { LEADERSHIP_ROLES } from '@/lib/types';
 import { isMeetingPast } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -30,7 +31,7 @@ function AdminLogin({ onSuccess }: { onSuccess: () => void }) {
     <div className="min-h-screen bg-navy-600 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 w-full max-w-sm">
         <h1 className="font-serif text-2xl font-bold text-stone-900 mb-1">Admin</h1>
-        <p className="text-stone-500 text-sm mb-6">Dehradun WIC India Toastmasters Club</p>
+        <p className="text-stone-500 text-sm mb-6">Dehradun Online Toastmasters Club</p>
         <form onSubmit={submit} className="space-y-4">
           <input
             type="password"
@@ -58,6 +59,45 @@ function AdminLogin({ onSuccess }: { onSuccess: () => void }) {
   );
 }
 
+// ─── 12-hour time picker ──────────────────────────────────────────────────────
+
+function to12h(time24: string): { hour: string; minute: string; period: 'AM' | 'PM' } {
+  const [h, m] = time24.split(':').map(Number);
+  const period = h < 12 ? 'AM' : 'PM';
+  const hour = h % 12 === 0 ? '12' : String(h % 12);
+  return { hour, minute: String(m).padStart(2, '0'), period };
+}
+
+function from12h(hour: string, minute: string, period: string): string {
+  let h = parseInt(hour);
+  if (period === 'AM' && h === 12) h = 0;
+  if (period === 'PM' && h !== 12) h += 12;
+  return `${String(h).padStart(2, '0')}:${minute}`;
+}
+
+const HOURS = Array.from({ length: 12 }, (_, i) => String(i + 1));
+const MINUTES = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
+const selectCls = 'border border-stone-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-maroon-700 bg-white';
+
+function TimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { hour, minute, period } = to12h(value);
+  function update(h: string, m: string, p: string) { onChange(from12h(h, m, p)); }
+  return (
+    <div className="mt-1 flex gap-1">
+      <select value={hour} onChange={(e) => update(e.target.value, minute, period)} className={selectCls}>
+        {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
+      </select>
+      <select value={minute} onChange={(e) => update(hour, e.target.value, period)} className={selectCls}>
+        {MINUTES.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <select value={period} onChange={(e) => update(hour, minute, e.target.value)} className={selectCls}>
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+      </select>
+    </div>
+  );
+}
+
 // ─── Meeting form ─────────────────────────────────────────────────────────────
 
 interface MeetingFormData {
@@ -74,8 +114,8 @@ interface MeetingFormData {
 const EMPTY_FORM: MeetingFormData = {
   number: '',
   date: '',
-  start_time: '10:45',
-  end_time: '13:00',
+  start_time: '19:30',
+  end_time: '21:00',
   theme: '',
   meeting_type: 'regular',
   speaker_slots: '2',
@@ -95,8 +135,8 @@ function MeetingForm({
   const [form, setForm] = useState<MeetingFormData>({
     ...EMPTY_FORM,
     ...initial,
-    start_time: initial?.start_time?.slice(0, 5) ?? '10:45',
-    end_time: initial?.end_time?.slice(0, 5) ?? '13:00',
+    start_time: initial?.start_time?.slice(0, 5) ?? '19:30',
+    end_time: initial?.end_time?.slice(0, 5) ?? '21:00',
     speaker_slots: String(initial?.speaker_slots ?? 2),
     evaluator_slots: String(initial?.evaluator_slots ?? 2),
   });
@@ -157,16 +197,14 @@ function MeetingForm({
           <input required type="date" value={form.date} onChange={(e) => set('date', e.target.value)}
             className="mt-1 w-full border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-maroon-700" />
         </label>
-        <label className="block">
+        <div className="block">
           <span className="text-xs text-stone-500 font-medium">Start time</span>
-          <input required type="time" value={form.start_time} onChange={(e) => set('start_time', e.target.value)}
-            className="mt-1 w-full border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-maroon-700" />
-        </label>
-        <label className="block">
+          <TimePicker value={form.start_time} onChange={(v) => set('start_time', v)} />
+        </div>
+        <div className="block">
           <span className="text-xs text-stone-500 font-medium">End time</span>
-          <input required type="time" value={form.end_time} onChange={(e) => set('end_time', e.target.value)}
-            className="mt-1 w-full border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-maroon-700" />
-        </label>
+          <TimePicker value={form.end_time} onChange={(v) => set('end_time', v)} />
+        </div>
       </div>
 
       <label className="block">
@@ -211,11 +249,12 @@ function MeetingForm({
 
 // ─── Member row ───────────────────────────────────────────────────────────────
 
-function MemberRow({ member, onUpdated }: { member: Member; onUpdated: () => void }) {
+function MemberRow({ member, allMembers, onUpdated }: { member: Member; allMembers: Member[]; onUpdated: () => void }) {
   const supabase = createClient();
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(member.display_name);
   const [saving, setSaving] = useState(false);
+  const [savingMentor, setSavingMentor] = useState(false);
 
   async function save() {
     setSaving(true);
@@ -226,45 +265,122 @@ function MemberRow({ member, onUpdated }: { member: Member; onUpdated: () => voi
   }
 
   async function toggleActive() {
-    await supabase.from('members').update({ active: !member.active }).eq('id', member.id);
+    const { error } = await supabase.from('members').update({ active: !member.active }).eq('id', member.id);
+    if (error) {
+      alert(`Failed to update member: ${error.message}\n\nMake sure migration 009_members_anon_write.sql has been applied in Supabase.`);
+      return;
+    }
     onUpdated();
   }
 
+  async function changeMentor(mentorId: string) {
+    setSavingMentor(true);
+    await supabase
+      .from('members')
+      .update({ mentor_id: mentorId || null })
+      .eq('id', member.id);
+    setSavingMentor(false);
+    onUpdated();
+  }
+
+  async function changeLeadershipRole(role: string) {
+    const { error } = await supabase
+      .from('members')
+      .update({ leadership_role: role || null })
+      .eq('id', member.id);
+    if (error) {
+      const taken = allMembers.find(
+        (m) => m.id !== member.id && m.leadership_role === role,
+      );
+      alert(
+        taken
+          ? `"${LEADERSHIP_ROLES.find((r) => r.value === role)?.label}" is already assigned to TM ${taken.display_name}. Remove it there first.`
+          : `Failed to assign role: ${error.message}`,
+      );
+      return;
+    }
+    onUpdated();
+  }
+
+  const mentorOptions = allMembers.filter((m) => m.active && m.id !== member.id);
+
   return (
-    <div className={`flex items-center gap-3 py-2.5 px-3 rounded-xl border
+    <div className={`py-2.5 px-3 rounded-xl border space-y-1.5
       ${member.active ? 'border-stone-100 bg-white' : 'border-stone-100 bg-stone-50 opacity-60'}`}
     >
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-stone-800 truncate">{member.name}</p>
-        {editing ? (
-          <div className="flex items-center gap-2 mt-1">
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="text-xs border border-stone-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-maroon-700 w-28"
-              placeholder="Display name"
-            />
-            <button onClick={save} disabled={saving}
-              className="text-xs text-maroon-700 font-semibold">{saving ? '…' : 'Save'}</button>
-            <button onClick={() => { setEditing(false); setDisplayName(member.display_name); }}
-              className="text-xs text-stone-400">Cancel</button>
-          </div>
-        ) : (
-          <p className="text-xs text-stone-400">
-            WhatsApp name: <span className="text-stone-600">TM {member.display_name}</span>
-            <button onClick={() => setEditing(true)} className="ml-1.5 text-maroon-600">Edit</button>
-          </p>
-        )}
+      <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-stone-800 truncate">{member.name}</p>
+          {editing ? (
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="text-xs border border-stone-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-maroon-700 w-28"
+                placeholder="Display name"
+              />
+              <button onClick={save} disabled={saving}
+                className="text-xs text-maroon-700 font-semibold">{saving ? '…' : 'Save'}</button>
+              <button onClick={() => { setEditing(false); setDisplayName(member.display_name); }}
+                className="text-xs text-stone-400">Cancel</button>
+            </div>
+          ) : (
+            <p className="text-xs text-stone-400">
+              WhatsApp name: <span className="text-stone-600">TM {member.display_name}</span>
+              <button onClick={() => setEditing(true)} className="ml-1.5 text-maroon-600">Edit</button>
+            </p>
+          )}
+        </div>
+        <button
+          onClick={toggleActive}
+          className={`text-xs font-medium px-2 py-1 rounded-lg tap-target shrink-0
+            ${member.active
+              ? 'text-stone-400 hover:text-red-500 hover:bg-red-50'
+              : 'text-green-600 hover:bg-green-50'}`}
+        >
+          {member.active ? 'Deactivate' : 'Restore'}
+        </button>
       </div>
-      <button
-        onClick={toggleActive}
-        className={`text-xs font-medium px-2 py-1 rounded-lg tap-target shrink-0
-          ${member.active
-            ? 'text-stone-400 hover:text-red-500 hover:bg-red-50'
-            : 'text-green-600 hover:bg-green-50'}`}
-      >
-        {member.active ? 'Deactivate' : 'Restore'}
-      </button>
+
+      {/* Mentor selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-stone-400 shrink-0">Mentor:</span>
+        <select
+          value={member.mentor_id ?? ''}
+          onChange={(e) => changeMentor(e.target.value)}
+          disabled={savingMentor}
+          className="flex-1 text-xs border border-stone-200 rounded-lg px-2 py-1 bg-white
+                     focus:outline-none focus:ring-1 focus:ring-maroon-700 disabled:opacity-50"
+        >
+          <option value="">— None —</option>
+          {mentorOptions.map((m) => (
+            <option key={m.id} value={m.id}>TM {m.display_name}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Leadership role selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-stone-400 shrink-0">Role:</span>
+        <select
+          value={member.leadership_role ?? ''}
+          onChange={(e) => changeLeadershipRole(e.target.value)}
+          className="flex-1 text-xs border border-stone-200 rounded-lg px-2 py-1 bg-white
+                     focus:outline-none focus:ring-1 focus:ring-maroon-700"
+        >
+          <option value="">— None —</option>
+          {LEADERSHIP_ROLES.map((r) => {
+            const takenBy = allMembers.find(
+              (m) => m.id !== member.id && m.leadership_role === r.value,
+            );
+            return (
+              <option key={r.value} value={r.value} disabled={r.exclusive && !!takenBy}>
+                {r.label}{takenBy ? ` (${takenBy.display_name})` : ''}
+              </option>
+            );
+          })}
+        </select>
+      </div>
     </div>
   );
 }
@@ -314,18 +430,16 @@ function AdminPanel() {
 
   async function addMember(name: string) {
     const membershipNo = `MANUAL-${Date.now()}`;
-    const firstName = name.split(' ')[0];
-    const existingDisplayNames = members.map((m) => m.display_name.toLowerCase());
-    // If first name already taken, use "First Last" to distinguish
-    const displayName = existingDisplayNames.includes(firstName.toLowerCase())
-      ? name.split(' ').slice(0, 2).join(' ')
-      : firstName;
-    await supabase.from('members').insert({
+    const { error } = await supabase.from('members').insert({
       membership_no: membershipNo,
       name,
-      display_name: displayName,
+      display_name: name,
       active: true,
     });
+    if (error) {
+      alert(`Failed to add member: ${error.message}`);
+      return;
+    }
     fetchAll();
   }
 
@@ -346,7 +460,7 @@ function AdminPanel() {
             <div className="bg-white rounded-md px-1.5 py-0.5 shadow-sm shrink-0">
               <Image src="/logo.png" alt="Toastmasters International" width={100} height={24} className="h-6 w-auto" priority />
             </div>
-            <p className="text-[10px] font-bold text-white leading-tight w-full truncate">Dehradun WIC India Toastmasters Club</p>
+            <p className="text-[10px] font-bold text-white leading-tight w-full truncate">Dehradun Online Toastmasters Club</p>
             <p className="text-[8px] text-white/55 leading-none w-full truncate">No. 03295206 · Area 03 · Division I · District 41</p>
           </Link>
           <div className="flex items-center gap-2 shrink-0">
@@ -500,7 +614,7 @@ function AdminPanel() {
 
             <div className="space-y-1.5">
               {displayedMembers.map((m) => (
-                <MemberRow key={m.id} member={m} onUpdated={fetchAll} />
+                <MemberRow key={m.id} member={m} allMembers={members} onUpdated={fetchAll} />
               ))}
             </div>
           </div>

@@ -225,12 +225,12 @@ Issues and pull requests are welcome. A few guidelines:
 ## Credits
 
 - Toastmasters International® and the Pathways program are trademarks of Toastmasters International. This project is community-built and not affiliated with or endorsed by Toastmasters International.
-- Originally developed by Rishabh Shukla (VPE 2025-26, Dehradun WIC India Toastmasters Club).
+- Originally developed by Rishabh Shukla (VPE 2025-26, Dehradun Online Toastmasters Club).
 
 ---
 
 ## License
 
-[MIT](./LICENSE) — copyright held by Dehradun WIC India Toastmasters Club and contributors.
+[MIT](./LICENSE) — copyright held by Dehradun Online Toastmasters Club and contributors.
 
 "Toastmasters International" and "Pathways" are trademarks of Toastmasters International and are **not** covered by the MIT grant — see the trademark notice in [LICENSE](./LICENSE). Forks intending to use those marks must obtain permission from Toastmasters International directly.

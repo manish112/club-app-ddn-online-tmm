@@ -13,25 +13,58 @@ interface Props {
 export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
   const supabase = createClient();
   const [selected, setSelected] = useState('');
-  const [step, setStep] = useState<'identify' | 'register'>('identify');
-  const [name, setName] = useState('');
+  const [step, setStep] = useState<'identify' | 'register' | 'intro'>('identify');
+
+  // Guest registration
+  const [guestName, setGuestName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [savingGuest, setSavingGuest] = useState(false);
+
+  // Intro step
+  const [intro, setIntro] = useState('');
+  const [savingIntro, setSavingIntro] = useState(false);
 
   async function submitGuest(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
+    setSavingGuest(true);
     await supabase.from('guest_registrations').insert({
       meeting_id: meetingId ?? null,
-      name: name.trim() || null,
+      name: guestName.trim() || null,
       phone: phone.trim(),
       email: email.trim(),
     });
-    setSaving(false);
+    setSavingGuest(false);
     onGuest();
   }
 
+  function handleThatSMe() {
+    if (!selected) return;
+    const member = members.find((m) => m.id === selected);
+    if (member?.introduction) {
+      onSelect(selected);
+      return;
+    }
+    setIntro('');
+    setStep('intro');
+  }
+
+  async function saveIntro() {
+    setSavingIntro(true);
+    await supabase
+      .from('members')
+      .update({ introduction: intro.trim() || null })
+      .eq('id', selected);
+    setSavingIntro(false);
+    onSelect(selected);
+  }
+
+  const selectedMember = members.find((m) => m.id === selected);
+  const othersWithIntro = members.filter(
+    (m) => m.id !== selected && m.active && m.introduction,
+  );
+
+  // ── Guest registration ────────────────────────────────────────────────────
   if (step === 'register') {
     return (
       <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
@@ -42,8 +75,8 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
           <form onSubmit={submitGuest} className="space-y-3">
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={guestName}
+              onChange={(e) => setGuestName(e.target.value)}
               placeholder="Name (optional)"
               className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-base
                          focus:outline-none focus:ring-2 focus:ring-maroon-700"
@@ -68,11 +101,11 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
             />
             <button
               type="submit"
-              disabled={saving}
+              disabled={savingGuest}
               className="w-full bg-maroon-700 text-white rounded-xl py-3.5 text-base font-semibold
                          tap-target disabled:opacity-40 active:scale-95 transition-transform"
             >
-              {saving ? 'Saving…' : 'Continue as Guest'}
+              {savingGuest ? 'Saving…' : 'Continue as Guest'}
             </button>
           </form>
           <button
@@ -86,6 +119,78 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
     );
   }
 
+  // ── Introduction step ─────────────────────────────────────────────────────
+  if (step === 'intro') {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
+        <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="p-6 pb-4 shrink-0">
+            <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mb-5 sm:hidden" />
+            <p className="text-xs font-semibold text-maroon-700 uppercase tracking-widest mb-0.5">
+              Welcome back
+            </p>
+            <h2 className="font-serif text-xl font-semibold text-stone-900 mb-0.5">
+              TM {selectedMember?.display_name}
+            </h2>
+            <p className="text-stone-500 text-sm mb-4">
+              Add a short intro about yourself — others will see it when they sign in.
+            </p>
+
+            <textarea
+              value={intro}
+              onChange={(e) => setIntro(e.target.value)}
+              placeholder="e.g. Software engineer, 2-year TM member, loves public speaking…"
+              rows={3}
+              maxLength={300}
+              className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
+                         focus:outline-none focus:ring-2 focus:ring-maroon-700 resize-none"
+            />
+            <p className="text-right text-[10px] text-stone-300 -mt-1 mb-3">
+              {intro.length}/300
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={saveIntro}
+                disabled={savingIntro}
+                className="flex-1 bg-maroon-700 text-white rounded-xl py-3 text-sm font-semibold
+                           tap-target disabled:opacity-40 active:scale-95 transition-transform"
+              >
+                {savingIntro ? 'Saving…' : intro.trim() ? 'Save & Continue' : 'Continue'}
+              </button>
+              <button
+                onClick={() => onSelect(selected)}
+                className="px-4 py-3 text-sm text-stone-400 hover:text-stone-600 tap-target"
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+
+          {/* Other members' intros */}
+          {othersWithIntro.length > 0 && (
+            <div className="border-t border-stone-100 overflow-y-auto">
+              <p className="px-6 pt-4 pb-2 text-[10px] font-semibold text-stone-400 uppercase tracking-widest sticky top-0 bg-white">
+                Club Members
+              </p>
+              <div className="px-6 pb-6 space-y-3">
+                {othersWithIntro.map((m) => (
+                  <div key={m.id} className="bg-stone-50 rounded-xl p-3">
+                    <p className="text-xs font-semibold text-maroon-700 mb-1">
+                      TM {m.display_name}
+                    </p>
+                    <p className="text-sm text-stone-600 leading-relaxed">{m.introduction}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Identity picker ───────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
       <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-6">
@@ -129,7 +234,7 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
 
         <button
           disabled={!selected}
-          onClick={() => onSelect(selected)}
+          onClick={handleThatSMe}
           className="mt-4 w-full bg-maroon-700 text-white rounded-xl py-3.5 text-base font-semibold
                      tap-target disabled:opacity-40 disabled:cursor-not-allowed
                      active:scale-95 transition-transform"

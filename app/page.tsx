@@ -5,21 +5,16 @@ import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { MemberAdviceModal } from '@/components/MemberAdviceModal';
+import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
 import { isMeetingPast, getAdjacentMemberRoles } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
-type Tab = 'next' | 'upcoming' | 'past';
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'next',     label: 'Upcoming Meeting' }, // label overridden dynamically below
-  { id: 'upcoming', label: 'Future Meetings' },
-  { id: 'past',     label: 'Past' },
-];
+type Tab = 'next' | 'upcoming' | 'past' | 'profile';
 
 const DISMISS_KEY = (id: string) => `tm_announcement_${id}`;
-const ADVICE_KEY = (id: string) => `tm_advice_${id}`;
+const ADVICE_KEY  = (id: string) => `tm_advice_${id}`;
 
 export default function Home() {
   const { meetings, members, ballots, announcement, loading, refetch } = useMeetings();
@@ -28,7 +23,6 @@ export default function Home() {
   const [announceDismissed, setAnnounceDismissed] = useState(true);
   const [showAdvice, setShowAdvice] = useState(false);
 
-  // Sync dismiss state when announcement changes (e.g. new one posted via realtime)
   useEffect(() => {
     if (!announcement) { setAnnounceDismissed(true); return; }
     setAnnounceDismissed(localStorage.getItem(DISMISS_KEY(announcement.id)) === '1');
@@ -43,9 +37,7 @@ export default function Home() {
   const isGuest = memberId === 'guest';
   const currentMember = isGuest ? null : members.find((m) => m.id === memberId);
 
-  // Show the rotation-advice modal when a member identity is active: always on
-  // a fresh sign-in (handleSelect clears the flag), and once per browser
-  // session when the app opens with a name already remembered.
+  // Show rotation-advice modal once per browser session on sign-in.
   useEffect(() => {
     if (!loaded || loading || !currentMember) return;
     if (sessionStorage.getItem(ADVICE_KEY(currentMember.id)) === '1') return;
@@ -53,32 +45,36 @@ export default function Home() {
     sessionStorage.setItem(ADVICE_KEY(currentMember.id), '1');
   }, [loaded, loading, currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Picking a name always re-shows the advice modal, even within the same session.
+  // When a member signs in, switch to their profile tab so the dashboard is
+  // the first thing they see. Reset to 'next' when they sign out.
+  useEffect(() => {
+    if (currentMember) {
+      setActiveTab('profile');
+    } else {
+      setActiveTab('next');
+    }
+  }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleSelect(id: string) {
     if (id !== 'guest') sessionStorage.removeItem(ADVICE_KEY(id));
     identify(id);
   }
 
-  const future = meetings
-    .filter((m) => !isMeetingPast(m))
-    .sort((a, b) => a.number - b.number);
+  const future = meetings.filter((m) => !isMeetingPast(m)).sort((a, b) => a.number - b.number);
+  const past   = meetings.filter((m) =>  isMeetingPast(m)).sort((a, b) => b.number - a.number);
 
-  const past = meetings
-    .filter((m) => isMeetingPast(m))
-    .sort((a, b) => b.number - a.number);
-
-  const nextMeeting = future[0] ?? null;
+  const nextMeeting      = future[0] ?? null;
   const upcomingMeetings = future.slice(1);
   const nextBallotStatus = nextMeeting ? (ballots.get(nextMeeting.id)?.status ?? null) : null;
-  const nextTabLabel = nextBallotStatus === 'open' ? 'Current Meeting' : 'Upcoming Meeting';
+  const nextTabLabel     = nextBallotStatus === 'open' ? 'Current Meeting' : 'Next Meeting';
 
-  const tabContent: Record<Tab, typeof meetings> = {
+  const meetingTabContent: Record<'next' | 'upcoming' | 'past', typeof meetings> = {
     next:     nextMeeting ? [nextMeeting] : [],
     upcoming: upcomingMeetings,
     past,
   };
 
-  const emptyState: Record<Tab, { text: string; cta?: string }> = {
+  const emptyState: Record<'next' | 'upcoming' | 'past', { text: string; cta?: string }> = {
     next:     { text: 'No upcoming meeting scheduled.', cta: 'Schedule one in Admin →' },
     upcoming: { text: 'No future meetings scheduled yet.', cta: 'Add meetings in Admin →' },
     past:     { text: 'No past meetings yet.' },
@@ -93,16 +89,14 @@ export default function Home() {
       {/* ── Header ── */}
       <header className="sticky top-0 z-40 bg-maroon-700 shadow-md">
         <div className="max-w-2xl mx-auto px-4 h-16 flex items-center justify-between gap-2">
-          {/* Left: logo + club info */}
           <div className="flex flex-col items-start justify-center gap-0.5 flex-1 min-w-0 overflow-hidden">
             <div className="bg-white rounded-md px-1.5 py-0.5 shadow-sm shrink-0">
               <Image src="/logo.png" alt="Toastmasters International" width={100} height={24} className="h-6 w-auto" priority />
             </div>
-            <p className="text-[10px] font-bold text-white leading-tight w-full truncate">Dehradun WIC India Toastmasters Club</p>
+            <p className="text-[10px] font-bold text-white leading-tight w-full truncate">Dehradun Online Toastmasters Club</p>
             <p className="text-[8px] text-white/55 leading-none w-full truncate">No. 03295206 · Area 03 · Division I · District 41</p>
           </div>
 
-          {/* Right: identity controls */}
           <div className="flex items-center gap-1.5 shrink-0">
             {currentMember && (
               <span className="text-xs font-semibold text-yellow-200 truncate max-w-[80px]">
@@ -144,7 +138,19 @@ export default function Home() {
       <div className="sticky top-16 z-30 bg-navy-700 border-b border-white/5 shadow-sm">
         <div className="max-w-2xl mx-auto px-4 py-2">
           <div className="flex gap-1 bg-white/10 rounded-xl p-1">
-            {TABS.map(({ id, label }) => (
+            {currentMember && (
+              <button
+                onClick={() => setActiveTab('profile')}
+                className={`flex-1 py-2.5 text-xs font-semibold rounded-lg transition-all ${
+                  activeTab === 'profile'
+                    ? 'bg-white text-navy-700 shadow-sm'
+                    : 'text-white/60 hover:text-white'
+                }`}
+              >
+                My Profile
+              </button>
+            )}
+            {(['next', 'upcoming', 'past'] as const).map((id) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -154,7 +160,7 @@ export default function Home() {
                     : 'text-white/60 hover:text-white'
                 }`}
               >
-                {id === 'next' ? nextTabLabel : label}
+                {id === 'next' ? nextTabLabel : id === 'upcoming' ? 'Future' : 'Past'}
               </button>
             ))}
           </div>
@@ -163,46 +169,72 @@ export default function Home() {
 
       {/* ── Content ── */}
       <main className="max-w-2xl mx-auto px-4 py-6">
-        {loading ? (
-          <div className="space-y-4">
-            {[1, 2].map((i) => (
-              <div key={i} className="bg-white/10 rounded-2xl h-64 animate-pulse" />
-            ))}
-          </div>
-        ) : tabContent[activeTab].length === 0 ? (
-          <div className="text-center py-16 space-y-2">
-            <p className="text-white/40">{emptyState[activeTab].text}</p>
-            {emptyState[activeTab].cta && (
-              <Link href="/amiadmin" className="text-sm text-yellow-200 inline-block">
-                {emptyState[activeTab].cta}
-              </Link>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {tabContent[activeTab].map((m) => (
-              <MeetingCard
-                key={m.id}
-                meeting={m}
+        {(() => {
+          // 'profile' tab is only valid while a member is signed in.
+          // Fall back to 'next' during the sign-out transition to avoid
+          // meetingTabContent['profile'] being undefined.
+          const meetingTab: 'next' | 'upcoming' | 'past' =
+            activeTab === 'profile' ? 'next' : activeTab;
+
+          if (activeTab === 'profile' && currentMember) {
+            return (
+              <MemberDashboard
+                member={currentMember}
                 allMembers={members}
-                memberId={memberId}
-                memberAdjacentRoles={
-                  currentMember ? getAdjacentMemberRoles(meetings, m.id, currentMember.id) : []
-                }
-                deviceId={deviceId}
-                ballot={ballots.get(m.id)}
-                isAdmin={false}
-                hideWhatsApp={activeTab !== 'next'}
-                onChanged={refetch}
+                meetings={meetings}
+                onUpdated={refetch}
               />
-            ))}
-          </div>
-        )}
+            );
+          }
+
+          if (loading) {
+            return (
+              <div className="space-y-4">
+                {[1, 2].map((i) => (
+                  <div key={i} className="bg-white/10 rounded-2xl h-64 animate-pulse" />
+                ))}
+              </div>
+            );
+          }
+
+          if (meetingTabContent[meetingTab].length === 0) {
+            return (
+              <div className="text-center py-16 space-y-2">
+                <p className="text-white/40">{emptyState[meetingTab].text}</p>
+                {emptyState[meetingTab].cta && (
+                  <Link href="/amiadmin" className="text-sm text-yellow-200 inline-block">
+                    {emptyState[meetingTab].cta}
+                  </Link>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <div className="space-y-4">
+              {meetingTabContent[meetingTab].map((m) => (
+                <MeetingCard
+                  key={m.id}
+                  meeting={m}
+                  allMembers={members}
+                  memberId={memberId}
+                  memberAdjacentRoles={
+                    currentMember ? getAdjacentMemberRoles(meetings, m.id, currentMember.id) : []
+                  }
+                  deviceId={deviceId}
+                  ballot={ballots.get(m.id)}
+                  isAdmin={false}
+                  hideWhatsApp={meetingTab !== 'next'}
+                  onChanged={refetch}
+                />
+              ))}
+            </div>
+          );
+        })()}
       </main>
 
       <SiteFooter />
 
-      {/* Member picker overlay */}
       {showPicker && (
         <MemberPicker
           members={members}
@@ -212,7 +244,6 @@ export default function Home() {
         />
       )}
 
-      {/* Rotation-advice modal for members */}
       {showAdvice && currentMember && (
         <MemberAdviceModal
           member={currentMember}
