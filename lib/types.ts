@@ -60,6 +60,8 @@ export interface Member {
   phone: string | null;
   email: string | null;
   city: string | null;
+  gender: 'male' | 'female' | 'other' | null;
+  avatar_url: string | null;
   created_at: string;
 }
 

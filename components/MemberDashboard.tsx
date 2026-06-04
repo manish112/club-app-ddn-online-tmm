@@ -4,6 +4,8 @@ import { createClient } from '@/utils/supabase/client';
 import type { Member, MeetingWithClaims, RoleKey } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
 import { getMemberRecentRoles, formatMeetingDate } from '@/lib/utils';
+import { MemberAvatar } from '@/components/MemberAvatar';
+import { AvatarCropModal } from '@/components/AvatarCropModal';
 
 interface Props {
   member: Member;
@@ -25,7 +27,40 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [phone, setPhone] = useState(member.phone ?? '');
   const [email, setEmail] = useState(member.email ?? '');
   const [city, setCity] = useState(member.city ?? '');
+  const [gender, setGender] = useState<'male' | 'female' | 'other' | ''>(member.gender ?? '');
+  const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(member.avatar_url);
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert('Image must be under 2 MB.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setCropSrc(reader.result as string);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }
+
+  async function handleCropSave(blob: Blob) {
+    setCropSrc(null);
+    setUploading(true);
+    const { error } = await supabase.storage
+      .from('member-avatars')
+      .upload(member.id, blob, { upsert: true, contentType: 'image/jpeg' });
+    if (!error) {
+      const { data } = supabase.storage.from('member-avatars').getPublicUrl(member.id);
+      const url = `${data.publicUrl}?t=${Date.now()}`;
+      await supabase.from('members').update({ avatar_url: url }).eq('id', member.id);
+      setLocalAvatarUrl(url);
+    }
+    setUploading(false);
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -35,6 +70,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       phone: phone.trim() || null,
       email: email.trim() || null,
       city:  city.trim()  || null,
+      gender: gender || null,
     }).eq('id', member.id);
     setSaving(false);
     setEditing(false);
@@ -46,7 +82,22 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     setPhone(member.phone ?? '');
     setEmail(member.email ?? '');
     setCity(member.city ?? '');
+    setGender(member.gender ?? '');
+    setLocalAvatarUrl(member.avatar_url);
+    setCropSrc(null);
     setEditing(false);
+  }
+
+  const previewMember = { ...member, avatar_url: localAvatarUrl, gender: gender || null };
+
+  if (cropSrc) {
+    return (
+      <AvatarCropModal
+        imageSrc={cropSrc}
+        onSave={handleCropSave}
+        onClose={() => setCropSrc(null)}
+      />
+    );
   }
 
   if (editing) {
@@ -54,6 +105,41 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
         <h3 className="font-serif text-base font-semibold text-stone-900 mb-4">Edit Profile</h3>
         <form onSubmit={save} className="space-y-3">
+
+          {/* Photo upload */}
+          <div className="flex items-center gap-4">
+            <MemberAvatar member={previewMember} size={64} />
+            <label className={`cursor-pointer text-sm font-medium tap-target ${
+              uploading ? 'text-stone-300 pointer-events-none' : 'text-maroon-600 hover:text-maroon-800'
+            }`}>
+              {uploading ? 'Uploading…' : 'Change Photo'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png"
+                className="hidden"
+                onChange={handlePhotoChange}
+                disabled={uploading}
+              />
+            </label>
+          </div>
+
+          {/* Gender */}
+          <div>
+            <label className="text-xs font-medium text-stone-500 block mb-1">Gender</label>
+            <select
+              value={gender}
+              onChange={(e) => setGender(e.target.value as typeof gender)}
+              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
+                         focus:outline-none focus:ring-2 focus:ring-maroon-700 bg-white"
+            >
+              <option value="">Prefer not to say</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          {/* Introduction */}
           <div>
             <label className="text-xs font-medium text-stone-500 block mb-1">Introduction</label>
             <textarea
@@ -68,6 +154,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
             />
             <p className="text-right text-[10px] text-stone-300 -mt-1">{intro.length}/300</p>
           </div>
+
           <div>
             <label className="text-xs font-medium text-stone-500 block mb-1">Phone</label>
             <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
@@ -89,8 +176,9 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
               className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
                          focus:outline-none focus:ring-2 focus:ring-maroon-700 placeholder:text-stone-300" />
           </div>
+
           <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={saving}
+            <button type="submit" disabled={saving || uploading}
               className="flex-1 bg-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold
                          tap-target disabled:opacity-40 active:scale-95 transition-transform">
               {saving ? 'Saving…' : 'Save'}
@@ -108,15 +196,18 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
       <div className="flex items-start justify-between gap-2 mb-3">
-        <div>
-          <p className="text-lg font-bold text-stone-900 font-serif">TM {member.display_name}</p>
-          <p className="text-xs text-stone-400">{member.name}</p>
-          {member.leadership_role && (
-            <span className="inline-block mt-1.5 text-[10px] font-semibold bg-maroon-700 text-white
-                             px-2.5 py-0.5 rounded-full uppercase tracking-wide">
-              {leadershipLabel(member.leadership_role)}
-            </span>
-          )}
+        <div className="flex items-center gap-3">
+          <MemberAvatar member={previewMember} size={56} />
+          <div>
+            <p className="text-lg font-bold text-stone-900 font-serif">TM {member.display_name}</p>
+            <p className="text-xs text-stone-400">{member.name}</p>
+            {member.leadership_role && (
+              <span className="inline-block mt-1.5 text-[10px] font-semibold bg-maroon-700 text-white
+                               px-2.5 py-0.5 rounded-full uppercase tracking-wide">
+                {leadershipLabel(member.leadership_role)}
+              </span>
+            )}
+          </div>
         </div>
         <button onClick={() => setEditing(true)}
           className="text-xs text-maroon-600 font-medium hover:text-maroon-800 tap-target shrink-0">
@@ -182,20 +273,23 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
       <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
         <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">🤝 Your Mentor</p>
         {mentor ? (
-          <div>
-            <p className="text-base font-bold text-stone-900">TM {mentor.display_name}</p>
-            {mentor.city && <p className="text-xs text-stone-400 mt-0.5">📍 {mentor.city}</p>}
-            {mentor.introduction && (
-              <p className="text-sm text-stone-500 italic mt-2 leading-relaxed">
-                &ldquo;{mentor.introduction}&rdquo;
-              </p>
-            )}
-            {mentor.phone && (
-              <p className="text-sm text-stone-600 mt-2">📞 {mentor.phone}</p>
-            )}
-            {mentor.email && (
-              <p className="text-sm text-stone-600 mt-1">✉️ {mentor.email}</p>
-            )}
+          <div className="flex items-start gap-3">
+            <MemberAvatar member={mentor} size={40} className="mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-base font-bold text-stone-900">TM {mentor.display_name}</p>
+              {mentor.city && <p className="text-xs text-stone-400 mt-0.5">📍 {mentor.city}</p>}
+              {mentor.introduction && (
+                <p className="text-sm text-stone-500 italic mt-2 leading-relaxed">
+                  &ldquo;{mentor.introduction}&rdquo;
+                </p>
+              )}
+              {mentor.phone && (
+                <p className="text-sm text-stone-600 mt-2">📞 {mentor.phone}</p>
+              )}
+              {mentor.email && (
+                <p className="text-sm text-stone-600 mt-1">✉️ {mentor.email}</p>
+              )}
+            </div>
           </div>
         ) : (
           <div>
@@ -217,15 +311,20 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           <div className="space-y-3">
             {mentees.map((m, i) => (
               <div key={m.id} className={i > 0 ? 'pt-3 border-t border-stone-100' : ''}>
-                <p className="text-base font-bold text-stone-900">TM {m.display_name}</p>
-                {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
-                {m.introduction && (
-                  <p className="text-sm text-stone-500 italic mt-1.5 leading-relaxed">
-                    &ldquo;{m.introduction}&rdquo;
-                  </p>
-                )}
-                {m.phone && <p className="text-sm text-stone-600 mt-1.5">📞 {m.phone}</p>}
-                {m.email && <p className="text-sm text-stone-600 mt-0.5">✉️ {m.email}</p>}
+                <div className="flex items-start gap-3">
+                  <MemberAvatar member={m} size={36} className="mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-base font-bold text-stone-900">TM {m.display_name}</p>
+                    {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
+                    {m.introduction && (
+                      <p className="text-sm text-stone-500 italic mt-1.5 leading-relaxed">
+                        &ldquo;{m.introduction}&rdquo;
+                      </p>
+                    )}
+                    {m.phone && <p className="text-sm text-stone-600 mt-1.5">📞 {m.phone}</p>}
+                    {m.email && <p className="text-sm text-stone-600 mt-0.5">✉️ {m.email}</p>}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -287,23 +386,28 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           <div className="space-y-3">
             {otherMembers.map((m, i) => (
               <div key={m.id} className={i > 0 ? 'pt-3 border-t border-stone-100' : ''}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-sm font-semibold text-stone-800">TM {m.display_name}</p>
-                  {m.leadership_role && (
-                    <span className="text-[9px] font-semibold bg-maroon-700 text-white
-                                     px-2 py-0.5 rounded-full uppercase tracking-wide">
-                      {leadershipLabel(m.leadership_role)}
-                    </span>
-                  )}
+                <div className="flex items-start gap-3">
+                  <MemberAvatar member={m} size={36} className="mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-stone-800">TM {m.display_name}</p>
+                      {m.leadership_role && (
+                        <span className="text-[9px] font-semibold bg-maroon-700 text-white
+                                         px-2 py-0.5 rounded-full uppercase tracking-wide">
+                          {leadershipLabel(m.leadership_role)}
+                        </span>
+                      )}
+                    </div>
+                    {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
+                    {m.introduction ? (
+                      <p className="text-xs text-stone-500 italic mt-1 leading-relaxed">
+                        &ldquo;{m.introduction}&rdquo;
+                      </p>
+                    ) : (
+                      <p className="text-xs text-stone-300 mt-0.5 italic">No intro yet</p>
+                    )}
+                  </div>
                 </div>
-                {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
-                {m.introduction ? (
-                  <p className="text-xs text-stone-500 italic mt-1 leading-relaxed">
-                    &ldquo;{m.introduction}&rdquo;
-                  </p>
-                ) : (
-                  <p className="text-xs text-stone-300 mt-0.5 italic">No intro yet</p>
-                )}
               </div>
             ))}
           </div>

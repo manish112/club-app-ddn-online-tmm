@@ -2,6 +2,8 @@
 import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member } from '@/lib/types';
+import { MemberAvatar } from '@/components/MemberAvatar';
+import { AvatarCropModal } from '@/components/AvatarCropModal';
 
 interface Props {
   members: Member[];
@@ -25,6 +27,9 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
   const [intro, setIntro] = useState('');
   const [city, setCity] = useState('');
   const [savingIntro, setSavingIntro] = useState(false);
+  const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null);
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   async function submitGuest(e: React.FormEvent) {
     e.preventDefault();
@@ -59,6 +64,35 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
       .eq('id', selected);
     setSavingIntro(false);
     onSelect(selected);
+  }
+
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert('Image must be under 2 MB.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setCropSrc(reader.result as string);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }
+
+  async function handleCropSave(blob: Blob) {
+    setCropSrc(null);
+    setUploading(true);
+    const { error } = await supabase.storage
+      .from('member-avatars')
+      .upload(selected, blob, { upsert: true, contentType: 'image/jpeg' });
+    if (!error) {
+      const { data } = supabase.storage.from('member-avatars').getPublicUrl(selected);
+      const url = `${data.publicUrl}?t=${Date.now()}`;
+      await supabase.from('members').update({ avatar_url: url }).eq('id', selected);
+      setLocalAvatarUrl(url);
+    }
+    setUploading(false);
   }
 
   const selectedMember = members.find((m) => m.id === selected);
@@ -122,80 +156,92 @@ export function MemberPicker({ members, meetingId, onSelect, onGuest }: Props) {
   }
 
   // ── Introduction step ─────────────────────────────────────────────────────
+  if (cropSrc) {
+    return (
+      <AvatarCropModal
+        imageSrc={cropSrc}
+        onSave={handleCropSave}
+        onClose={() => setCropSrc(null)}
+      />
+    );
+  }
+
   if (step === 'intro') {
+    const previewMember = {
+      display_name: selectedMember?.display_name ?? '',
+      avatar_url: localAvatarUrl ?? selectedMember?.avatar_url ?? null,
+      gender: selectedMember?.gender ?? null,
+    };
+
     return (
       <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
-        <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
-          <div className="p-6 pb-4 shrink-0">
-            <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mb-5 sm:hidden" />
-            <p className="text-xs font-semibold text-maroon-700 uppercase tracking-widest mb-0.5">
-              Welcome back
-            </p>
-            <h2 className="font-serif text-xl font-semibold text-stone-900 mb-0.5">
-              TM {selectedMember?.display_name}
-            </h2>
-            <p className="text-stone-500 text-sm mb-4">
-              Complete your profile — others will see it when they sign in.
-            </p>
+        <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-6">
+          <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mb-5 sm:hidden" />
+          <p className="text-xs font-semibold text-maroon-700 uppercase tracking-widest mb-0.5">
+            Welcome back
+          </p>
+          <h2 className="font-serif text-xl font-semibold text-stone-900 mb-4">
+            TM {selectedMember?.display_name}
+          </h2>
 
-            <textarea
-              value={intro}
-              onChange={(e) => setIntro(e.target.value)}
-              placeholder="e.g. Software engineer, 2-year TM member, loves public speaking…"
-              rows={3}
-              maxLength={300}
-              className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 resize-none"
-            />
-            <p className="text-right text-[10px] text-stone-300 -mt-1 mb-3">
-              {intro.length}/300
-            </p>
-
-            <input
-              type="text"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              placeholder="Your city (e.g. Dehradun)"
-              className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 mb-4"
-            />
-
-            <div className="flex gap-2">
-              <button
-                onClick={saveIntro}
-                disabled={savingIntro}
-                className="flex-1 bg-maroon-700 text-white rounded-xl py-3 text-sm font-semibold
-                           tap-target disabled:opacity-40 active:scale-95 transition-transform"
-              >
-                {savingIntro ? 'Saving…' : intro.trim() ? 'Save & Continue' : 'Continue'}
-              </button>
-              <button
-                onClick={() => onSelect(selected)}
-                className="px-4 py-3 text-sm text-stone-400 hover:text-stone-600 tap-target"
-              >
-                Skip
-              </button>
+          {/* Photo upload */}
+          <div className="flex items-center gap-4 mb-4">
+            <MemberAvatar member={previewMember} size={56} />
+            <div>
+              <label className={`cursor-pointer text-sm font-medium tap-target ${
+                uploading ? 'text-stone-300 pointer-events-none' : 'text-maroon-600 hover:text-maroon-800'
+              }`}>
+                {uploading ? 'Uploading…' : localAvatarUrl ? 'Change Photo' : 'Add Photo'}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  className="hidden"
+                  onChange={handlePhotoChange}
+                  disabled={uploading}
+                />
+              </label>
+              <p className="text-[10px] text-stone-400 mt-0.5">Optional · JPEG or PNG · max 2 MB</p>
             </div>
           </div>
 
-          {/* Other members' intros */}
-          {othersWithIntro.length > 0 && (
-            <div className="border-t border-stone-100 overflow-y-auto">
-              <p className="px-6 pt-4 pb-2 text-[10px] font-semibold text-stone-400 uppercase tracking-widest sticky top-0 bg-white">
-                Club Members
-              </p>
-              <div className="px-6 pb-6 space-y-3">
-                {othersWithIntro.map((m) => (
-                  <div key={m.id} className="bg-stone-50 rounded-xl p-3">
-                    <p className="text-xs font-semibold text-maroon-700 mb-1">
-                      TM {m.display_name}
-                    </p>
-                    <p className="text-sm text-stone-600 leading-relaxed">{m.introduction}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <textarea
+            value={intro}
+            onChange={(e) => setIntro(e.target.value)}
+            placeholder="e.g. Software engineer, 2-year TM member, loves public speaking…"
+            rows={3}
+            maxLength={300}
+            className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-maroon-700 resize-none"
+          />
+          <p className="text-right text-[10px] text-stone-300 -mt-1 mb-3">
+            {intro.length}/300
+          </p>
+
+          <input
+            type="text"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            placeholder="Your city (e.g. Dehradun)"
+            className="w-full border border-stone-200 rounded-xl px-4 py-3 text-stone-800 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-maroon-700 mb-4"
+          />
+
+          <div className="flex gap-2">
+            <button
+              onClick={saveIntro}
+              disabled={savingIntro || uploading}
+              className="flex-1 bg-maroon-700 text-white rounded-xl py-3 text-sm font-semibold
+                         tap-target disabled:opacity-40 active:scale-95 transition-transform"
+            >
+              {savingIntro ? 'Saving…' : intro.trim() ? 'Save & Continue' : 'Continue'}
+            </button>
+            <button
+              onClick={() => onSelect(selected)}
+              className="px-4 py-3 text-sm text-stone-400 hover:text-stone-600 tap-target"
+            >
+              Skip
+            </button>
+          </div>
         </div>
       </div>
     );
