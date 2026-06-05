@@ -1,11 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, MeetingWithClaims, RoleKey } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
 import { getMemberRecentRoles, formatMeetingDate } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
+import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
 
 interface Props {
   member: Member;
@@ -175,7 +176,10 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
                   onChange={(e) => setShowPhone(e.target.checked)}
                   className="w-4 h-4 accent-maroon-700 rounded"
                 />
-                <span className="text-xs text-stone-500">Show my phone number in Contact Us</span>
+                <span className="text-xs text-stone-500">
+                  Show my phone number on Contact Us against{' '}
+                  <strong className="text-stone-700">{leadershipLabel(member.leadership_role)}</strong>
+                </span>
               </label>
             )}
           </div>
@@ -268,6 +272,219 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   );
 }
 
+// ─── Password card ────────────────────────────────────────────────────────────
+
+function PasswordCard({ member }: { member: Member }) {
+  const supabase = createClient();
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<'idle' | 'set' | 'change' | 'remove'>('idle');
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    supabase
+      .from('members')
+      .select('password_hash')
+      .eq('id', member.id)
+      .single()
+      .then(({ data }) => setHasPassword(!!data?.password_hash));
+  }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function reset() {
+    setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false);
+    setMode('idle');
+  }
+
+  async function handleRemovePassword() {
+    setError('');
+    if (!currentPw) { setError('Enter your current password to confirm removal.'); return; }
+    setSaving(true);
+    const { data } = await supabase
+      .from('members').select('password_hash, password_salt').eq('id', member.id).single();
+    if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
+    const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
+    if (!valid) { setError('Incorrect password.'); setSaving(false); return; }
+    await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
+    setSaving(false);
+    setHasPassword(false);
+    reset();
+  }
+
+  async function handleSave() {
+    setError('');
+    if (newPw.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    if (newPw !== confirmPw) { setError('Passwords do not match.'); return; }
+    setSaving(true);
+
+    if (mode === 'change') {
+      const { data } = await supabase
+        .from('members').select('password_hash, password_salt').eq('id', member.id).single();
+      if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
+      const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
+      if (!valid) { setError('Current password is incorrect.'); setSaving(false); return; }
+    }
+
+    const salt = generateSalt();
+    const hash = await hashPassword(newPw, salt);
+    await supabase.from('members').update({ password_hash: hash, password_salt: salt }).eq('id', member.id);
+    setSaving(false);
+    setHasPassword(true);
+    setDone(true);
+    setMode('idle');
+    reset();
+  }
+
+  if (hasPassword === null) return null;
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
+      <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">🔒 Password</p>
+
+      {done && (
+        <p className="text-sm text-green-600 font-medium mb-3">Password saved successfully.</p>
+      )}
+
+      {!hasPassword && mode === 'idle' && (
+        <div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+            <p className="text-xs text-amber-700 leading-relaxed">
+              ⚠️ <strong>Your profile is unprotected.</strong> Anyone who knows your name could sign in
+              as you. Set a password to secure your account.
+            </p>
+          </div>
+          <button onClick={() => { setDone(false); setMode('set'); }}
+            className="w-full bg-maroon-700 text-white rounded-xl py-3 text-sm font-semibold
+                       tap-target active:scale-95 transition-transform">
+            Set a Password
+          </button>
+        </div>
+      )}
+
+      {hasPassword && mode === 'idle' && (
+        <div className="space-y-2">
+          {!done && (
+            <p className="text-sm text-stone-500 mb-3">Your account is password protected.</p>
+          )}
+          <button onClick={() => { setDone(false); setMode('change'); }}
+            className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-stone-200
+                       bg-stone-50 hover:border-maroon-300 hover:bg-maroon-50 transition-colors tap-target group">
+            <div className="text-left">
+              <p className="text-sm font-semibold text-stone-800 group-hover:text-maroon-700">Change Password</p>
+              <p className="text-[11px] text-stone-400 mt-0.5">Update your current password</p>
+            </div>
+            <span className="text-stone-300 group-hover:text-maroon-500 text-lg">›</span>
+          </button>
+          <button onClick={() => { setDone(false); setMode('remove'); }}
+            className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-stone-200
+                       bg-stone-50 hover:border-red-200 hover:bg-red-50 transition-colors tap-target group">
+            <div className="text-left">
+              <p className="text-sm font-semibold text-stone-800 group-hover:text-red-600">Remove Password</p>
+              <p className="text-[11px] text-stone-400 mt-0.5">Leave your profile unprotected</p>
+            </div>
+            <span className="text-stone-300 group-hover:text-red-400 text-lg">›</span>
+          </button>
+        </div>
+      )}
+
+      {mode === 'remove' && (
+        <div className="space-y-2">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+            <p className="text-xs text-red-700 leading-relaxed">
+              ⚠️ <strong>This will remove password protection from your account.</strong>{' '}
+              Anyone who knows your name will be able to sign in as you. Enter your current
+              password to confirm.
+            </p>
+          </div>
+          <input
+            type="password"
+            value={currentPw}
+            onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleRemovePassword(); }}
+            placeholder="Current password"
+            autoFocus
+            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
+                       focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleRemovePassword}
+              disabled={saving || !currentPw}
+              className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold
+                         tap-target disabled:opacity-40 active:scale-95 transition-transform"
+            >
+              {saving ? 'Removing…' : 'Remove Password'}
+            </button>
+            <button onClick={reset}
+              className="px-4 py-2.5 text-sm text-stone-400 hover:text-stone-700 tap-target">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(mode === 'set' || mode === 'change') && (
+        <div className="space-y-2">
+          {mode === 'change' && (
+            <input
+              type="password"
+              value={currentPw}
+              onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
+              placeholder="Current password"
+              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
+                         focus:outline-none focus:ring-2 focus:ring-maroon-700"
+            />
+          )}
+          <input
+            type="password"
+            value={newPw}
+            onChange={(e) => { setNewPw(e.target.value); setError(''); }}
+            placeholder="New password (min 6 characters)"
+            autoFocus
+            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
+                       focus:outline-none focus:ring-2 focus:ring-maroon-700"
+          />
+          <input
+            type="password"
+            value={confirmPw}
+            onChange={(e) => { setConfirmPw(e.target.value); setError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+            placeholder="Confirm new password"
+            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
+                       focus:outline-none focus:ring-2 focus:ring-maroon-700"
+          />
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 bg-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold
+                         tap-target disabled:opacity-40 active:scale-95 transition-transform"
+            >
+              {saving ? 'Saving…' : 'Save Password'}
+            </button>
+            <button onClick={reset}
+              className="px-4 py-2.5 text-sm text-stone-400 hover:text-stone-700 tap-target">
+              Cancel
+            </button>
+          </div>
+          <div className="bg-stone-50 rounded-xl p-3 mt-1">
+            <p className="text-[11px] text-stone-500 leading-relaxed">
+              🔒 <strong>Forgot your password?</strong> Contact{' '}
+              <strong>TM Manish Singh</strong> to hard reset it. Your password is fully encrypted —
+              no one can retrieve your existing password.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main dashboard ───────────────────────────────────────────────────────────
 
 export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Props) {
@@ -285,6 +502,9 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
 
       {/* ── Profile ── */}
       <ProfileCard member={member} onUpdated={onUpdated} />
+
+      {/* ── Password ── */}
+      <PasswordCard member={member} />
 
       {/* ── Mentor ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">

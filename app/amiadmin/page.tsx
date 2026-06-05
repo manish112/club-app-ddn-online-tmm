@@ -255,6 +255,7 @@ function MemberRow({ member, allMembers, onUpdated }: { member: Member; allMembe
   const [displayName, setDisplayName] = useState(member.display_name);
   const [saving, setSaving] = useState(false);
   const [savingMentor, setSavingMentor] = useState(false);
+  const [resettingPw, setResettingPw] = useState(false);
 
   async function save() {
     setSaving(true);
@@ -280,6 +281,14 @@ function MemberRow({ member, allMembers, onUpdated }: { member: Member; allMembe
       .update({ mentor_id: mentorId || null })
       .eq('id', member.id);
     setSavingMentor(false);
+    onUpdated();
+  }
+
+  async function resetPassword() {
+    if (!confirm(`Reset password for TM ${member.display_name}? They will be prompted to set a new password on next login.`)) return;
+    setResettingPw(true);
+    await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
+    setResettingPw(false);
     onUpdated();
   }
 
@@ -331,15 +340,26 @@ function MemberRow({ member, allMembers, onUpdated }: { member: Member; allMembe
             </p>
           )}
         </div>
-        <button
-          onClick={toggleActive}
-          className={`text-xs font-medium px-2 py-1 rounded-lg tap-target shrink-0
-            ${member.active
-              ? 'text-stone-400 hover:text-red-500 hover:bg-red-50'
-              : 'text-green-600 hover:bg-green-50'}`}
-        >
-          {member.active ? 'Deactivate' : 'Restore'}
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={resetPassword}
+            disabled={resettingPw}
+            title="Reset member password"
+            className="text-xs font-medium px-2 py-1 rounded-lg tap-target
+              text-stone-400 hover:text-amber-600 hover:bg-amber-50 disabled:opacity-40"
+          >
+            {resettingPw ? '…' : '🔑'}
+          </button>
+          <button
+            onClick={toggleActive}
+            className={`text-xs font-medium px-2 py-1 rounded-lg tap-target
+              ${member.active
+                ? 'text-stone-400 hover:text-red-500 hover:bg-red-50'
+                : 'text-green-600 hover:bg-green-50'}`}
+          >
+            {member.active ? 'Deactivate' : 'Restore'}
+          </button>
+        </div>
       </div>
 
       {/* Mentor selector */}
