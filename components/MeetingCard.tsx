@@ -7,6 +7,7 @@ import { formatMeetingDate, formatTime, isMeetingLocked, isMeetingPast } from '@
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
+import { AgendaModal } from './AgendaModal';
 
 interface Props {
   meeting: MeetingWithClaims;
@@ -23,6 +24,7 @@ interface Props {
 export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, onChanged }: Props) {
   const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
+  const [showAgenda, setShowAgenda] = useState(false);
   const [editingTheme, setEditingTheme] = useState(false);
   const [themeInput, setThemeInput] = useState(meeting.theme ?? '');
   const [savingTheme, setSavingTheme] = useState(false);
@@ -91,7 +93,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               {formatMeetingDate(meeting.date)}&nbsp;·&nbsp;<span className="whitespace-nowrap">{formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST</span>
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {ballot?.status === 'open' && memberId && deviceId && (
               <button
                 onClick={() => setShowBallot(true)}
@@ -112,6 +114,16 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             )}
             {!past && !hideWhatsApp && ballot?.status !== 'open' && ballot?.status !== 'closed' && (
               <WhatsAppCopyButton meeting={meeting} members={allMembers} />
+            )}
+            {!past && (
+              <button
+                onClick={() => setShowAgenda(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium
+                           bg-stone-100 text-stone-600 hover:bg-stone-200 active:scale-95
+                           transition-all shadow-sm shrink-0 tap-target"
+              >
+                📋 Agenda
+              </button>
             )}
           </div>
         </div>
@@ -266,6 +278,13 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       </div>
     </article>
 
+    {showAgenda && (
+      <AgendaModal
+        meeting={meeting}
+        members={allMembers}
+        onClose={() => setShowAgenda(false)}
+      />
+    )}
     {showBallot && ballot && (ballot.status === 'closed' || (memberId && deviceId)) && (
       <BallotModal
         ballot={ballot}
