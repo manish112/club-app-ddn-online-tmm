@@ -235,6 +235,47 @@ export function buildWhatsAppAgenda(
   return lines.join('\n');
 }
 
+export function buildWhatsAppIntros(
+  meeting: MeetingWithClaims,
+  membersById: Map<string, Member>
+): string {
+  const roleOrder: { key: RoleKey; slots: number }[] = [
+    { key: 'speaker',    slots: meeting.speaker_slots },
+    { key: 'evaluator',  slots: meeting.evaluator_slots },
+    { key: 'tmod',       slots: 1 },
+    ...(meeting.meeting_type !== 'speakathon' ? [{ key: 'ttm' as RoleKey, slots: 1 }] : []),
+    { key: 'ge',         slots: 1 },
+    { key: 'grammarian', slots: 1 },
+    { key: 'ah_counter', slots: 1 },
+    { key: 'timer',      slots: 1 },
+    { key: 'harkmaster', slots: 1 },
+  ];
+
+  const lines: string[] = [];
+  lines.push('📋 Role Player Introductions:');
+  lines.push(`Dehradun Online Toastmasters Meeting #${meeting.number}`);
+  lines.push('');
+
+  for (const { key, slots } of roleOrder) {
+    const meta = ROLE_META[key];
+    for (let slot = 1; slot <= slots; slot++) {
+      const claim = meeting.role_claims.find((c) => c.role_key === key && c.slot_index === slot);
+      if (!claim) continue;
+      const member = membersById.get(claim.member_id);
+      if (!member) continue;
+
+      const label = slots > 1
+        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
+        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
+      lines.push(label);
+      if (member.introduction) lines.push(member.introduction);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ── Agenda builder ──────────────────────────────────────────────────────────
 
 export interface AgendaRow {

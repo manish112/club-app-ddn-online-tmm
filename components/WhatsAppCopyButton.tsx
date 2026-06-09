@@ -1,7 +1,9 @@
 'use client';
 import { useState } from 'react';
 import type { MeetingWithClaims, Member } from '@/lib/types';
-import { buildWhatsAppAgenda } from '@/lib/utils';
+import { buildWhatsAppAgenda, buildWhatsAppIntros } from '@/lib/utils';
+
+type CopyMode = 'full' | 'no-intros' | 'intros-only';
 
 interface Props {
   meeting: MeetingWithClaims;
@@ -19,11 +21,14 @@ function WhatsAppIcon() {
 
 export function WhatsAppCopyButton({ meeting, members }: Props) {
   const [picking, setPicking] = useState(false);
-  const [copied, setCopied] = useState<boolean | null>(null); // true = with intros, false = without
+  const [copiedMode, setCopiedMode] = useState<CopyMode | null>(null);
 
-  async function copy(includeIntros: boolean) {
+  async function copy(mode: CopyMode) {
     const membersById = new Map(members.map((m) => [m.id, m]));
-    const text = buildWhatsAppAgenda(meeting, membersById, includeIntros);
+    const text =
+      mode === 'intros-only'
+        ? buildWhatsAppIntros(meeting, membersById)
+        : buildWhatsAppAgenda(meeting, membersById, mode === 'full');
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -36,12 +41,12 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
       document.execCommand('copy');
       document.body.removeChild(el);
     }
-    setCopied(includeIntros);
+    setCopiedMode(mode);
     setPicking(false);
-    setTimeout(() => setCopied(null), 2500);
+    setTimeout(() => setCopiedMode(null), 2500);
   }
 
-  if (copied !== null) {
+  if (copiedMode !== null) {
     return (
       <button
         disabled
@@ -56,25 +61,32 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
 
   if (picking) {
     return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-stone-500 font-medium">Include intros?</span>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs text-stone-500 font-medium shrink-0">Copy:</span>
         <button
-          onClick={() => copy(true)}
-          className="px-3 py-2 rounded-xl text-sm font-medium bg-[#25D366] text-white
+          onClick={() => copy('full')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#25D366] text-white
                      hover:bg-[#1fba58] active:scale-95 transition-all shadow-sm"
         >
-          Yes
+          Agenda + Intro
         </button>
         <button
-          onClick={() => copy(false)}
-          className="px-3 py-2 rounded-xl text-sm font-medium bg-stone-600 text-white
-                     hover:bg-stone-700 active:scale-95 transition-all shadow-sm"
+          onClick={() => copy('no-intros')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-stone-500 text-white
+                     hover:bg-stone-600 active:scale-95 transition-all shadow-sm"
         >
-          No
+          Agenda only
+        </button>
+        <button
+          onClick={() => copy('intros-only')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-navy-700 text-white
+                     hover:bg-navy-800 active:scale-95 transition-all shadow-sm"
+        >
+          Intro only
         </button>
         <button
           onClick={() => setPicking(false)}
-          className="px-2 py-2 rounded-xl text-sm text-stone-400 hover:text-stone-600 transition-colors"
+          className="px-1.5 py-1.5 rounded-lg text-sm text-stone-400 hover:text-stone-600 transition-colors"
         >
           ✕
         </button>
