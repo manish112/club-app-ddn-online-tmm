@@ -415,7 +415,7 @@ function AdminPanel() {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'announce'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'announce' | 'settings'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -500,6 +500,7 @@ function AdminPanel() {
             { id: 'members', label: 'Members' },
             { id: 'guests', label: 'Guests' },
             { id: 'announce', label: 'Announce' },
+            { id: 'settings', label: 'Settings' },
           ] as const).map(({ id, label }) => (
             <button
               key={id}
@@ -516,6 +517,8 @@ function AdminPanel() {
           <div className="space-y-3">
             {[1,2,3].map(i => <div key={i} className="bg-white/10 rounded-2xl h-32 animate-pulse" />)}
           </div>
+        ) : tab === 'settings' ? (
+          <AgendaSettingsPanel />
         ) : tab === 'guests' ? (
           <GuestLog guestRegs={guestRegs} meetings={meetings} />
         ) : tab === 'announce' ? (
@@ -1086,6 +1089,112 @@ function GuestLog({ guestRegs, meetings }: { guestRegs: GuestRegistration[]; mee
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Agenda Settings Panel ────────────────────────────────────────────────────
+
+function AgendaSettingsPanel() {
+  const supabase = createClient();
+  const [vals, setVals] = useState({
+    l1_speech_mins: 6,
+    other_speech_mins: 7,
+    tt_speaker_count_min: 4,
+    tt_speaker_count_max: 5,
+    tt_mins_per_speaker: 2,
+    tmod_conclusion_mins: 5,
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    supabase.from('agenda_config').select('*').single().then(({ data }) => {
+      if (!data) return;
+      setVals({
+        l1_speech_mins:       data.l1_speech_mins,
+        other_speech_mins:    data.other_speech_mins,
+        tt_speaker_count_min: data.tt_speaker_count_min,
+        tt_speaker_count_max: data.tt_speaker_count_max,
+        tt_mins_per_speaker:  data.tt_mins_per_speaker,
+        tmod_conclusion_mins: data.tmod_conclusion_mins,
+      });
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    setSaving(true);
+    await supabase.from('agenda_config').upsert({
+      id: 1,
+      ...vals,
+      updated_at: new Date().toISOString(),
+    });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  function field(key: keyof typeof vals, label: string, hint?: string) {
+    return (
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-stone-800">{label}</p>
+          {hint && <p className="text-xs text-stone-400">{hint}</p>}
+        </div>
+        <input
+          type="number"
+          min={1}
+          max={60}
+          value={vals[key]}
+          onChange={(e) => setVals((v) => ({ ...v, [key]: parseInt(e.target.value) || 1 }))}
+          className="w-16 shrink-0 border border-stone-200 rounded-lg px-2 py-1.5 text-sm text-center
+                     focus:outline-none focus:ring-2 focus:ring-maroon-700"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 pb-8">
+      <div className="bg-white rounded-2xl border border-stone-200 p-4 space-y-5">
+        <div>
+          <h3 className="font-serif font-semibold text-stone-900 text-sm mb-0.5">Agenda Timing</h3>
+          <p className="text-xs text-stone-400">Changes apply immediately to any agenda opened after saving.</p>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Prepared Speeches</p>
+          <div className="space-y-3 pt-1">
+            {field('l1_speech_mins',    'L1 speech max (mins)',    'Pathways Level 1 — standard is 6')}
+            {field('other_speech_mins', 'Other speech max (mins)', 'Levels 2–5 — standard is 7')}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Table Topics</p>
+          <div className="space-y-3 pt-1">
+            {field('tt_speaker_count_min', 'Min speakers')}
+            {field('tt_speaker_count_max', 'Max speakers')}
+            {field('tt_mins_per_speaker',  'Max mins per speaker', 'Standard TT is 1–2½ min each')}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Closing</p>
+          <div className="pt-1">
+            {field('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}
+          </div>
+        </div>
+
+        <button
+          onClick={save}
+          disabled={saving}
+          className="w-full bg-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold
+                     disabled:opacity-40 tap-target active:scale-95 transition-transform"
+        >
+          {saved ? 'Saved!' : saving ? 'Saving…' : 'Save Settings'}
+        </button>
+      </div>
     </div>
   );
 }

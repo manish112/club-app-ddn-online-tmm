@@ -128,7 +128,8 @@ export function formatTime(timeStr: string): string {
 // Build the WhatsApp agenda text from a meeting + members index
 export function buildWhatsAppAgenda(
   meeting: MeetingWithClaims,
-  membersById: Map<string, Member>
+  membersById: Map<string, Member>,
+  includeIntros = true
 ): string {
   const getClaimName = (roleKey: RoleKey, slot: number): string => {
     const claim = meeting.role_claims.find(
@@ -168,12 +169,11 @@ export function buildWhatsAppAgenda(
   lines.push('');
 
   // Evaluators
-  lines.push('⚖️Evaluators:');
+  lines.push('⚖️ Evaluators:');
   for (let i = 1; i <= meeting.evaluator_slots; i++) {
     const name = getClaimName('evaluator', i);
     lines.push(` ${i}. ${name}`);
   }
-  lines.push('');
   lines.push('');
 
   // Main Roles
@@ -183,6 +183,7 @@ export function buildWhatsAppAgenda(
     lines.push(`💬 TTM- ${getClaimName('ttm', 1)}`);
   }
   lines.push(`📋 GE- ${getClaimName('ge', 1)}`);
+  lines.push('');
 
   // Auxiliary Roles
   lines.push('Auxiliary Roles:');
@@ -223,7 +224,7 @@ export function buildWhatsAppAgenda(
     }
   }
 
-  if (introBlocks.length > 0) {
+  if (includeIntros && introBlocks.length > 0) {
     lines.push('');
     lines.push('─────────────────────────');
     lines.push('📋 Role Player Introductions:');
@@ -232,4 +233,208 @@ export function buildWhatsAppAgenda(
   }
 
   return lines.join('\n');
+}
+
+// ── Agenda builder ──────────────────────────────────────────────────────────
+
+export interface AgendaRow {
+  timeLabel: string;
+  indented: boolean;
+  label: string;
+  // '' = role slot exists but unclaimed (show "TM ___________")
+  // string = claimed (show "TM <name>" in maroon)
+  // undefined = no role associated with this row (show nothing)
+  name?: string;
+  suffix?: string;   // plain text rendered after name (supports mid-sentence placement)
+  name2?: string;    // second highlighted name rendered after suffix
+  duration?: string;
+  note?: string;
+}
+
+export interface AgendaSection {
+  num: number;
+  title: string;
+  rows: AgendaRow[];
+}
+
+export interface AgendaConfig {
+  l1SpeechMins: number;
+  otherSpeechMins: number;
+  ttSpeakerCountMin: number;
+  ttSpeakerCountMax: number;
+  ttMinsPerSpeaker: number;
+  tmodConclusionMins: number;
+}
+
+export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
+  l1SpeechMins: 6,
+  otherSpeechMins: 7,
+  ttSpeakerCountMin: 4,
+  ttSpeakerCountMax: 5,
+  ttMinsPerSpeaker: 2,
+  tmodConclusionMins: 5,
+};
+
+export function buildAgendaSections(
+  meeting: MeetingWithClaims,
+  membersById: Map<string, Member>,
+  config: AgendaConfig = DEFAULT_AGENDA_CONFIG
+): AgendaSection[] {
+  // `offset` is shared via closure — always read before advancing with `offset +=`
+  let offset = 0;
+
+  function timeAt(): string {
+    const [h, m] = meeting.start_time.split(':').map(Number);
+    const total = h * 60 + m + offset;
+    const nh = Math.floor(total / 60) % 24;
+    const nm = total % 60;
+    const ampm = nh >= 12 ? 'PM' : 'AM';
+    const h12 = nh % 12 || 12;
+    return `${h12}:${String(nm).padStart(2, '0')} ${ampm}`;
+  }
+
+  // Returns display_name if the slot is claimed, '' if unclaimed (slot exists but nobody signed up)
+  function getName(key: RoleKey, slot = 1): string {
+    const claim = meeting.role_claims.find(
+      (c) => c.role_key === key && c.slot_index === slot
+    );
+    return claim ? (membersById.get(claim.member_id)?.display_name ?? '') : '';
+  }
+
+  // Returns display_name of the member with a given leadership_role, '' if not found
+  function getLeader(role: string): string {
+    for (const m of membersById.values()) {
+      if (m.leadership_role === role) return m.display_name;
+    }
+    return '';
+  }
+
+  function r(
+    indented: boolean,
+    label: string,
+    name?: string,
+    duration?: string,
+    note?: string,
+    suffix?: string,
+    name2?: string,
+  ): AgendaRow {
+    return { timeLabel: timeAt(), indented, label, name, suffix, name2, duration, note };
+  }
+
+  // ── Section 1: Prepared Speeches ──────────────────────────────────────────
+  const s1: AgendaRow[] = [];
+
+  const presN = getLeader('president');
+
+  s1.push(r(false, 'Sergeant-at-Arms calls the meeting to order'));                              offset += 5;
+  s1.push(r(false, 'Sergeant-at-Arms calls the Chair (President', presN,
+    undefined, undefined, ') for opening remarks'));                                             offset += 5;
+  s1.push(r(false, 'Chair (President', presN,
+    undefined, undefined, ') calls the Toastmaster of the Day', getName('tmod')));               offset += 1;
+  s1.push(r(false, 'TMoD', getName('tmod'),
+    undefined, meeting.theme || 'Theme introduction', ' opens & introduces the theme'));         offset += 3;
+  s1.push(r(false, 'TMoD', getName('tmod'),
+    undefined, undefined, ' calls the General Evaluator', getName('ge')));                       offset += 1;
+  s1.push(r(false, 'General Evaluator', getName('ge'),
+    undefined, undefined, ' calls the role players one by one:'));
+
+  for (const { key, roleLabel, note } of [
+    { key: 'timer'      as RoleKey, roleLabel: 'Timer',      note: undefined as string | undefined },
+    { key: 'ah_counter' as RoleKey, roleLabel: 'Ah-Counter', note: undefined },
+    { key: 'grammarian' as RoleKey, roleLabel: 'Grammarian', note: 'Introduces the Word of the Day & Idiom of the Day' },
+    { key: 'harkmaster' as RoleKey, roleLabel: 'Harkmaster', note: undefined },
+  ]) {
+    s1.push(r(true, roleLabel, getName(key), '2–3 MIN', note, ' comes up & explains the role')); offset += 3;
+  }
+
+  s1.push(r(false, 'General Evaluator', getName('ge'),
+    undefined, undefined, ' hands the meeting back to the Toastmaster of the Day'));             offset += 1;
+  s1.push(r(false, 'TMoD', getName('tmod'),
+    undefined, undefined, ' builds on the theme, then introduces the prepared speeches'));       offset += 3;
+
+  for (let i = 1; i <= meeting.speaker_slots; i++) {
+    s1.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
+      "Shares the speaker's project & evaluation criteria", ` calls Evaluator ${i}`, getName('evaluator', i))); offset += 1;
+
+    const spkClaim = meeting.role_claims.find(
+      (c) => c.role_key === 'speaker' && c.slot_index === i
+    );
+    const spkName  = spkClaim ? (membersById.get(spkClaim.member_id)?.display_name ?? '') : '';
+    const isL1     = spkClaim?.speech_level === 1;
+    const durLabel = isL1
+      ? `4–${config.l1SpeechMins} MIN`
+      : `5–${config.otherSpeechMins} MIN`;
+    const spkMins  = isL1 ? config.l1SpeechMins : config.otherSpeechMins;
+
+    let spkNote: string | undefined;
+    if (spkClaim) {
+      const meta: string[] = [];
+      if (spkClaim.path)         meta.push(spkClaim.path);
+      if (spkClaim.speech_level) meta.push(`L${spkClaim.speech_level}`);
+      if (spkClaim.project)      meta.push(spkClaim.project);
+      const metaStr = meta.join(' · ');
+      if (spkClaim.speech_title && metaStr) spkNote = `"${spkClaim.speech_title}" — ${metaStr}`;
+      else if (spkClaim.speech_title)       spkNote = `"${spkClaim.speech_title}"`;
+      else if (metaStr)                     spkNote = metaStr;
+    }
+
+    s1.push(r(false, 'TMoD', getName('tmod'), durLabel, spkNote, ` calls Speaker ${i}`, spkName)); offset += spkMins;
+  }
+
+  // ── Section 2: Table Topics ───────────────────────────────────────────────
+  const s2: AgendaRow[] = [];
+  if (meeting.meeting_type !== 'speakathon') {
+    const ttLabel = `${config.ttSpeakerCountMin}–${config.ttSpeakerCountMax} SPEAKERS · 1–${config.ttMinsPerSpeaker}½ MIN EACH`;
+    s2.push(r(false, 'TMoD', getName('tmod'),
+      undefined, undefined, ' carries the theme forward, then calls the Table Topics Master', getName('ttm'))); offset += 2;
+    s2.push(r(false, 'Table Topics Master', getName('ttm'),
+      ttLabel, 'Impromptu speaking for guests & members', ' conducts the session'));             offset += config.ttSpeakerCountMax * config.ttMinsPerSpeaker;
+    s2.push(r(false, 'Table Topics Master', getName('ttm'),
+      undefined, undefined, ' hands back to the Toastmaster of the Day'));                       offset += 1;
+    s2.push(r(false, 'TMoD', getName('tmod'),
+      undefined, undefined, ' speaks more on the theme'));                                       offset += 2;
+  }
+
+  // ── Section 3: Evaluations ────────────────────────────────────────────────
+  const s3: AgendaRow[] = [];
+  s3.push(r(false, 'TMoD', getName('tmod'),
+    undefined, undefined, ' calls the General Evaluator', getName('ge')));                       offset += 1;
+  s3.push(r(false, 'General Evaluator', getName('ge'),
+    undefined, undefined, ' calls the evaluators one by one:'));
+
+  for (let i = 1; i <= meeting.evaluator_slots; i++) {
+    s3.push(r(true, `Evaluator ${i}`, getName('evaluator', i), '2–3 MIN', undefined,
+      ' delivers the evaluation'));                                                               offset += 3;
+  }
+
+  s3.push(r(false, 'General Evaluator', getName('ge'),
+    undefined, undefined, " calls the role players' reports:"));
+  for (const { key, roleLabel } of [
+    { key: 'timer'      as RoleKey, roleLabel: 'Timer'      },
+    { key: 'ah_counter' as RoleKey, roleLabel: 'Ah-Counter' },
+    { key: 'grammarian' as RoleKey, roleLabel: 'Grammarian' },
+    { key: 'harkmaster' as RoleKey, roleLabel: 'Harkmaster' },
+  ]) {
+    s3.push(r(true, roleLabel, getName(key), '1–2 MIN', undefined, ' delivers the report'));     offset += 2;
+  }
+
+  s3.push(r(false, 'General Evaluator', getName('ge'),
+    undefined, undefined, ' gives the general evaluation, then hands back to the TMoD'));        offset += 3;
+  s3.push(r(false, 'TMoD', getName('tmod'),
+    `~${config.tmodConclusionMins} MIN`, undefined, ' brings the theme to a conclusion'));       offset += config.tmodConclusionMins;
+  s3.push(r(false, 'TMoD', getName('tmod'),
+    undefined, undefined, ' hands the meeting back to the Chair'));                              offset += 1;
+  s3.push(r(false, 'Chair (President', getLeader('president'),
+    undefined, 'Guests share their experience of the meeting',
+    ') invites the guests to introduce themselves'));                                             offset += 3;
+  s3.push(r(false, 'Chair (President', getLeader('president'),
+    undefined, undefined, ') shares awards, announcements & closing remarks'));
+
+  return [
+    { title: 'Prepared Speeches', rows: s1 },
+    { title: 'Table Topics',      rows: s2 },
+    { title: 'Evaluations',       rows: s3 },
+  ]
+    .filter((s) => s.rows.length > 0)
+    .map((s, i) => ({ ...s, num: i + 1 }));
 }
