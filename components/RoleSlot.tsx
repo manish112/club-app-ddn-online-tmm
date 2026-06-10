@@ -279,11 +279,11 @@ export function RoleSlot({
 
     return (
       <div className={miniCls} onClick={handleMiniClick} role={handleMiniClick ? 'button' : undefined}>
-        <span className="text-base leading-none">{meta.emoji}</span>
-        <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 leading-tight">
+        <span className="text-xl leading-none">{meta.emoji}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 leading-tight">
           {meta.label}
         </span>
-        <span className={`text-[9px] font-medium leading-tight line-clamp-2 max-w-full px-0.5 ${
+        <span className={`text-xs font-semibold leading-tight line-clamp-2 max-w-full px-0.5 ${
           filled
             ? isOwn ? 'text-maroon-700 dark:text-maroon-400' : 'text-slate-700 dark:text-slate-300'
             : 'text-slate-300 dark:text-slate-600'

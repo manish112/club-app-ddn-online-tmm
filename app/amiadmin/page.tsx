@@ -163,9 +163,12 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [savingMentor, setSavingMentor] = useState(false);
   const [resettingPw, setResettingPw] = useState(false);
   const [togglingAdmin, setTogglingAdmin] = useState(false);
+  const [togglingGuest, setTogglingGuest] = useState(false);
 
   const autoAdmin = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
   const hasAdmin = member.is_admin || autoAdmin;
+  const autoGuestMgr = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
+  const hasGuestMgr = member.can_manage_guests || autoGuestMgr;
 
   async function save() {
     setSaving(true);
@@ -215,6 +218,12 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setTogglingAdmin(false); onUpdated();
   }
 
+  async function toggleGuestManager() {
+    setTogglingGuest(true);
+    await supabase.from('members').update({ can_manage_guests: !member.can_manage_guests }).eq('id', member.id);
+    setTogglingGuest(false); onUpdated();
+  }
+
   const mentorOptions = allMembers.filter(m => m.active && m.id !== member.id);
 
   return (
@@ -256,6 +265,20 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
 
         {/* Action buttons */}
         <div className="flex items-center gap-0.5 shrink-0 flex-wrap justify-end">
+          {autoGuestMgr ? (
+            <span className="text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-700/30 text-emerald-700 dark:text-emerald-400">
+              👥 Guests (role)
+            </span>
+          ) : (
+            <button onClick={toggleGuestManager} disabled={togglingGuest}
+              className={`text-[10px] font-semibold px-2 py-1 rounded-lg transition-colors min-h-[32px] disabled:opacity-40 ${
+                member.can_manage_guests
+                  ? 'text-emerald-600 dark:text-emerald-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
+                  : 'text-slate-400 dark:text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30'
+              }`}>
+              {togglingGuest ? '…' : hasGuestMgr ? '👥 Guest mgr' : 'Guest mgr'}
+            </button>
+          )}
           {!autoAdmin && (
             <button onClick={toggleAdmin} disabled={togglingAdmin}
               className={`text-[10px] font-semibold px-2 py-1 rounded-lg transition-colors min-h-[32px] disabled:opacity-40 ${

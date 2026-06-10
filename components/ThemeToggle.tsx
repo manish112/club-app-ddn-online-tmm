@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { createClient } from '@/utils/supabase/client';
 
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
@@ -15,6 +16,15 @@ export function ThemeToggle() {
     setDark(next);
     document.documentElement.classList.toggle('dark', next);
     localStorage.setItem('theme', next ? 'dark' : 'light');
+
+    const memberId = localStorage.getItem('tm_member_id');
+    if (memberId && memberId !== 'guest') {
+      createClient()
+        .from('members')
+        .update({ theme_preference: next ? 'dark' : 'light' })
+        .eq('id', memberId)
+        .then(() => {});
+    }
   }
 
   if (!mounted) return <div className="w-9 h-9" />;
@@ -28,7 +38,7 @@ export function ThemeToggle() {
       aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
     >
       {dark ? (
-        <svg viewBox="0 0 24 24" fill="none" className="w-4.5 h-4.5 w-[18px] h-[18px]" stroke="currentColor" strokeWidth={2}>
+        <svg viewBox="0 0 24 24" fill="none" className="w-[18px] h-[18px]" stroke="currentColor" strokeWidth={2}>
           <circle cx="12" cy="12" r="5" />
           <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
         </svg>

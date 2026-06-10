@@ -78,6 +78,17 @@ export default function Home() {
     }
   }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Sync theme from DB when member signs in
+  useEffect(() => {
+    if (!currentMember?.theme_preference) return;
+    const isDark = document.documentElement.classList.contains('dark');
+    const preferred = currentMember.theme_preference === 'dark';
+    if (preferred !== isDark) {
+      document.documentElement.classList.toggle('dark', preferred);
+      localStorage.setItem('theme', currentMember.theme_preference);
+    }
+  }, [currentMember?.id, currentMember?.theme_preference]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleSelect(id: string) {
     themeReminderShown.current = false;
     identify(id);
@@ -148,6 +159,14 @@ export default function Home() {
           <div className="flex items-center gap-1 shrink-0">
             {isGuest && (
               <span className="text-[10px] text-white/40 mr-1">Guest</span>
+            )}
+            {currentMember && (currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+              <Link href="/guestmgr"
+                className="text-[11px] font-semibold text-white/70 hover:text-white
+                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
+                           transition-all min-h-[34px] flex items-center">
+                Guests
+              </Link>
             )}
             {currentMember && (currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
               <Link href="/amiadmin"
