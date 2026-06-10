@@ -53,6 +53,7 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
           ttSpeakerCountMax:  data.tt_speaker_count_max,
           ttMinsPerSpeaker:   data.tt_mins_per_speaker,
           tmodConclusionMins: data.tmod_conclusion_mins,
+          lockBeforeMins:     data.lock_before_mins ?? 60,
         });
       });
   }, []);

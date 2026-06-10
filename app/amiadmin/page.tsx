@@ -1104,6 +1104,7 @@ function AgendaSettingsPanel() {
     tt_speaker_count_max: 5,
     tt_mins_per_speaker: 2,
     tmod_conclusion_mins: 5,
+    lock_before_mins: 60,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1118,6 +1119,7 @@ function AgendaSettingsPanel() {
         tt_speaker_count_max: data.tt_speaker_count_max,
         tt_mins_per_speaker:  data.tt_mins_per_speaker,
         tmod_conclusion_mins: data.tmod_conclusion_mins,
+        lock_before_mins:     data.lock_before_mins ?? 60,
       });
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1183,6 +1185,13 @@ function AgendaSettingsPanel() {
           <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Closing</p>
           <div className="pt-1">
             {field('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Role Sign-up Lock</p>
+          <div className="pt-1">
+            {field('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}
           </div>
         </div>
 

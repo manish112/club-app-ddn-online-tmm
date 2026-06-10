@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS agenda_config (
   tt_speaker_count_max integer     NOT NULL DEFAULT 5,
   tt_mins_per_speaker  integer     NOT NULL DEFAULT 2,
   tmod_conclusion_mins integer     NOT NULL DEFAULT 5,
+  lock_before_mins     integer     NOT NULL DEFAULT 60,
   updated_at           timestamptz NOT NULL DEFAULT now()
 );
 

@@ -9,7 +9,8 @@ import { ThemeReminderModal } from '@/components/ThemeReminderModal';
 import type { MeetingWithClaims } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
-import { isMeetingPast, getAdjacentMemberRoles } from '@/lib/utils';
+import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG } from '@/lib/utils';
+import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -22,6 +23,17 @@ export default function Home() {
   const { meetings, members, ballots, announcement, loading, refetch } = useMeetings();
   const { memberId, deviceId, loaded, identify, clearIdentity } = useIdentity();
   const [activeTab, setActiveTab] = useState<Tab>('next');
+  const [lockBeforeMins, setLockBeforeMins] = useState(DEFAULT_AGENDA_CONFIG.lockBeforeMins);
+
+  useEffect(() => {
+    createClient()
+      .from('agenda_config')
+      .select('lock_before_mins')
+      .single()
+      .then(({ data }) => {
+        if (data?.lock_before_mins) setLockBeforeMins(data.lock_before_mins);
+      });
+  }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
   const [showAdvice, setShowAdvice] = useState(false);
   const [themeReminderMeeting, setThemeReminderMeeting] = useState<MeetingWithClaims | null>(null);
@@ -251,6 +263,7 @@ export default function Home() {
                   ballot={ballots.get(m.id)}
                   isAdmin={false}
                   hideWhatsApp={meetingTab !== 'next'}
+                  lockBeforeMins={lockBeforeMins}
                   onChanged={refetch}
                 />
               ))}

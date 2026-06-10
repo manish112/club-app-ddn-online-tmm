@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey } from '@/lib/types';
 import { getMeetingRoles } from '@/lib/types';
-import { formatMeetingDate, formatTime, isMeetingLocked, isMeetingPast } from '@/lib/utils';
+import { formatMeetingDate, formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -18,17 +18,18 @@ interface Props {
   ballot?: Ballot;
   isAdmin: boolean;
   hideWhatsApp?: boolean;
+  lockBeforeMins?: number;
   onChanged: () => void;
 }
 
-export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, onChanged }: Props) {
+export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, onChanged }: Props) {
   const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
   const [showAgenda, setShowAgenda] = useState(false);
   const [editingTheme, setEditingTheme] = useState(false);
   const [themeInput, setThemeInput] = useState(meeting.theme ?? '');
   const [savingTheme, setSavingTheme] = useState(false);
-  const locked = isMeetingLocked(meeting);
+  const locked = isMeetingLocked(meeting, lockBeforeMins);
   const past = isMeetingPast(meeting);
 
   const isTMoD = !!memberId &&
@@ -130,7 +131,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
 
         {!past && !locked && (
           <p className="text-xs text-stone-400 mt-2">
-            Roles lock at {formatTime(meeting.start_time)} IST on meeting day.
+            Roles lock at {getMeetingLockTimeIST(meeting, lockBeforeMins)} IST ({lockBeforeMins} min before the meeting).
           </p>
         )}
       </div>
