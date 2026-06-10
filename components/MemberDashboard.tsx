@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, MeetingWithClaims, RoleKey } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
-import { getMemberRecentRoles, formatMeetingDate } from '@/lib/utils';
+import { getMemberRecentRoles, formatMeetingDate, isMeetingPast } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -19,7 +19,11 @@ function leadershipLabel(role: string | null) {
   return LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? null;
 }
 
-// ─── Profile card (editable) ──────────────────────────────────────────────────
+const cardCls = 'bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-card-light dark:shadow-card-dark p-5';
+const inputCls = 'w-full border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500 placeholder:text-slate-300 dark:placeholder:text-slate-600';
+const primaryBtnCls = 'flex-1 bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all shadow-sm';
+
+// ─── Profile card ─────────────────────────────────────────────────────────────
 
 function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => void }) {
   const supabase = createClient();
@@ -38,11 +42,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      alert('Image must be under 2 MB.');
-      e.target.value = '';
-      return;
-    }
+    if (file.size > 2 * 1024 * 1024) { alert('Image must be under 2 MB.'); e.target.value = ''; return; }
     const reader = new FileReader();
     reader.onload = () => setCropSrc(reader.result as string);
     reader.readAsDataURL(file);
@@ -52,9 +52,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   async function handleCropSave(blob: Blob) {
     setCropSrc(null);
     setUploading(true);
-    const { error } = await supabase.storage
-      .from('member-avatars')
-      .upload(member.id, blob, { upsert: true, contentType: 'image/jpeg' });
+    const { error } = await supabase.storage.from('member-avatars').upload(member.id, blob, { upsert: true, contentType: 'image/jpeg' });
     if (!error) {
       const { data } = supabase.storage.from('member-avatars').getPublicUrl(member.id);
       const url = `${data.publicUrl}?t=${Date.now()}`;
@@ -71,7 +69,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       introduction: intro.trim() || null,
       phone: phone.trim() || null,
       email: email.trim() || null,
-      city:  city.trim()  || null,
+      city: city.trim() || null,
       gender: gender || null,
       show_phone_in_contact: showPhone,
     }).eq('id', member.id);
@@ -95,50 +93,29 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const previewMember = { ...member, avatar_url: localAvatarUrl, gender: gender || null };
 
   if (cropSrc) {
-    return (
-      <AvatarCropModal
-        imageSrc={cropSrc}
-        onSave={handleCropSave}
-        onClose={() => setCropSrc(null)}
-      />
-    );
+    return <AvatarCropModal imageSrc={cropSrc} onSave={handleCropSave} onClose={() => setCropSrc(null)} />;
   }
 
   if (editing) {
     return (
-      <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-        <h3 className="font-serif text-base font-semibold text-stone-900 mb-4">Edit Profile</h3>
+      <div className={cardCls}>
+        <h3 className="font-serif text-base font-semibold text-slate-900 dark:text-white mb-4">Edit Profile</h3>
         <form onSubmit={save} className="space-y-3">
-
-          {/* Photo upload */}
           <div className="flex items-center gap-4">
             <MemberAvatar member={previewMember} size={64} />
             <div>
-              <label className={`cursor-pointer text-sm font-medium tap-target ${
-                uploading ? 'text-stone-300 pointer-events-none' : 'text-maroon-600 hover:text-maroon-800'
-              }`}>
+              <label className={`cursor-pointer text-sm font-medium min-h-[36px] flex items-center ${uploading ? 'text-slate-300 pointer-events-none' : 'text-maroon-600 dark:text-maroon-400 hover:text-maroon-800 dark:hover:text-maroon-300'}`}>
                 {uploading ? 'Uploading…' : 'Change Photo'}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png"
-                  className="hidden"
-                  onChange={handlePhotoChange}
-                  disabled={uploading}
-                />
+                <input type="file" accept="image/jpeg,image/png" className="hidden" onChange={handlePhotoChange} disabled={uploading} />
               </label>
-              <p className="text-[10px] text-stone-400 mt-0.5">JPEG or PNG · max 2 MB</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">JPEG or PNG · max 2 MB</p>
             </div>
           </div>
 
-          {/* Gender */}
           <div>
-            <label className="text-xs font-medium text-stone-500 block mb-1">Gender</label>
-            <select
-              value={gender}
-              onChange={(e) => setGender(e.target.value as typeof gender)}
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 bg-white"
-            >
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Gender</label>
+            <select value={gender} onChange={(e) => setGender(e.target.value as typeof gender)}
+              className={inputCls}>
               <option value="">Prefer not to say</option>
               <option value="male">Male</option>
               <option value="female">Female</option>
@@ -146,66 +123,48 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
             </select>
           </div>
 
-          {/* Introduction */}
           <div>
-            <label className="text-xs font-medium text-stone-500 block mb-1">Introduction</label>
-            <textarea
-              value={intro}
-              onChange={(e) => setIntro(e.target.value)}
-              placeholder="A short intro about yourself…"
-              rows={3}
-              maxLength={300}
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         resize-none focus:outline-none focus:ring-2 focus:ring-maroon-700
-                         placeholder:text-stone-300"
-            />
-            <p className="text-right text-[10px] text-stone-300 -mt-1">{intro.length}/300</p>
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Introduction</label>
+            <textarea value={intro} onChange={(e) => setIntro(e.target.value)}
+              placeholder="A short intro about yourself…" rows={3} maxLength={300}
+              className={`${inputCls} resize-none`} />
+            <p className="text-right text-[10px] text-slate-300 dark:text-slate-600 -mt-1">{intro.length}/300</p>
           </div>
 
           <div>
-            <label className="text-xs font-medium text-stone-500 block mb-1">Phone</label>
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Phone</label>
             <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
-              placeholder="+91 98765 43210"
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 placeholder:text-stone-300" />
+              placeholder="+91 98765 43210" className={inputCls} />
             {member.leadership_role && phone.trim() && (
               <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showPhone}
-                  onChange={(e) => setShowPhone(e.target.checked)}
-                  className="w-4 h-4 accent-maroon-700 rounded"
-                />
-                <span className="text-xs text-stone-500">
+                <input type="checkbox" checked={showPhone} onChange={(e) => setShowPhone(e.target.checked)}
+                  className="w-4 h-4 accent-maroon-700 rounded" />
+                <span className="text-xs text-slate-500 dark:text-slate-400">
                   Show my phone number on Contact Us against{' '}
-                  <strong className="text-stone-700">{leadershipLabel(member.leadership_role)}</strong>
+                  <strong className="text-slate-700 dark:text-slate-300">{leadershipLabel(member.leadership_role)}</strong>
                 </span>
               </label>
             )}
           </div>
+
           <div>
-            <label className="text-xs font-medium text-stone-500 block mb-1">Email</label>
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Email</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 placeholder:text-stone-300" />
+              placeholder="you@example.com" className={inputCls} />
           </div>
+
           <div>
-            <label className="text-xs font-medium text-stone-500 block mb-1">City</label>
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">City</label>
             <input type="text" value={city} onChange={(e) => setCity(e.target.value)}
-              placeholder="Dehradun"
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700 placeholder:text-stone-300" />
+              placeholder="Dehradun" className={inputCls} />
           </div>
 
           <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={saving || uploading}
-              className="flex-1 bg-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold
-                         tap-target disabled:opacity-40 active:scale-95 transition-transform">
+            <button type="submit" disabled={saving || uploading} className={primaryBtnCls}>
               {saving ? 'Saving…' : 'Save'}
             </button>
             <button type="button" onClick={cancel}
-              className="px-5 py-2.5 text-sm text-stone-400 hover:text-stone-700 tap-target">
+              className="px-5 py-2.5 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 min-h-[44px]">
               Cancel
             </button>
           </div>
@@ -215,15 +174,16 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
+    <div className={cardCls}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
           <MemberAvatar member={previewMember} size={56} />
           <div>
-            <p className="text-lg font-bold text-stone-900 font-serif">TM {member.display_name}</p>
-            <p className="text-xs text-stone-400">{member.name}</p>
+            <p className="text-lg font-bold text-slate-900 dark:text-white font-serif">TM {member.display_name}</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500">{member.name}</p>
             {member.leadership_role && (
-              <span className="inline-block mt-1.5 text-[10px] font-semibold bg-maroon-700 text-white
+              <span className="inline-block mt-1.5 text-[10px] font-semibold
+                               bg-gradient-to-r from-maroon-700 to-maroon-600 text-white
                                px-2.5 py-0.5 rounded-full uppercase tracking-wide">
                 {leadershipLabel(member.leadership_role)}
               </span>
@@ -231,13 +191,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           </div>
         </div>
         <button onClick={() => setEditing(true)}
-          className="text-xs text-maroon-600 font-medium hover:text-maroon-800 tap-target shrink-0">
+          className="text-xs text-maroon-600 dark:text-maroon-400 font-medium hover:text-maroon-800 dark:hover:text-maroon-300 min-h-[36px] shrink-0">
           Edit ▸
         </button>
       </div>
 
       {member.introduction && (
-        <p className="text-sm text-stone-600 italic leading-relaxed mb-3 pb-3 border-b border-stone-100">
+        <p className="text-sm text-slate-600 dark:text-slate-400 italic leading-relaxed mb-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           &ldquo;{member.introduction}&rdquo;
         </p>
       )}
@@ -246,24 +206,24 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
         {member.city && (
           <div className="flex items-center gap-2">
             <span className="text-base">📍</span>
-            <span className="text-sm text-stone-700">{member.city}</span>
+            <span className="text-sm text-slate-700 dark:text-slate-300">{member.city}</span>
           </div>
         )}
         {member.email && (
           <div className="flex items-center gap-2">
             <span className="text-base">✉️</span>
-            <span className="text-sm text-stone-700">{member.email}</span>
+            <span className="text-sm text-slate-700 dark:text-slate-300">{member.email}</span>
           </div>
         )}
         {member.phone && (
           <div className="flex items-center gap-2">
             <span className="text-base">📞</span>
-            <span className="text-sm text-stone-700">{member.phone}</span>
+            <span className="text-sm text-slate-700 dark:text-slate-300">{member.phone}</span>
           </div>
         )}
         {!member.city && !member.email && !member.phone && !member.introduction && (
           <button onClick={() => setEditing(true)}
-            className="text-sm text-stone-300 hover:text-maroon-600 tap-target transition-colors">
+            className="text-sm text-slate-300 dark:text-slate-600 hover:text-maroon-600 dark:hover:text-maroon-400 min-h-[36px] transition-colors">
             + Add your intro, phone, email &amp; city
           </button>
         )}
@@ -286,25 +246,17 @@ function PasswordCard({ member }: { member: Member }) {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    supabase
-      .from('members')
-      .select('password_hash')
-      .eq('id', member.id)
-      .single()
+    supabase.from('members').select('password_hash').eq('id', member.id).single()
       .then(({ data }) => setHasPassword(!!data?.password_hash));
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function reset() {
-    setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false);
-    setMode('idle');
-  }
+  function reset() { setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false); setMode('idle'); }
 
   async function handleRemovePassword() {
     setError('');
     if (!currentPw) { setError('Enter your current password to confirm removal.'); return; }
     setSaving(true);
-    const { data } = await supabase
-      .from('members').select('password_hash, password_salt').eq('id', member.id).single();
+    const { data } = await supabase.from('members').select('password_hash, password_salt').eq('id', member.id).single();
     if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
     const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
     if (!valid) { setError('Incorrect password.'); setSaving(false); return; }
@@ -319,15 +271,12 @@ function PasswordCard({ member }: { member: Member }) {
     if (newPw.length < 6) { setError('Password must be at least 6 characters.'); return; }
     if (newPw !== confirmPw) { setError('Passwords do not match.'); return; }
     setSaving(true);
-
     if (mode === 'change') {
-      const { data } = await supabase
-        .from('members').select('password_hash, password_salt').eq('id', member.id).single();
+      const { data } = await supabase.from('members').select('password_hash, password_salt').eq('id', member.id).single();
       if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
       const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
       if (!valid) { setError('Current password is incorrect.'); setSaving(false); return; }
     }
-
     const salt = generateSalt();
     const hash = await hashPassword(newPw, salt);
     await supabase.from('members').update({ password_hash: hash, password_salt: salt }).eq('id', member.id);
@@ -341,24 +290,21 @@ function PasswordCard({ member }: { member: Member }) {
   if (hasPassword === null) return null;
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-      <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">🔒 Password</p>
+    <div className={cardCls}>
+      <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">🔒 Password</p>
 
-      {done && (
-        <p className="text-sm text-green-600 font-medium mb-3">Password saved successfully.</p>
-      )}
+      {done && <p className="text-sm text-green-600 dark:text-green-400 font-medium mb-3">Password saved successfully.</p>}
 
       {!hasPassword && mode === 'idle' && (
         <div>
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
-            <p className="text-xs text-amber-700 leading-relaxed">
-              ⚠️ <strong>Your profile is unprotected.</strong> Anyone who knows your name could sign in
-              as you. Set a password to secure your account.
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3 mb-3">
+            <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+              ⚠️ <strong>Your profile is unprotected.</strong> Anyone who knows your name could sign in as you.
             </p>
           </div>
           <button onClick={() => { setDone(false); setMode('set'); }}
-            className="w-full bg-maroon-700 text-white rounded-xl py-3 text-sm font-semibold
-                       tap-target active:scale-95 transition-transform">
+            className="w-full bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700
+                       text-white rounded-xl py-3 text-sm font-semibold min-h-[44px] active:scale-95 transition-all shadow-sm">
             Set a Password
           </button>
         </div>
@@ -366,61 +312,46 @@ function PasswordCard({ member }: { member: Member }) {
 
       {hasPassword && mode === 'idle' && (
         <div className="space-y-2">
-          {!done && (
-            <p className="text-sm text-stone-500 mb-3">Your account is password protected.</p>
-          )}
-          <button onClick={() => { setDone(false); setMode('change'); }}
-            className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-stone-200
-                       bg-stone-50 hover:border-maroon-300 hover:bg-maroon-50 transition-colors tap-target group">
-            <div className="text-left">
-              <p className="text-sm font-semibold text-stone-800 group-hover:text-maroon-700">Change Password</p>
-              <p className="text-[11px] text-stone-400 mt-0.5">Update your current password</p>
-            </div>
-            <span className="text-stone-300 group-hover:text-maroon-500 text-lg">›</span>
-          </button>
-          <button onClick={() => { setDone(false); setMode('remove'); }}
-            className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-stone-200
-                       bg-stone-50 hover:border-red-200 hover:bg-red-50 transition-colors tap-target group">
-            <div className="text-left">
-              <p className="text-sm font-semibold text-stone-800 group-hover:text-red-600">Remove Password</p>
-              <p className="text-[11px] text-stone-400 mt-0.5">Leave your profile unprotected</p>
-            </div>
-            <span className="text-stone-300 group-hover:text-red-400 text-lg">›</span>
-          </button>
+          {!done && <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Your account is password protected.</p>}
+          {[
+            { action: () => { setDone(false); setMode('change'); }, title: 'Change Password', sub: 'Update your current password', danger: false },
+            { action: () => { setDone(false); setMode('remove'); }, title: 'Remove Password', sub: 'Leave your profile unprotected', danger: true },
+          ].map((item) => (
+            <button key={item.title} onClick={item.action}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors min-h-[52px] group
+                bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50
+                ${item.danger
+                  ? 'hover:border-red-200 dark:hover:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-950/20'
+                  : 'hover:border-maroon-200 dark:hover:border-maroon-800/50 hover:bg-maroon-50 dark:hover:bg-maroon-950/20'}`}>
+              <div className="text-left">
+                <p className={`text-sm font-semibold text-slate-800 dark:text-slate-200 ${item.danger ? 'group-hover:text-red-600 dark:group-hover:text-red-400' : 'group-hover:text-maroon-700 dark:group-hover:text-maroon-400'}`}>
+                  {item.title}
+                </p>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{item.sub}</p>
+              </div>
+              <span className={`text-slate-300 dark:text-slate-600 text-lg ${item.danger ? 'group-hover:text-red-400' : 'group-hover:text-maroon-400'}`}>›</span>
+            </button>
+          ))}
         </div>
       )}
 
       {mode === 'remove' && (
         <div className="space-y-2">
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-            <p className="text-xs text-red-700 leading-relaxed">
-              ⚠️ <strong>This will remove password protection from your account.</strong>{' '}
-              Anyone who knows your name will be able to sign in as you. Enter your current
-              password to confirm.
+          <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/40 rounded-xl p-3">
+            <p className="text-xs text-red-700 dark:text-red-400 leading-relaxed">
+              ⚠️ <strong>This will remove password protection.</strong> Enter your current password to confirm.
             </p>
           </div>
-          <input
-            type="password"
-            value={currentPw}
-            onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
+          <input type="password" value={currentPw} onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleRemovePassword(); }}
-            placeholder="Current password"
-            autoFocus
-            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                       focus:outline-none focus:ring-2 focus:ring-red-400"
-          />
+            placeholder="Current password" autoFocus className={inputCls} />
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <button
-              onClick={handleRemovePassword}
-              disabled={saving || !currentPw}
-              className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold
-                         tap-target disabled:opacity-40 active:scale-95 transition-transform"
-            >
+            <button onClick={handleRemovePassword} disabled={saving || !currentPw}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2.5 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all">
               {saving ? 'Removing…' : 'Remove Password'}
             </button>
-            <button onClick={reset}
-              className="px-4 py-2.5 text-sm text-stone-400 hover:text-stone-700 tap-target">
+            <button onClick={reset} className="px-4 py-2.5 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 min-h-[44px]">
               Cancel
             </button>
           </div>
@@ -430,53 +361,26 @@ function PasswordCard({ member }: { member: Member }) {
       {(mode === 'set' || mode === 'change') && (
         <div className="space-y-2">
           {mode === 'change' && (
-            <input
-              type="password"
-              value={currentPw}
-              onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
-              placeholder="Current password"
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                         focus:outline-none focus:ring-2 focus:ring-maroon-700"
-            />
+            <input type="password" value={currentPw} onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
+              placeholder="Current password" className={inputCls} />
           )}
-          <input
-            type="password"
-            value={newPw}
-            onChange={(e) => { setNewPw(e.target.value); setError(''); }}
-            placeholder="New password (min 6 characters)"
-            autoFocus
-            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                       focus:outline-none focus:ring-2 focus:ring-maroon-700"
-          />
-          <input
-            type="password"
-            value={confirmPw}
-            onChange={(e) => { setConfirmPw(e.target.value); setError(''); }}
+          <input type="password" value={newPw} onChange={(e) => { setNewPw(e.target.value); setError(''); }}
+            placeholder="New password (min 6 characters)" autoFocus className={inputCls} />
+          <input type="password" value={confirmPw} onChange={(e) => { setConfirmPw(e.target.value); setError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
-            placeholder="Confirm new password"
-            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm text-stone-800
-                       focus:outline-none focus:ring-2 focus:ring-maroon-700"
-          />
+            placeholder="Confirm new password" className={inputCls} />
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="flex-1 bg-maroon-700 text-white rounded-xl py-2.5 text-sm font-semibold
-                         tap-target disabled:opacity-40 active:scale-95 transition-transform"
-            >
+            <button onClick={handleSave} disabled={saving} className={primaryBtnCls}>
               {saving ? 'Saving…' : 'Save Password'}
             </button>
-            <button onClick={reset}
-              className="px-4 py-2.5 text-sm text-stone-400 hover:text-stone-700 tap-target">
+            <button onClick={reset} className="px-4 py-2.5 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 min-h-[44px]">
               Cancel
             </button>
           </div>
-          <div className="bg-stone-50 rounded-xl p-3 mt-1">
-            <p className="text-[11px] text-stone-500 leading-relaxed">
-              🔒 <strong>Forgot your password?</strong> Contact{' '}
-              <strong>TM Manish Singh</strong> to hard reset it. Your password is fully encrypted —
-              no one can retrieve your existing password.
+          <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-3 mt-1">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              🔒 <strong>Forgot your password?</strong> Contact <strong>TM Manish Singh</strong> to hard reset it.
             </p>
           </div>
         </div>
@@ -491,75 +395,123 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const mentor  = member.mentor_id ? allMembers.find((m) => m.id === member.mentor_id) : null;
   const mentees = allMembers.filter((m) => m.mentor_id === member.id && m.active);
 
-  const allActivity = getMemberRecentRoles(meetings, member.id, 50);
+  const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
   const recentActivity = allActivity.slice(0, 8);
   const totalRoles = allActivity.reduce((sum, { roles }) => sum + roles.length, 0);
-
   const otherMembers = allMembers.filter((m) => m.active && m.id !== member.id);
+
+  const sectionLabel = (text: string) => (
+    <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">{text}</p>
+  );
 
   return (
     <div className="space-y-4 pb-8">
 
-      {/* ── Profile ── */}
       <ProfileCard member={member} onUpdated={onUpdated} />
 
-      {/* ── Password ── */}
+      {/* Upcoming roles */}
+      {(() => {
+        const upcoming = meetings
+          .filter(m => !isMeetingPast(m))
+          .sort((a, b) => a.number - b.number)
+          .flatMap(m => {
+            const claims = m.role_claims.filter(c => c.member_id === member.id);
+            if (!claims.length) return [];
+            return [{ meeting: m, roles: claims.map(c => c.role_key as RoleKey) }];
+          });
+
+        if (!upcoming.length) return null;
+
+        return (
+          <div className={cardCls}>
+            {sectionLabel('📅 Your Upcoming Roles')}
+            <div className="space-y-3">
+              {upcoming.map(({ meeting, roles }) => (
+                <div key={meeting.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl bg-maroon-50 dark:bg-maroon-950/20 border border-maroon-100 dark:border-maroon-900/40">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Meeting #{meeting.number} · {formatMeetingDate(meeting.date)}
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {roles.map((r, i) => (
+                        <span key={`${r}-${i}`}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold
+                                     bg-white dark:bg-maroon-950/60 text-maroon-700 dark:text-maroon-300
+                                     border border-maroon-200 dark:border-maroon-800/60
+                                     rounded-full px-2.5 py-0.5">
+                          {ROLE_META[r].emoji} {ROLE_META[r].label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed">
+              New to this role?{' '}
+              <a
+                href="https://www.toastmasters.org/membership/club-meeting-roles"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-maroon-600 dark:text-maroon-400 hover:underline font-medium"
+              >
+                Learn more about club meeting roles ↗
+              </a>
+            </p>
+          </div>
+        );
+      })()}
+
       <PasswordCard member={member} />
 
-      {/* ── Mentor ── */}
-      <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-        <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">🤝 Your Mentor</p>
+      {/* Mentor */}
+      <div className={cardCls}>
+        {sectionLabel('🤝 Your Mentor')}
         {mentor ? (
           <div className="flex items-start gap-3">
             <MemberAvatar member={mentor} size={40} className="mt-0.5" />
             <div className="min-w-0">
-              <p className="text-base font-bold text-stone-900">TM {mentor.display_name}</p>
-              {mentor.city && <p className="text-xs text-stone-400 mt-0.5">📍 {mentor.city}</p>}
+              <p className="text-base font-bold text-slate-900 dark:text-white">TM {mentor.display_name}</p>
+              {mentor.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {mentor.city}</p>}
               {mentor.introduction && (
-                <p className="text-sm text-stone-500 italic mt-2 leading-relaxed">
+                <p className="text-sm text-slate-500 dark:text-slate-400 italic mt-2 leading-relaxed">
                   &ldquo;{mentor.introduction}&rdquo;
                 </p>
               )}
-              {mentor.phone && (
-                <p className="text-sm text-stone-600 mt-2">📞 {mentor.phone}</p>
-              )}
-              {mentor.email && (
-                <p className="text-sm text-stone-600 mt-1">✉️ {mentor.email}</p>
-              )}
+              {mentor.phone && <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">📞 {mentor.phone}</p>}
+              {mentor.email && <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">✉️ {mentor.email}</p>}
             </div>
           </div>
         ) : (
           <div>
-            <p className="text-sm text-stone-500 mb-1">No mentor assigned yet.</p>
-            <p className="text-xs text-stone-400 leading-relaxed">
-              Contact the <strong className="text-stone-600">Club President</strong> or{' '}
-              <strong className="text-stone-600">VP Education</strong> to get a mentor assigned.
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">No mentor assigned yet.</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">
+              Contact the <strong className="text-slate-600 dark:text-slate-300">Club President</strong> or{' '}
+              <strong className="text-slate-600 dark:text-slate-300">VP Education</strong> to get a mentor assigned.
             </p>
           </div>
         )}
       </div>
 
-      {/* ── Mentees ── */}
+      {/* Mentees */}
       {mentees.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-          <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">
-            🌱 Your Mentee{mentees.length > 1 ? 's' : ''}
-          </p>
+        <div className={cardCls}>
+          {sectionLabel(`🌱 Your Mentee${mentees.length > 1 ? 's' : ''}`)}
           <div className="space-y-3">
             {mentees.map((m, i) => (
-              <div key={m.id} className={i > 0 ? 'pt-3 border-t border-stone-100' : ''}>
+              <div key={m.id} className={i > 0 ? 'pt-3 border-t border-slate-100 dark:border-slate-800' : ''}>
                 <div className="flex items-start gap-3">
                   <MemberAvatar member={m} size={36} className="mt-0.5" />
                   <div className="min-w-0">
-                    <p className="text-base font-bold text-stone-900">TM {m.display_name}</p>
-                    {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
+                    <p className="text-base font-bold text-slate-900 dark:text-white">TM {m.display_name}</p>
+                    {m.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {m.city}</p>}
                     {m.introduction && (
-                      <p className="text-sm text-stone-500 italic mt-1.5 leading-relaxed">
+                      <p className="text-sm text-slate-500 dark:text-slate-400 italic mt-1.5 leading-relaxed">
                         &ldquo;{m.introduction}&rdquo;
                       </p>
                     )}
-                    {m.phone && <p className="text-sm text-stone-600 mt-1.5">📞 {m.phone}</p>}
-                    {m.email && <p className="text-sm text-stone-600 mt-0.5">✉️ {m.email}</p>}
+                    {m.phone && <p className="text-sm text-slate-600 dark:text-slate-300 mt-1.5">📞 {m.phone}</p>}
+                    {m.email && <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">✉️ {m.email}</p>}
                   </div>
                 </div>
               </div>
@@ -568,36 +520,38 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
         </div>
       )}
 
-      {/* ── Club Activity ── */}
-      <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-        <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">📊 Club Activity</p>
+      {/* Activity */}
+      <div className={cardCls}>
+        {sectionLabel('📊 Club Activity')}
         {allActivity.length === 0 ? (
-          <p className="text-sm text-stone-400">No roles on record yet. Claim one to get started!</p>
+          <p className="text-sm text-slate-400 dark:text-slate-500">No roles on record yet. Claim one to get started!</p>
         ) : (
           <>
             <div className="flex gap-4 mb-4">
               <div className="text-center">
-                <p className="text-2xl font-bold text-maroon-700">{allActivity.length}</p>
-                <p className="text-[10px] text-stone-400 uppercase tracking-widest">Meetings</p>
+                <p className="text-2xl font-bold text-maroon-700 dark:text-maroon-400">{allActivity.length}</p>
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-widest">Meetings</p>
               </div>
-              <div className="w-px bg-stone-100" />
+              <div className="w-px bg-slate-100 dark:bg-slate-800" />
               <div className="text-center">
-                <p className="text-2xl font-bold text-maroon-700">{totalRoles}</p>
-                <p className="text-[10px] text-stone-400 uppercase tracking-widest">Roles</p>
+                <p className="text-2xl font-bold text-maroon-700 dark:text-maroon-400">{totalRoles}</p>
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-widest">Roles</p>
               </div>
             </div>
             <div className="space-y-2">
               {recentActivity.map(({ meeting, roles }) => (
-                <div key={meeting.id} className="flex items-start gap-3 py-2 px-3 rounded-xl bg-stone-50">
+                <div key={meeting.id} className="flex items-start gap-3 py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800/60">
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-stone-700">Meeting #{meeting.number}</p>
-                    <p className="text-[10px] text-stone-400">{formatMeetingDate(meeting.date)}</p>
+                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Meeting #{meeting.number}</p>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500">{formatMeetingDate(meeting.date)}</p>
                   </div>
                   <div className="flex flex-wrap gap-1 justify-end max-w-[55%]">
                     {(roles as RoleKey[]).map((r, i) => (
                       <span key={`${r}-${i}`}
-                        className="text-[10px] font-medium text-maroon-700 bg-maroon-50
-                                   border border-maroon-100 rounded-full px-2 py-0.5 whitespace-nowrap">
+                        className="text-[10px] font-medium text-maroon-700 dark:text-maroon-400
+                                   bg-maroon-50 dark:bg-maroon-950/30
+                                   border border-maroon-100 dark:border-maroon-900/50
+                                   rounded-full px-2 py-0.5 whitespace-nowrap">
                         {ROLE_META[r].emoji} {ROLE_META[r].label}
                       </span>
                     ))}
@@ -605,7 +559,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
                 </div>
               ))}
               {allActivity.length > 8 && (
-                <p className="text-xs text-stone-400 text-center pt-1">
+                <p className="text-xs text-slate-400 dark:text-slate-500 text-center pt-1">
                   + {allActivity.length - 8} more meetings
                 </p>
               )}
@@ -614,34 +568,32 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
         )}
       </div>
 
-      {/* ── Club Members ── */}
+      {/* Club Members */}
       {otherMembers.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-5">
-          <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-3">
-            👥 Club Members ({otherMembers.length})
-          </p>
+        <div className={cardCls}>
+          {sectionLabel(`👥 Club Members (${otherMembers.length})`)}
           <div className="space-y-3">
             {otherMembers.map((m, i) => (
-              <div key={m.id} className={i > 0 ? 'pt-3 border-t border-stone-100' : ''}>
+              <div key={m.id} className={i > 0 ? 'pt-3 border-t border-slate-100 dark:border-slate-800' : ''}>
                 <div className="flex items-start gap-3">
                   <MemberAvatar member={m} size={36} className="mt-0.5" />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-semibold text-stone-800">TM {m.display_name}</p>
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">TM {m.display_name}</p>
                       {m.leadership_role && (
-                        <span className="text-[9px] font-semibold bg-maroon-700 text-white
-                                         px-2 py-0.5 rounded-full uppercase tracking-wide">
+                        <span className="text-[9px] font-semibold bg-gradient-to-r from-maroon-700 to-maroon-600
+                                         text-white px-2 py-0.5 rounded-full uppercase tracking-wide">
                           {leadershipLabel(m.leadership_role)}
                         </span>
                       )}
                     </div>
-                    {m.city && <p className="text-xs text-stone-400 mt-0.5">📍 {m.city}</p>}
+                    {m.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {m.city}</p>}
                     {m.introduction ? (
-                      <p className="text-xs text-stone-500 italic mt-1 leading-relaxed">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 leading-relaxed">
                         &ldquo;{m.introduction}&rdquo;
                       </p>
                     ) : (
-                      <p className="text-xs text-stone-300 mt-0.5 italic">No intro yet</p>
+                      <p className="text-xs text-slate-300 dark:text-slate-600 mt-0.5 italic">No intro yet</p>
                     )}
                   </div>
                 </div>

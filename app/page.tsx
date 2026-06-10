@@ -4,8 +4,8 @@ import { useMeetings } from '@/hooks/useMeetings';
 import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
-import { MemberAdviceModal } from '@/components/MemberAdviceModal';
 import { ThemeReminderModal } from '@/components/ThemeReminderModal';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
@@ -17,7 +17,6 @@ import Image from 'next/image';
 type Tab = 'next' | 'upcoming' | 'past' | 'profile';
 
 const DISMISS_KEY = (id: string) => `tm_announcement_${id}`;
-const ADVICE_KEY  = (id: string) => `tm_advice_${id}`;
 
 export default function Home() {
   const { meetings, members, ballots, announcement, loading, refetch } = useMeetings();
@@ -35,7 +34,6 @@ export default function Home() {
       });
   }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
-  const [showAdvice, setShowAdvice] = useState(false);
   const [themeReminderMeeting, setThemeReminderMeeting] = useState<MeetingWithClaims | null>(null);
   const themeReminderShown = useRef(false);
 
@@ -53,16 +51,6 @@ export default function Home() {
   const isGuest = memberId === 'guest';
   const currentMember = isGuest ? null : members.find((m) => m.id === memberId);
 
-  // Show rotation-advice modal once per browser session on sign-in.
-  useEffect(() => {
-    if (!loaded || loading || !currentMember) return;
-    if (sessionStorage.getItem(ADVICE_KEY(currentMember.id)) === '1') return;
-    setShowAdvice(true);
-    sessionStorage.setItem(ADVICE_KEY(currentMember.id), '1');
-  }, [loaded, loading, currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Remind TMoD to set a theme if it's missing or still "TBD".
-  // Uses a ref (not sessionStorage) so it fires on every page load/refresh.
   useEffect(() => {
     if (!loaded || loading || !currentMember || meetings.length === 0) return;
     if (themeReminderShown.current) return;
@@ -82,8 +70,6 @@ export default function Home() {
     setThemeReminderMeeting(needsTheme);
   }, [loaded, loading, currentMember?.id, meetings]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When a member signs in, switch to their profile tab so the dashboard is
-  // the first thing they see. Reset to 'next' when they sign out.
   useEffect(() => {
     if (currentMember) {
       setActiveTab('profile');
@@ -93,7 +79,6 @@ export default function Home() {
   }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSelect(id: string) {
-    if (id !== 'guest') sessionStorage.removeItem(ADVICE_KEY(id));
     themeReminderShown.current = false;
     identify(id);
   }
@@ -121,49 +106,82 @@ export default function Home() {
   const showPicker = loaded && !memberId && members.length > 0;
   function handleGuest() { identify('guest'); }
 
+  const tabs = [
+    ...(currentMember ? [{ id: 'profile' as Tab, label: 'My Profile' }] : []),
+    { id: 'next' as Tab, label: nextTabLabel },
+    { id: 'upcoming' as Tab, label: 'Future Meetings' },
+    { id: 'past' as Tab, label: 'Past Meetings' },
+  ];
+
   return (
-    <div className="min-h-screen bg-navy-600">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
 
       {/* ── Header ── */}
-      <header className="sticky top-0 z-40 bg-maroon-700 shadow-md">
-        <div className="max-w-2xl mx-auto px-4 h-16 flex items-center justify-between gap-2">
-          <div className="flex flex-col items-start justify-center gap-0.5 flex-1 min-w-0 overflow-hidden">
-            <div className="bg-white rounded-md px-1.5 py-0.5 shadow-sm shrink-0">
-              <Image src="/logo.png" alt="Toastmasters International" width={100} height={24} className="h-6 w-auto" priority />
+      <header className="sticky top-0 z-40"
+        style={{
+          background: 'linear-gradient(160deg, #6b0c1e 0%, #9d1530 40%, #0E2D6A 100%)',
+          boxShadow: '0 4px 32px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.07) inset',
+        }}>
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          {/* Left: logo + club info */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="bg-white rounded-lg px-2 py-1 shadow-sm shrink-0">
+              <Image src="/logo.png" alt="Toastmasters International" width={88} height={22} className="h-[22px] w-auto" priority />
             </div>
-            <p className="text-[10px] font-bold text-white leading-tight w-full truncate">Dehradun Online Toastmasters Club</p>
-            <p className="text-[8px] text-white/55 leading-none w-full truncate">No. 03295206 · Area 03 · Division I · District 41</p>
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold text-white leading-tight truncate">
+                Dehradun Online Toastmasters
+              </p>
+              {currentMember ? (
+                <p className="text-[11px] font-semibold text-gold-300 leading-tight truncate">
+                  Welcome, TM {currentMember.display_name} 👋
+                </p>
+              ) : (
+                <p className="text-[9px] text-white/50 leading-tight truncate">
+                  Club 03295206 · District 41
+                </p>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {currentMember && (
-              <span className="text-xs font-semibold text-yellow-200 truncate max-w-[80px]">
-                {currentMember.display_name}
-              </span>
-            )}
+          {/* Right: auth + theme */}
+          <div className="flex items-center gap-1 shrink-0">
             {isGuest && (
-              <span className="text-xs text-white/40 truncate max-w-[60px]">Guest</span>
+              <span className="text-[10px] text-white/40 mr-1">Guest</span>
+            )}
+            {currentMember && (currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+              <Link href="/amiadmin"
+                className="text-[11px] font-semibold text-gold-300 hover:text-gold-200
+                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
+                           transition-all min-h-[34px] flex items-center">
+                Admin
+              </Link>
             )}
             {loaded && (
               <button
                 onClick={clearIdentity}
-                className="text-xs text-white/60 hover:text-white tap-target px-2 py-1 transition-colors"
+                className="text-[11px] font-semibold text-white/70 hover:text-white
+                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
+                           transition-all min-h-[34px]"
               >
                 {memberId ? 'Switch' : 'Sign in'}
               </button>
             )}
+            <ThemeToggle />
           </div>
         </div>
       </header>
 
       {/* ── Announcement banner ── */}
       {announcement && !announceDismissed && (
-        <div style={{ backgroundColor: '#A9B2B1', borderBottom: '1px solid #96a09f' }}>
+        <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/40">
           <div className="max-w-2xl mx-auto px-4 py-2.5 flex items-start gap-3">
-            <span className="text-stone-900 text-sm leading-relaxed flex-1">{announcement.message}</span>
+            <span className="text-stone-800 dark:text-amber-200 text-sm leading-relaxed flex-1">
+              {announcement.message}
+            </span>
             <button
               onClick={dismissAnnouncement}
-              className="shrink-0 text-stone-600 hover:text-stone-900 text-lg leading-none tap-target px-1"
+              className="shrink-0 text-stone-500 dark:text-amber-400 hover:text-stone-800 dark:hover:text-amber-200 text-lg leading-none min-h-[36px] min-w-[36px] flex items-center justify-center"
               aria-label="Dismiss"
             >
               ✕
@@ -173,32 +191,23 @@ export default function Home() {
       )}
 
       {/* ── Tab bar ── */}
-      <div className="sticky top-16 z-30 bg-navy-700 border-b border-white/5 shadow-sm">
-        <div className="max-w-2xl mx-auto px-4 py-2">
-          <div className="flex gap-1 bg-white/10 rounded-xl p-1">
-            {currentMember && (
-              <button
-                onClick={() => setActiveTab('profile')}
-                className={`flex-1 py-2.5 text-xs font-semibold rounded-lg transition-all ${
-                  activeTab === 'profile'
-                    ? 'bg-white text-navy-700 shadow-sm'
-                    : 'text-white/60 hover:text-white'
-                }`}
-              >
-                My Profile
-              </button>
-            )}
-            {(['next', 'upcoming', 'past'] as const).map((id) => (
+      <div className="sticky top-[52px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
+        <div className="max-w-2xl mx-auto px-4">
+          <div className="flex">
+            {tabs.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
-                className={`flex-1 py-2.5 text-xs font-semibold rounded-lg transition-all ${
+                className={`relative flex-1 py-3 text-xs font-bold tracking-wide transition-all ${
                   activeTab === id
-                    ? 'bg-white text-navy-700 shadow-sm'
-                    : 'text-white/60 hover:text-white'
+                    ? 'text-maroon-700 dark:text-maroon-400'
+                    : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                 }`}
               >
-                {id === 'next' ? nextTabLabel : id === 'upcoming' ? 'Future' : 'Past'}
+                {label}
+                {activeTab === id && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-maroon-600 dark:bg-maroon-500" />
+                )}
               </button>
             ))}
           </div>
@@ -208,20 +217,19 @@ export default function Home() {
       {/* ── Content ── */}
       <main className="max-w-2xl mx-auto px-4 py-6">
         {(() => {
-          // 'profile' tab is only valid while a member is signed in.
-          // Fall back to 'next' during the sign-out transition to avoid
-          // meetingTabContent['profile'] being undefined.
           const meetingTab: 'next' | 'upcoming' | 'past' =
             activeTab === 'profile' ? 'next' : activeTab;
 
           if (activeTab === 'profile' && currentMember) {
             return (
-              <MemberDashboard
-                member={currentMember}
-                allMembers={members}
-                meetings={meetings}
-                onUpdated={refetch}
-              />
+              <div className="card-enter">
+                <MemberDashboard
+                  member={currentMember}
+                  allMembers={members}
+                  meetings={meetings}
+                  onUpdated={refetch}
+                />
+              </div>
             );
           }
 
@@ -229,7 +237,7 @@ export default function Home() {
             return (
               <div className="space-y-4">
                 {[1, 2].map((i) => (
-                  <div key={i} className="bg-white/10 rounded-2xl h-64 animate-pulse" />
+                  <div key={i} className="bg-slate-200 dark:bg-slate-800 rounded-2xl h-64 animate-pulse" />
                 ))}
               </div>
             );
@@ -238,9 +246,9 @@ export default function Home() {
           if (meetingTabContent[meetingTab].length === 0) {
             return (
               <div className="text-center py-16 space-y-2">
-                <p className="text-white/40">{emptyState[meetingTab].text}</p>
+                <p className="text-slate-400 dark:text-slate-500">{emptyState[meetingTab].text}</p>
                 {emptyState[meetingTab].cta && (
-                  <Link href="/amiadmin" className="text-sm text-yellow-200 inline-block">
+                  <Link href="/amiadmin" className="text-sm text-maroon-600 dark:text-maroon-400 inline-block">
                     {emptyState[meetingTab].cta}
                   </Link>
                 )}
@@ -250,22 +258,27 @@ export default function Home() {
 
           return (
             <div className="space-y-4">
-              {meetingTabContent[meetingTab].map((m) => (
-                <MeetingCard
+              {meetingTabContent[meetingTab].map((m, i) => (
+                <div
                   key={m.id}
-                  meeting={m}
-                  allMembers={members}
-                  memberId={memberId}
-                  memberAdjacentRoles={
-                    currentMember ? getAdjacentMemberRoles(meetings, m.id, currentMember.id) : []
-                  }
-                  deviceId={deviceId}
-                  ballot={ballots.get(m.id)}
-                  isAdmin={false}
-                  hideWhatsApp={meetingTab !== 'next'}
-                  lockBeforeMins={lockBeforeMins}
-                  onChanged={refetch}
-                />
+                  className="card-enter"
+                  style={{ animationDelay: `${i * 60}ms` }}
+                >
+                  <MeetingCard
+                    meeting={m}
+                    allMembers={members}
+                    memberId={memberId}
+                    memberAdjacentRoles={
+                      currentMember ? getAdjacentMemberRoles(meetings, m.id, currentMember.id) : []
+                    }
+                    deviceId={deviceId}
+                    ballot={ballots.get(m.id)}
+                    isAdmin={false}
+                    hideWhatsApp={meetingTab !== 'next'}
+                    lockBeforeMins={lockBeforeMins}
+                    onChanged={refetch}
+                  />
+                </div>
               ))}
             </div>
           );
@@ -278,18 +291,13 @@ export default function Home() {
         <MemberPicker
           members={members}
           meetingId={nextMeeting?.id ?? null}
+          upcomingMeetings={future}
           onSelect={handleSelect}
           onGuest={handleGuest}
         />
       )}
 
-      {showAdvice && currentMember && (
-        <MemberAdviceModal
-          member={currentMember}
-          meetings={meetings}
-          onClose={() => setShowAdvice(false)}
-        />
-      )}
+
 
       {themeReminderMeeting && (
         <ThemeReminderModal

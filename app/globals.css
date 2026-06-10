@@ -5,9 +5,39 @@
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
+    color-scheme: light dark;
   }
+
   body {
-    @apply bg-stone-50 text-stone-900 font-sans antialiased;
+    @apply bg-slate-50 text-slate-900 dark:text-slate-100;
+    @apply font-sans antialiased;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* Light mode: clean warm-white */
+  body {
+    background-color: #f4f6fb;
+  }
+
+  /* Dark mode: deep backdrop with brand-colored ambient glow */
+  .dark body {
+    background-color: #020617;
+    background-image:
+      radial-gradient(ellipse 80% 40% at 50% -5%, rgba(196, 30, 58, 0.09) 0%, transparent 70%),
+      radial-gradient(ellipse 60% 30% at 90% 100%, rgba(14, 45, 106, 0.09) 0%, transparent 70%);
+  }
+
+  /* Grain texture overlay — only in dark mode */
+  .dark body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 999;
+    opacity: 0.022;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 200px 200px;
   }
 }
 
@@ -15,5 +45,103 @@
   .tap-target {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  /* Glass surface — backdrop blur with translucent bg */
+  .glass {
+    @apply bg-white/80 dark:bg-white/5 backdrop-blur-xl border border-white/50 dark:border-white/10;
+  }
+
+  /* Standard card surface */
+  .card-surface {
+    @apply bg-white dark:bg-slate-900
+           border border-slate-200 dark:border-slate-700/60
+           shadow-card-light dark:shadow-card-dark;
+  }
+
+  /* Gradient brand text */
+  .text-brand-gradient {
+    background: linear-gradient(135deg, #C41E3A 0%, #0E2D6A 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Subtle inner surface (form inputs, list rows) */
+  .inner-surface {
+    @apply bg-slate-50 dark:bg-slate-800/60
+           border border-slate-100 dark:border-slate-700/40;
+  }
+}
+
+/* ── Animations ──────────────────────────────────────────────────── */
+
+/* Shimmer sweep — for meeting card accent bars */
+@keyframes shimmer-sweep {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.shimmer-bar {
+  background: linear-gradient(
+    90deg,
+    #9d1530 0%,
+    #C41E3A 25%,
+    #e85070 45%,
+    #C41E3A 55%,
+    #0E2D6A 80%,
+    #071b50 100%
+  );
+  background-size: 250% auto;
+  animation: shimmer-sweep 4s linear infinite;
+}
+
+/* Card entrance — staggered page load reveal */
+@keyframes card-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-enter {
+  animation: card-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Role claim bounce */
+@keyframes claim-bounce {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(0.96); }
+  70%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+.claim-anim {
+  animation: claim-bounce 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Pulse ring — Vote Now button */
+@keyframes pulse-ring {
+  0%   { transform: scale(1); box-shadow: 0 0 0 0 rgba(245, 189, 65, 0.6); }
+  70%  { transform: scale(1.02); box-shadow: 0 0 0 8px rgba(245, 189, 65, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245, 189, 65, 0); }
+}
+
+.pulse-vote {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Print overrides (AgendaModal PDF) ───────────────────────────── */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .dark body::after {
+    display: none !important;
   }
 }

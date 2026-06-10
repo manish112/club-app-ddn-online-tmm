@@ -22,7 +22,7 @@ function NameSpan({ name }: { name: string | undefined }) {
   if (name === undefined) return null;
   return name
     ? <span className="text-maroon-700"> TM {name}</span>
-    : <span className="text-stone-300"> TM ___________</span>;
+    : <span className="text-slate-300"> TM ___________</span>;
 }
 
 function AgendaRowText({ row }: { row: AgendaRow }) {
@@ -58,14 +58,12 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
       });
   }, []);
 
-  // Lock body scroll
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -81,26 +79,26 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
 
   const sections = buildAgendaSections(meeting, membersById, config);
 
-  // Shared content rendered both in the modal (for viewing) and in the print portal
+  // Print-safe agenda content (always light theme)
   const agendaContent = (
     <div className="px-5 py-5 font-sans">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400 mb-1">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-1">
         Dehradun Online Toastmasters Club
       </p>
-      <h1 className="text-2xl font-bold text-stone-900 mb-1">
+      <h1 className="text-2xl font-bold text-slate-900 mb-1">
         Meeting #{meeting.number} — Agenda
       </h1>
-      <p className="text-sm text-stone-500">
+      <p className="text-sm text-slate-500">
         {formatMeetingDate(meeting.date)}&nbsp;·&nbsp;
         {formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST
       </p>
       {meeting.theme && (
-        <p className="mt-1.5 text-sm font-medium text-stone-700">
+        <p className="mt-1.5 text-sm font-medium text-slate-700">
           🌐&nbsp;<span className="font-semibold">Theme:</span> {meeting.theme}
         </p>
       )}
 
-      <hr className="my-4 border-stone-200" />
+      <hr className="my-4 border-slate-200" />
 
       {sections.map((section) => (
         <div key={section.num} className="mb-6">
@@ -109,32 +107,32 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
                              flex items-center justify-center text-xs font-bold shrink-0">
               {section.num}
             </span>
-            <h2 className="text-base font-bold text-stone-900">{section.title}</h2>
+            <h2 className="text-base font-bold text-slate-900">{section.title}</h2>
           </div>
 
           {section.rows.map((row, i) => (
             <div
               key={i}
-              className={`flex items-start gap-3 py-2 border-b border-stone-100 last:border-0
+              className={`flex items-start gap-3 py-2 border-b border-slate-100 last:border-0
                 ${row.indented ? 'pl-7' : ''}`}
             >
-              <span className="w-[4.5rem] shrink-0 text-[11px] text-stone-400 tabular-nums pt-0.5 font-medium">
+              <span className="w-[4.5rem] shrink-0 text-[11px] text-slate-400 tabular-nums pt-0.5 font-medium">
                 {row.timeLabel}
               </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="text-sm font-semibold leading-snug text-stone-800">
+                  <p className="text-sm font-semibold leading-snug text-slate-800">
                     <AgendaRowText row={row} />
                   </p>
                   {row.duration && (
-                    <span className="shrink-0 text-[10px] font-medium border border-stone-300
-                                     text-stone-500 px-1.5 py-0.5 rounded whitespace-nowrap mt-0.5">
+                    <span className="shrink-0 text-[10px] font-medium border border-slate-300
+                                     text-slate-500 px-1.5 py-0.5 rounded whitespace-nowrap mt-0.5">
                       {row.duration}
                     </span>
                   )}
                 </div>
                 {row.note && (
-                  <p className="text-xs text-stone-400 italic mt-0.5">{row.note}</p>
+                  <p className="text-xs text-slate-400 italic mt-0.5">{row.note}</p>
                 )}
               </div>
             </div>
@@ -142,7 +140,7 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
         </div>
       ))}
 
-      <p className="text-xs text-stone-400 italic mt-4 leading-relaxed border-t border-stone-100 pt-3">
+      <p className="text-xs text-slate-400 italic mt-4 leading-relaxed border-t border-slate-100 pt-3">
         Times are a guide, generated from the current role sign-ups. Speech allotments default to
         the Pathways level (Level 1 = 4–{config.l1SpeechMins} min, others = 5–{config.otherSpeechMins} min).
       </p>
@@ -151,7 +149,6 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
 
   return (
     <>
-      {/* Print CSS: show only the portal div which is a direct child of body */}
       <style>{`
         #agenda-print-portal { display: none; }
         @media print {
@@ -164,6 +161,8 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
             top: 0 !important;
             left: 0 !important;
             width: 100% !important;
+            background: white !important;
+            color: black !important;
           }
           @page { size: A4 portrait; margin: 14mm 16mm; }
         }
@@ -171,7 +170,7 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
 
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50 z-40 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/50 dark:bg-black/70 z-40 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden
       />
@@ -179,19 +178,21 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
       {/* Modal panel */}
       <div className="fixed inset-0 z-50 overflow-y-auto pointer-events-none">
         <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-6 pt-4">
-          <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl pointer-events-auto mb-4">
+          <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-modal-dark pointer-events-auto mb-4">
 
             {/* Sticky toolbar */}
             <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-5 py-3
-                             bg-white/95 backdrop-blur-sm border-b border-stone-100 rounded-t-2xl">
-              <span className="text-sm font-semibold text-stone-700 truncate">
+                             bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm
+                             border-b border-slate-100 dark:border-slate-800 rounded-t-2xl">
+              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">
                 Meeting #{meeting.number} — Agenda
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => window.print()}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
-                             bg-maroon-700 text-white hover:bg-maroon-800 active:scale-95
+                             bg-gradient-to-r from-maroon-700 to-maroon-600 text-white
+                             hover:from-maroon-800 hover:to-maroon-700 active:scale-95
                              transition-all shadow-sm"
                 >
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-white shrink-0">
@@ -202,22 +203,75 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
                 <button
                   onClick={onClose}
                   aria-label="Close agenda"
-                  className="w-8 h-8 flex items-center justify-center rounded-lg text-stone-400
-                             hover:bg-stone-100 hover:text-stone-700 transition-colors text-base font-medium"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg
+                             text-slate-400 dark:text-slate-500
+                             hover:bg-slate-100 dark:hover:bg-slate-800
+                             hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
                 >
                   ✕
                 </button>
               </div>
             </div>
 
-            {/* Agenda content (modal view) */}
-            {agendaContent}
+            {/* Agenda content (modal view — inherit dark mode) */}
+            <div className="dark:text-slate-100">
+              {/* We render the same content but override colors for dark mode via CSS */}
+              <div className="px-5 py-5 font-sans">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">
+                  Dehradun Online Toastmasters Club
+                </p>
+                <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">
+                  Meeting #{meeting.number} — Agenda
+                </h1>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {formatMeetingDate(meeting.date)}&nbsp;·&nbsp;
+                  {formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST
+                </p>
+                {meeting.theme && (
+                  <p className="mt-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    🌐&nbsp;<span className="font-semibold">Theme:</span> {meeting.theme}
+                  </p>
+                )}
+                <hr className="my-4 border-slate-200 dark:border-slate-700" />
+                {sections.map((section) => (
+                  <div key={section.num} className="mb-6">
+                    <div className="flex items-center gap-2.5 mb-3">
+                      <span className="w-6 h-6 rounded-full bg-maroon-700 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                        {section.num}
+                      </span>
+                      <h2 className="text-base font-bold text-slate-900 dark:text-white">{section.title}</h2>
+                    </div>
+                    {section.rows.map((row, i) => (
+                      <div key={i} className={`flex items-start gap-3 py-2 border-b border-slate-100 dark:border-slate-800 last:border-0 ${row.indented ? 'pl-7' : ''}`}>
+                        <span className="w-[4.5rem] shrink-0 text-[11px] text-slate-400 dark:text-slate-500 tabular-nums pt-0.5 font-medium">
+                          {row.timeLabel}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-semibold leading-snug text-slate-800 dark:text-slate-200">
+                              <AgendaRowText row={row} />
+                            </p>
+                            {row.duration && (
+                              <span className="shrink-0 text-[10px] font-medium border border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded whitespace-nowrap mt-0.5">
+                                {row.duration}
+                              </span>
+                            )}
+                          </div>
+                          {row.note && <p className="text-xs text-slate-400 dark:text-slate-500 italic mt-0.5">{row.note}</p>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <p className="text-xs text-slate-400 dark:text-slate-500 italic mt-4 leading-relaxed border-t border-slate-100 dark:border-slate-800 pt-3">
+                  Times are a guide, generated from the current role sign-ups.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Print portal — rendered as a direct child of document.body so position: absolute
-          anchors to the page top, not the modal card */}
       {createPortal(
         <div id="agenda-print-portal">{agendaContent}</div>,
         document.body
