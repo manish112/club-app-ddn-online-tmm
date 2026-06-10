@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey } from '@/lib/types';
 import { getMeetingRoles } from '@/lib/types';
-import { formatMeetingDate, formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST } from '@/lib/utils';
+import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, isMeetingOpenForClaims, getMeetingOpenDate } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -31,6 +31,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [savingTheme, setSavingTheme] = useState(false);
   const locked = isMeetingLocked(meeting, lockBeforeMins);
   const past = isMeetingPast(meeting);
+  const notYetOpen = !past && !isMeetingOpenForClaims(meeting);
 
   const isTMoD = !!memberId &&
     meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
@@ -53,53 +54,133 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
 
   const roles = getMeetingRoles(meeting);
 
-  const speakerRoles = roles.filter((r) => r.roleKey === 'speaker');
+  const speakerRoles   = roles.filter((r) => r.roleKey === 'speaker');
   const evaluatorRoles = roles.filter((r) => r.roleKey === 'evaluator');
-  const mainRoles = roles.filter((r) =>
-    ['tmod', 'ttm', 'ge'].includes(r.roleKey)
-  );
-  const tagRoles = roles.filter((r) =>
-    ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey)
-  );
+  const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
+  const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
+
+  // Date badge parts
+  const dateObj   = new Date(meeting.date + 'T00:00:00');
+  const dayNum    = dateObj.getDate();
+  const monthStr  = dateObj.toLocaleDateString('en-IN', { month: 'short' }).toUpperCase();
+  const weekday   = dateObj.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase();
+
+  const slotProps = (roleKey: RoleKey, slot: number) => ({
+    meetingId: meeting.id,
+    meetingNumber: meeting.number,
+    meetingDate: meeting.date,
+    roleKey,
+    slotIndex: slot,
+    claim: claimsMap.get(`${roleKey}:${slot}`) ?? null,
+    memberId,
+    memberExistingRoles,
+    memberAdjacentRoles,
+    isLocked: locked,
+    isPast: past,
+    isNotYetOpen: notYetOpen,
+    isAdmin,
+    allMembers,
+    onChanged,
+  });
 
   return (
     <>
-    <article className={`bg-white rounded-2xl shadow-sm border overflow-hidden
-      ${past ? 'border-stone-100 opacity-75' : 'border-stone-200'}`}
+    <article className={`rounded-2xl overflow-hidden
+      bg-white dark:bg-slate-900
+      border border-slate-200 dark:border-slate-700/60
+      shadow-card-light dark:shadow-card-dark
+      transition-all duration-200
+      ${past
+        ? 'opacity-70'
+        : 'hover:-translate-y-0.5 hover:shadow-[0_8px_32px_rgba(0,0,0,0.12)] dark:hover:shadow-[0_8px_40px_rgba(0,0,0,0.55)]'}`}
     >
-      {/* Header */}
-      <div className={`px-4 pt-4 pb-3 border-b ${past ? 'bg-stone-50 border-stone-100' : 'bg-white border-stone-100'}`}>
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="font-serif text-lg font-bold text-stone-900">
+      {/* Top accent bar */}
+      <div className={`h-[3px] ${past ? 'bg-slate-200 dark:bg-slate-700' : 'shimmer-bar'}`} />
+
+      {/* ── Card Header ── */}
+      <div className="px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-start gap-3">
+
+          {/* Calendar date badge */}
+          <div className={`shrink-0 w-[52px] rounded-xl text-center overflow-hidden border
+            ${past
+              ? 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800'
+              : 'border-maroon-200 dark:border-maroon-800/60 bg-maroon-50 dark:bg-maroon-950/30'}`}>
+            <div className={`text-[9px] font-black uppercase tracking-widest py-1 border-b
+              ${past
+                ? 'bg-slate-100 dark:bg-slate-700/60 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+                : 'bg-maroon-700 dark:bg-maroon-800 border-maroon-600 dark:border-maroon-700 text-white'}`}>
+              {monthStr}
+            </div>
+            <div className={`text-2xl font-black leading-none py-1.5
+              ${past ? 'text-slate-500 dark:text-slate-400' : 'text-maroon-700 dark:text-maroon-400'}`}>
+              {dayNum}
+            </div>
+            <div className="text-[8px] font-semibold text-slate-400 dark:text-slate-500 pb-1">
+              {weekday}
+            </div>
+          </div>
+
+          {/* Meeting info */}
+          <div className="flex-1 min-w-0 pt-0.5">
+            <div className="flex items-center gap-2 flex-wrap mb-0.5">
+              <h2 className="font-serif text-xl font-black text-slate-900 dark:text-white leading-none">
                 Meeting #{meeting.number}
               </h2>
               {meeting.meeting_type === 'speakathon' && (
-                <span className="text-xs font-semibold uppercase tracking-wide
-                                 bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                  Speakathon
-                </span>
-              )}
-              {past && (
-                <span className="text-xs font-medium text-stone-400 bg-stone-100
-                                 px-2 py-0.5 rounded-full">Past</span>
-              )}
-              {!past && locked && !isAdmin && (
-                <span className="text-xs font-medium text-red-500 bg-red-50
-                                 px-2 py-0.5 rounded-full">Locked</span>
+                <span className="text-[10px] font-black uppercase tracking-wide
+                                 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300
+                                 px-2 py-0.5 rounded-full">Speakathon</span>
               )}
             </div>
-            <p className="text-sm text-stone-500 mt-0.5">
-              {formatMeetingDate(meeting.date)}&nbsp;·&nbsp;<span className="whitespace-nowrap">{formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST</span>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST
             </p>
+            {/* Status chips */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {past && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400
+                                 px-2 py-0.5 rounded-full">
+                  ✓ Past
+                </span>
+              )}
+              {!past && locked && !isAdmin && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                 bg-red-50 dark:bg-red-950/30 text-red-500 dark:text-red-400
+                                 px-2 py-0.5 rounded-full">
+                  🔒 Locked
+                </span>
+              )}
+              {!past && !locked && !notYetOpen && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400
+                                 px-2 py-0.5 rounded-full">
+                  ● Roles open
+                </span>
+              )}
+              {!past && notYetOpen && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400
+                                 px-2 py-0.5 rounded-full">
+                  🔐 Opens {getMeetingOpenDate(meeting)}
+                </span>
+              )}
+              {!past && !locked && !notYetOpen && (
+                <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                  Locks {getMeetingLockTimeIST(meeting, lockBeforeMins)} IST on meeting day
+                </span>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+
+          {/* Action buttons */}
+          <div className="flex flex-col items-end gap-1.5 shrink-0">
             {ballot?.status === 'open' && memberId && deviceId && (
               <button
                 onClick={() => setShowBallot(true)}
-                className="bg-yellow-400 hover:bg-yellow-300 text-navy-800 font-bold text-xs px-3 py-1.5
-                           rounded-full transition-colors shadow-sm shrink-0"
+                className="pulse-vote bg-gold-300 hover:bg-gold-400 text-slate-900 font-black text-[10px] uppercase tracking-wide
+                           px-3 py-1.5 rounded-full transition-colors shadow-sm"
               >
                 Vote Now
               </button>
@@ -107,87 +188,75 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             {ballot?.status === 'closed' && (
               <button
                 onClick={() => setShowBallot(true)}
-                className="bg-navy-700 hover:bg-navy-600 text-yellow-200 font-bold text-xs px-3 py-1.5
-                           rounded-full transition-colors shadow-sm shrink-0"
+                className="bg-navy-700 hover:bg-navy-800 dark:bg-navy-700/80 text-gold-300
+                           font-bold text-[10px] px-3 py-1.5 rounded-full transition-colors shadow-sm"
               >
-                🏆 View Results
+                🏆 Results
+              </button>
+            )}
+            {!past && (
+              <button
+                onClick={() => setShowAgenda(true)}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold
+                           bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300
+                           hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95
+                           transition-all min-h-[32px]"
+              >
+                📋 Agenda
               </button>
             )}
             {!past && !hideWhatsApp && ballot?.status !== 'open' && ballot?.status !== 'closed' && (
               <WhatsAppCopyButton meeting={meeting} members={allMembers} />
             )}
-            {!past && (
-              <button
-                onClick={() => setShowAgenda(true)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium
-                           bg-stone-100 text-stone-600 hover:bg-stone-200 active:scale-95
-                           transition-all shadow-sm shrink-0 tap-target"
-              >
-                📋 Agenda
-              </button>
-            )}
           </div>
         </div>
-
-        {!past && !locked && (
-          <p className="text-xs text-stone-400 mt-2">
-            Roles lock at {getMeetingLockTimeIST(meeting, lockBeforeMins)} IST ({lockBeforeMins} min before the meeting).
-          </p>
-        )}
       </div>
 
-      {/* Theme band — editable by TMoD */}
+      {/* ── Theme band ── */}
       {(meeting.theme || isTMoD) && (
-        <div className={`px-4 py-3 border-b flex items-start gap-3
+        <div className={`px-4 py-2.5 border-b flex items-center gap-3
           ${past
-            ? 'bg-stone-50 border-stone-100'
-            : 'bg-gradient-to-r from-maroon-50 to-yellow-100 border-maroon-100'}`}
+            ? 'bg-slate-50 dark:bg-slate-900 border-slate-100 dark:border-slate-800'
+            : 'bg-gradient-to-r from-maroon-50/80 via-white to-white dark:from-maroon-950/15 dark:via-slate-900 dark:to-slate-900 border-maroon-100 dark:border-maroon-900/30'}`}
         >
-          <span className="text-2xl leading-none shrink-0 mt-0.5">🌐</span>
+          <span className="text-lg leading-none shrink-0">🌐</span>
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-maroon-600/70">
-              Theme
-            </p>
             {editingTheme ? (
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-2">
                 <input
                   value={themeInput}
                   onChange={(e) => setThemeInput(e.target.value)}
                   placeholder="Enter meeting theme…"
                   autoFocus
                   onKeyDown={(e) => { if (e.key === 'Enter') saveTheme(); if (e.key === 'Escape') setEditingTheme(false); }}
-                  className="flex-1 min-w-0 border border-maroon-200 rounded-lg px-2 py-1 text-sm
-                             text-stone-800 bg-white focus:outline-none focus:ring-2 focus:ring-maroon-600"
+                  className="flex-1 min-w-0 border border-maroon-200 dark:border-maroon-800 rounded-lg px-2 py-1 text-sm
+                             text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800
+                             focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500"
                 />
                 <button onClick={saveTheme} disabled={savingTheme}
-                  className="text-xs font-semibold text-maroon-700 hover:text-maroon-900
-                             tap-target disabled:opacity-40 shrink-0">
+                  className="text-xs font-semibold text-maroon-700 dark:text-maroon-400 hover:text-maroon-900 min-h-[36px] disabled:opacity-40 shrink-0">
                   {savingTheme ? '…' : 'Save'}
                 </button>
                 <button
                   onClick={() => { setEditingTheme(false); setThemeInput(meeting.theme ?? ''); }}
-                  className="text-xs text-stone-400 hover:text-stone-600 tap-target shrink-0">
+                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 min-h-[36px] shrink-0">
                   Cancel
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
                 {meeting.theme ? (
-                  <p className={`font-serif text-base sm:text-lg font-bold leading-snug
-                    ${past ? 'text-stone-600' : 'text-maroon-800'}`}>
-                    {meeting.theme}
+                  <p className={`font-serif text-sm font-bold leading-snug
+                    ${past ? 'text-slate-500 dark:text-slate-400' : 'text-maroon-800 dark:text-maroon-300'}`}>
+                    &ldquo;{meeting.theme}&rdquo;
                   </p>
                 ) : (
-                  <p className="text-sm text-stone-400 italic">No theme set yet</p>
+                  <p className="text-xs text-slate-400 italic">No theme set yet</p>
                 )}
                 {isTMoD && (
-                  <button
-                    onClick={() => setEditingTheme(true)}
-                    className="text-base tap-target shrink-0 opacity-60 hover:opacity-100 transition-opacity"
-                    title="Edit theme"
-                  >
-                    ✏️
-                  </button>
+                  <button onClick={() => setEditingTheme(true)}
+                    className="text-sm min-h-[32px] min-w-[32px] shrink-0 opacity-50 hover:opacity-100 transition-opacity"
+                    title="Edit theme">✏️</button>
                 )}
               </div>
             )}
@@ -195,87 +264,64 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         </div>
       )}
 
-      {/* Role slots */}
-      <div className="p-4 space-y-4">
-        <RoleSection label="🎙️ Prepared Speakers">
-          {speakerRoles.map(({ roleKey, slot }) => (
-            <RoleSlot
-              key={`${roleKey}:${slot}`}
-              meetingId={meeting.id}
-              roleKey={roleKey as RoleKey}
-              slotIndex={slot}
-              claim={claimsMap.get(`${roleKey}:${slot}`) ?? null}
-              memberId={memberId}
-              memberExistingRoles={memberExistingRoles}
-              memberAdjacentRoles={memberAdjacentRoles}
-              isLocked={locked}
-              isPast={past}
-              isAdmin={isAdmin}
-              allMembers={allMembers}
-              onChanged={onChanged}
-            />
-          ))}
-        </RoleSection>
+      {/* ── Role sections ── */}
+      <div className="p-4 space-y-5">
 
-        <RoleSection label="⚖️ Evaluators">
-          {evaluatorRoles.map(({ roleKey, slot }) => (
-            <RoleSlot
-              key={`${roleKey}:${slot}`}
-              meetingId={meeting.id}
-              roleKey={roleKey as RoleKey}
-              slotIndex={slot}
-              claim={claimsMap.get(`${roleKey}:${slot}`) ?? null}
-              memberId={memberId}
-              memberExistingRoles={memberExistingRoles}
-              memberAdjacentRoles={memberAdjacentRoles}
-              isLocked={locked}
-              isPast={past}
-              isAdmin={isAdmin}
-              allMembers={allMembers}
-              onChanged={onChanged}
-            />
-          ))}
-        </RoleSection>
+        {/* Speakers — 2-column chip grid */}
+        <section>
+          <SectionLabel icon="🎙️" text="Prepared Speakers" />
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {speakerRoles.map(({ roleKey, slot }) => (
+              <RoleSlot
+                key={`${roleKey}:${slot}`}
+                {...slotProps(roleKey as RoleKey, slot)}
+                variant="chip"
+              />
+            ))}
+          </div>
+        </section>
 
-        <RoleSection label="Main Roles">
-          {mainRoles.map(({ roleKey, slot }) => (
-            <RoleSlot
-              key={`${roleKey}:${slot}`}
-              meetingId={meeting.id}
-              roleKey={roleKey as RoleKey}
-              slotIndex={slot}
-              claim={claimsMap.get(`${roleKey}:${slot}`) ?? null}
-              memberId={memberId}
-              memberExistingRoles={memberExistingRoles}
-              memberAdjacentRoles={memberAdjacentRoles}
-              isLocked={locked}
-              isPast={past}
-              isAdmin={isAdmin}
-              allMembers={allMembers}
-              onChanged={onChanged}
-            />
-          ))}
-        </RoleSection>
+        {/* Evaluators — 2-column chip grid */}
+        <section>
+          <SectionLabel icon="⚖️" text="Evaluators" />
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {evaluatorRoles.map(({ roleKey, slot }) => (
+              <RoleSlot
+                key={`${roleKey}:${slot}`}
+                {...slotProps(roleKey as RoleKey, slot)}
+                variant="chip"
+              />
+            ))}
+          </div>
+        </section>
 
-        <RoleSection label="Auxiliary Roles">
-          {tagRoles.map(({ roleKey, slot }) => (
-            <RoleSlot
-              key={`${roleKey}:${slot}`}
-              meetingId={meeting.id}
-              roleKey={roleKey as RoleKey}
-              slotIndex={slot}
-              claim={claimsMap.get(`${roleKey}:${slot}`) ?? null}
-              memberId={memberId}
-              memberExistingRoles={memberExistingRoles}
-              memberAdjacentRoles={memberAdjacentRoles}
-              isLocked={locked}
-              isPast={past}
-              isAdmin={isAdmin}
-              allMembers={allMembers}
-              onChanged={onChanged}
-            />
-          ))}
-        </RoleSection>
+        {/* Main roles — 3-column chip grid */}
+        <section>
+          <SectionLabel icon="👥" text="Core Roles" />
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            {mainRoles.map(({ roleKey, slot }) => (
+              <RoleSlot
+                key={`${roleKey}:${slot}`}
+                {...slotProps(roleKey as RoleKey, slot)}
+                variant="chip"
+              />
+            ))}
+          </div>
+        </section>
+
+        {/* Auxiliary roles — 2-column mini grid */}
+        <section>
+          <SectionLabel icon="🛠️" text="Support" />
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {tagRoles.map(({ roleKey, slot }) => (
+              <RoleSlot
+                key={`${roleKey}:${slot}`}
+                {...slotProps(roleKey as RoleKey, slot)}
+                variant="mini"
+              />
+            ))}
+          </div>
+        </section>
       </div>
     </article>
 
@@ -301,13 +347,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   );
 }
 
-function RoleSection({ label, children }: { label: string; children: React.ReactNode }) {
+function SectionLabel({ icon, text }: { icon: string; text: string }) {
   return (
-    <div>
-      <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-400 mb-2">
-        {label}
+    <div className="flex items-center gap-2">
+      <span className="text-sm leading-none">{icon}</span>
+      <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">
+        {text}
       </h3>
-      <div className="space-y-1.5">{children}</div>
+      <div className="flex-1 h-px bg-slate-100 dark:bg-slate-800" />
     </div>
   );
 }

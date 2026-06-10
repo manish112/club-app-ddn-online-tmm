@@ -5,14 +5,14 @@ import type { Member } from '@/lib/types';
 type AvatarMember = Pick<Member, 'display_name' | 'avatar_url' | 'gender'>;
 
 const BG: Record<string, string> = {
-  male:   'bg-blue-100',
-  female: 'bg-rose-100',
-  other:  'bg-violet-100',
+  male:   'bg-blue-100 dark:bg-blue-950',
+  female: 'bg-rose-100 dark:bg-rose-950',
+  other:  'bg-violet-100 dark:bg-violet-950',
 };
 const FG: Record<string, string> = {
-  male:   'text-blue-600',
-  female: 'text-rose-500',
-  other:  'text-violet-600',
+  male:   'text-blue-600 dark:text-blue-400',
+  female: 'text-rose-500 dark:text-rose-400',
+  other:  'text-violet-600 dark:text-violet-400',
 };
 
 interface Props {
@@ -25,8 +25,8 @@ export function MemberAvatar({ member, size = 48, className = '' }: Props) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const g = member.gender ?? '';
-  const bg = BG[g] ?? 'bg-stone-100';
-  const fg = FG[g] ?? 'text-stone-500';
+  const bg = BG[g] ?? 'bg-slate-100 dark:bg-slate-800';
+  const fg = FG[g] ?? 'text-slate-500 dark:text-slate-400';
   const initial = member.display_name.charAt(0).toUpperCase();
 
   if (member.avatar_url) {
@@ -42,7 +42,7 @@ export function MemberAvatar({ member, size = 48, className = '' }: Props) {
 
         {lightboxOpen && (
           <div
-            className="fixed inset-0 z-[200] bg-black/80 flex items-center justify-center p-6"
+            className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-6"
             onClick={() => setLightboxOpen(false)}
           >
             <div className="relative max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
@@ -56,9 +56,9 @@ export function MemberAvatar({ member, size = 48, className = '' }: Props) {
               </p>
               <button
                 onClick={() => setLightboxOpen(false)}
-                className="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full shadow-lg
-                           flex items-center justify-center text-stone-600 hover:text-stone-900
-                           text-lg font-bold leading-none"
+                className="absolute -top-3 -right-3 w-8 h-8 bg-white dark:bg-slate-800 rounded-full shadow-lg
+                           flex items-center justify-center text-slate-600 dark:text-slate-300
+                           hover:text-slate-900 dark:hover:text-white text-lg font-bold leading-none"
                 aria-label="Close"
               >
                 ×

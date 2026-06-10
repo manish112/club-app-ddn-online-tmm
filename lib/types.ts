@@ -54,6 +54,8 @@ export interface Member {
   name: string;
   display_name: string;
   active: boolean;
+  is_admin: boolean;
+  can_manage_guests: boolean;
   introduction: string | null;
   mentor_id: string | null;
   leadership_role: LeadershipRole | null;
@@ -63,6 +65,7 @@ export interface Member {
   gender: 'male' | 'female' | 'other' | null;
   avatar_url: string | null;
   show_phone_in_contact: boolean;
+  theme_preference: 'dark' | 'light' | null;
   created_at: string;
 }
 
@@ -138,6 +141,9 @@ export interface GuestRegistration {
   name: string | null;
   phone: string;
   email: string;
+  registration_type: 'attendance' | 'inquiry';
+  converted_to_member: boolean;
+  converted_at: string | null;
   created_at: string;
 }
 

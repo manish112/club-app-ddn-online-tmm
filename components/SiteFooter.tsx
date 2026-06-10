@@ -10,7 +10,6 @@ function WhatsAppIcon() {
   );
 }
 
-// Roles shown in Contact Us, in display order (club_mentor excluded)
 const CONTACT_ROLE_ORDER: LeadershipRole[] = ['president', 'vp_education', 'secretary', 'vp_pr'];
 
 function waLink(phone: string) {
@@ -31,7 +30,7 @@ export function SiteFooter({ members }: Props) {
     LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
 
   return (
-    <footer className="bg-navy-700 border-t border-white/10 mt-8 py-8 px-4">
+    <footer className="bg-navy-900 dark:bg-slate-950 border-t border-white/10 mt-8 py-8 px-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Venue */}

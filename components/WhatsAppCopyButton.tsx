@@ -48,11 +48,8 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
 
   if (copiedMode !== null) {
     return (
-      <button
-        disabled
-        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
-                   bg-[#1fba58] text-white shadow-sm"
-      >
+      <button disabled
+        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-[#1fba58] text-white shadow-sm min-h-[36px]">
         <WhatsAppIcon />
         Copied!
       </button>
@@ -62,32 +59,21 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
   if (picking) {
     return (
       <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-xs text-stone-500 font-medium shrink-0">Copy:</span>
-        <button
-          onClick={() => copy('full')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#25D366] text-white
-                     hover:bg-[#1fba58] active:scale-95 transition-all shadow-sm"
-        >
+        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium shrink-0">Copy:</span>
+        <button onClick={() => copy('full')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#25D366] text-white hover:bg-[#1fba58] active:scale-95 transition-all shadow-sm">
           Role players + intro
         </button>
-        <button
-          onClick={() => copy('no-intros')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-stone-500 text-white
-                     hover:bg-stone-600 active:scale-95 transition-all shadow-sm"
-        >
+        <button onClick={() => copy('no-intros')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-500 dark:bg-slate-600 text-white hover:bg-slate-600 dark:hover:bg-slate-500 active:scale-95 transition-all shadow-sm">
           Role players only
         </button>
-        <button
-          onClick={() => copy('intros-only')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-navy-700 text-white
-                     hover:bg-navy-800 active:scale-95 transition-all shadow-sm"
-        >
+        <button onClick={() => copy('intros-only')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-navy-700 text-white hover:bg-navy-800 active:scale-95 transition-all shadow-sm">
           Intro only
         </button>
-        <button
-          onClick={() => setPicking(false)}
-          className="px-1.5 py-1.5 rounded-lg text-sm text-stone-400 hover:text-stone-600 transition-colors"
-        >
+        <button onClick={() => setPicking(false)}
+          className="px-1.5 py-1.5 rounded-lg text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
           ✕
         </button>
       </div>
@@ -99,7 +85,7 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
       onClick={() => setPicking(true)}
       className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
                  bg-[#25D366] text-white hover:bg-[#1fba58] active:scale-95
-                 transition-all tap-target shadow-sm"
+                 transition-all min-h-[36px] shadow-sm"
     >
       <WhatsAppIcon />
       Copy for WhatsApp
