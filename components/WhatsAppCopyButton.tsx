@@ -68,14 +68,14 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
           className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#25D366] text-white
                      hover:bg-[#1fba58] active:scale-95 transition-all shadow-sm"
         >
-          Agenda + Intro
+          Role players + intro
         </button>
         <button
           onClick={() => copy('no-intros')}
           className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-stone-500 text-white
                      hover:bg-stone-600 active:scale-95 transition-all shadow-sm"
         >
-          Agenda only
+          Role players only
         </button>
         <button
           onClick={() => copy('intros-only')}

@@ -74,22 +74,30 @@ export function getMemberRecentRoles(
 }
 
 // IST = UTC+5:30. Meeting deadline is start_time IST on meeting date.
-// start_time stored as "HH:MM:SS".
-export function getMeetingDeadlineUTC(meeting: Meeting): Date {
+// Roles lock `lockBeforeMins` before start_time IST. start_time stored as "HH:MM:SS".
+export function getMeetingDeadlineUTC(meeting: Meeting, lockBeforeMins = 60): Date {
   const [h, m] = meeting.start_time.split(':').map(Number);
   const istOffsetMin = 5 * 60 + 30;
-  // Convert HH:MM IST to UTC minutes
-  const utcMinutes = h * 60 + m - istOffsetMin;
+  const utcMinutes = h * 60 + m - istOffsetMin - lockBeforeMins;
   const utcH = Math.floor(((utcMinutes % (24 * 60)) + 24 * 60) % (24 * 60) / 60);
   const utcM = ((utcMinutes % 60) + 60) % 60;
-  const utcDay = utcMinutes < 0 ? -1 : 0; // previous UTC day if IST crosses midnight
+  const utcDay = utcMinutes < 0 ? -1 : 0;
 
   const [year, month, day] = meeting.date.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day + utcDay, utcH, utcM, 0));
 }
 
-export function isMeetingLocked(meeting: Meeting): boolean {
-  return Date.now() >= getMeetingDeadlineUTC(meeting).getTime();
+export function isMeetingLocked(meeting: Meeting, lockBeforeMins = 60): boolean {
+  return Date.now() >= getMeetingDeadlineUTC(meeting, lockBeforeMins).getTime();
+}
+
+// Returns the lock time formatted as IST for display.
+export function getMeetingLockTimeIST(meeting: Meeting, lockBeforeMins = 60): string {
+  const [h, m] = meeting.start_time.split(':').map(Number);
+  const total = h * 60 + m - lockBeforeMins;
+  const lh = Math.floor(((total % (24 * 60)) + 24 * 60) % (24 * 60) / 60);
+  const lm = ((total % 60) + 60) % 60;
+  return formatTime(`${String(lh).padStart(2, '0')}:${String(lm).padStart(2, '0')}:00`);
 }
 
 // Meeting becomes "past" once its end_time (IST) has passed on the meeting date.
@@ -309,6 +317,7 @@ export interface AgendaConfig {
   ttSpeakerCountMax: number;
   ttMinsPerSpeaker: number;
   tmodConclusionMins: number;
+  lockBeforeMins: number;
 }
 
 export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
@@ -318,6 +327,7 @@ export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
   ttSpeakerCountMax: 5,
   ttMinsPerSpeaker: 2,
   tmodConclusionMins: 5,
+  lockBeforeMins: 60,
 };
 
 export function buildAgendaSections(
