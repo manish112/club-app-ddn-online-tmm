@@ -334,7 +334,16 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
           </button>
           <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              🔒 <strong>Forgot your password?</strong> Contact <strong>TM Manish Singh</strong> to hard reset it.
+              🔒 <strong>Forgot your password?</strong> Contact{' '}
+              {(() => {
+                const president = members.find(m => m.leadership_role === 'president');
+                const vpEd = members.find(m => m.leadership_role === 'vp_education');
+                const names = [president, vpEd].filter(Boolean).map(m => <strong key={m!.id}>TM {m!.display_name}</strong>);
+                if (names.length === 0) return <strong>your club officer</strong>;
+                if (names.length === 1) return names[0];
+                return <>{names[0]} or {names[1]}</>;
+              })()}{' '}
+              to reset it.
             </p>
           </div>
         </div>
