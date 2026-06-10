@@ -4,7 +4,6 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { ROLE_META } from '@/lib/types';
 import type { RoleKey } from '@/lib/types';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = process.env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev';
 const APP_NAME = 'Dehradun Online Toastmasters';
 
@@ -16,6 +15,12 @@ function formatDate(dateStr: string) {
 }
 
 export async function POST(req: NextRequest) {
+  if (!process.env.RESEND_API_KEY || process.env.RESEND_API_KEY.startsWith('re_placeholder')) {
+    return NextResponse.json({ skipped: 'email not configured' });
+  }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+
   try {
     const { targetMemberId, meetingNumber, meetingDate, roleKey, action } = await req.json() as {
       targetMemberId: string;
