@@ -67,6 +67,10 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
       {/* Print: hide everything except #agenda-print-content */}
       <style>{`
         @media print {
+          html, body {
+            height: auto !important;
+            overflow: visible !important;
+          }
           body * { visibility: hidden; }
           #agenda-print-content,
           #agenda-print-content * { visibility: visible; }
@@ -75,6 +79,9 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
             top: 0 !important;
             left: 0 !important;
             width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
           }
           @page { size: A4 portrait; margin: 14mm 16mm; }
         }
