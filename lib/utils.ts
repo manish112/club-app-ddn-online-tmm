@@ -92,12 +92,16 @@ export function isMeetingLocked(meeting: Meeting): boolean {
   return Date.now() >= getMeetingDeadlineUTC(meeting).getTime();
 }
 
-// Meeting becomes "past" at 2 PM IST on its own date (2 PM IST = 08:30 UTC).
-// This lets the next meeting surface as "Upcoming" right after the current one ends.
+// Meeting becomes "past" once its end_time (IST) has passed on the meeting date.
 export function isMeetingPast(meeting: Meeting): boolean {
-  const [y, m, d] = meeting.date.split('-').map(Number);
-  const cutoff = new Date(Date.UTC(y, m - 1, d, 8, 30, 0));
-  return Date.now() >= cutoff.getTime();
+  const [y, mo, d]  = meeting.date.split('-').map(Number);
+  const [h, m]      = meeting.end_time.split(':').map(Number);
+  const istOffsetMin = 5 * 60 + 30;
+  const utcMinutes  = h * 60 + m - istOffsetMin;
+  const utcH  = Math.floor(((utcMinutes % (24 * 60)) + 24 * 60) % (24 * 60) / 60);
+  const utcM  = ((utcMinutes % 60) + 60) % 60;
+  const utcDay = utcMinutes < 0 ? -1 : 0;
+  return Date.now() >= new Date(Date.UTC(y, mo - 1, d + utcDay, utcH, utcM, 0)).getTime();
 }
 
 // Format as ordinal: 3 → "3rd", 21 → "21st"
@@ -362,7 +366,7 @@ export function buildAgendaSections(
     return { timeLabel: timeAt(), indented, label, name, suffix, name2, duration, note };
   }
 
-  // ── Section 1: Prepared Speeches ──────────────────────────────────────────
+  // ── Section 1: Opening ───────────────────────────────────────────────────
   const s1: AgendaRow[] = [];
 
   const presN = getLeader('president');
@@ -393,8 +397,11 @@ export function buildAgendaSections(
   s1.push(r(false, 'TMoD', getName('tmod'),
     undefined, undefined, ' builds on the theme, then introduces the prepared speeches'));       offset += 3;
 
+  // ── Section 2: Prepared Speeches ─────────────────────────────────────────
+  const s2speeches: AgendaRow[] = [];
+
   for (let i = 1; i <= meeting.speaker_slots; i++) {
-    s1.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
+    s2speeches.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
       "Shares the speaker's project & evaluation criteria", ` calls Evaluator ${i}`, getName('evaluator', i))); offset += 1;
 
     const spkClaim = meeting.role_claims.find(
@@ -419,7 +426,7 @@ export function buildAgendaSections(
       else if (metaStr)                     spkNote = metaStr;
     }
 
-    s1.push(r(false, 'TMoD', getName('tmod'), durLabel, spkNote, ` calls Speaker ${i}`, spkName)); offset += spkMins;
+    s2speeches.push(r(false, 'TMoD', getName('tmod'), durLabel, spkNote, ` calls Speaker ${i}`, spkName)); offset += spkMins;
   }
 
   // ── Section 2: Table Topics ───────────────────────────────────────────────
@@ -461,20 +468,25 @@ export function buildAgendaSections(
 
   s3.push(r(false, 'General Evaluator', getName('ge'),
     undefined, undefined, ' gives the general evaluation, then hands back to the TMoD'));        offset += 3;
-  s3.push(r(false, 'TMoD', getName('tmod'),
+
+  // ── Section 5: Closing ────────────────────────────────────────────────────
+  const s5: AgendaRow[] = [];
+  s5.push(r(false, 'TMoD', getName('tmod'),
     `~${config.tmodConclusionMins} MIN`, undefined, ' brings the theme to a conclusion'));       offset += config.tmodConclusionMins;
-  s3.push(r(false, 'TMoD', getName('tmod'),
+  s5.push(r(false, 'TMoD', getName('tmod'),
     undefined, undefined, ' hands the meeting back to the Chair'));                              offset += 1;
-  s3.push(r(false, 'Chair (President', getLeader('president'),
+  s5.push(r(false, 'Chair (President', getLeader('president'),
     undefined, 'Guests share their experience of the meeting',
     ') invites the guests to introduce themselves'));                                             offset += 3;
-  s3.push(r(false, 'Chair (President', getLeader('president'),
+  s5.push(r(false, 'Chair (President', getLeader('president'),
     undefined, undefined, ') shares awards, announcements & closing remarks'));
 
   return [
-    { title: 'Prepared Speeches', rows: s1 },
+    { title: 'Opening',           rows: s1 },
+    { title: 'Prepared Speeches', rows: s2speeches },
     { title: 'Table Topics',      rows: s2 },
     { title: 'Evaluations',       rows: s3 },
+    { title: 'Closing',           rows: s5 },
   ]
     .filter((s) => s.rows.length > 0)
     .map((s, i) => ({ ...s, num: i + 1 }));
