@@ -1136,7 +1136,7 @@ function AgendaSettingsPanel() {
     setTimeout(() => setSaved(false), 2500);
   }
 
-  function field(key: keyof typeof vals, label: string, hint?: string) {
+  function field(key: keyof typeof vals, label: string, hint?: string, max = 60) {
     return (
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
@@ -1146,7 +1146,7 @@ function AgendaSettingsPanel() {
         <input
           type="number"
           min={1}
-          max={60}
+          max={max}
           value={vals[key]}
           onChange={(e) => setVals((v) => ({ ...v, [key]: parseInt(e.target.value) || 1 }))}
           className="w-16 shrink-0 border border-stone-200 rounded-lg px-2 py-1.5 text-sm text-center
@@ -1191,7 +1191,7 @@ function AgendaSettingsPanel() {
         <div className="space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400">Role Sign-up Lock</p>
           <div className="pt-1">
-            {field('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}
+            {field('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start', 240)}
           </div>
         </div>
 

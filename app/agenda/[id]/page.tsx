@@ -88,7 +88,7 @@ export default function AgendaPage() {
 
         {/* Meeting header */}
         <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-400 mb-1">
-          Dehradun WIC India Toastmasters Club
+          Dehradun Online Toastmasters Club
         </p>
         <h1 className="text-[1.75rem] font-bold leading-tight text-stone-900 mb-1">
           Meeting #{meeting.number} — Agenda
