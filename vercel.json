@@ -1,3 +1,9 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/auto-schedule",
+      "schedule": "35 15 * * 3"
+    }
+  ]
 }

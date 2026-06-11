@@ -98,7 +98,7 @@ export default function Home() {
   const past   = meetings.filter((m) =>  isMeetingPast(m)).sort((a, b) => b.number - a.number);
 
   const nextMeeting      = future[0] ?? null;
-  const upcomingMeetings = future.slice(1);
+  const upcomingMeetings = future.slice(1, 3);
   const nextBallotStatus = nextMeeting ? (ballots.get(nextMeeting.id)?.status ?? null) : null;
   const nextTabLabel     = nextBallotStatus === 'open' ? 'Current Meeting' : 'Next Meeting';
 
