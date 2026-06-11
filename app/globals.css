@@ -109,7 +109,10 @@
 }
 
 .card-enter {
-  animation: card-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* fill-mode backwards (not both): keeping the final transform applied would
+     make this element the containing block for position:fixed descendants,
+     so modals/lightboxes inside cards would center on the card, not the screen */
+  animation: card-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 /* Role claim bounce */

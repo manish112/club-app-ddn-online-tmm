@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Member } from '@/lib/types';
 
 type AvatarMember = Pick<Member, 'display_name' | 'avatar_url' | 'gender'>;
@@ -40,7 +41,10 @@ export function MemberAvatar({ member, size = 48, className = '' }: Props) {
           className={`rounded-full object-cover shrink-0 cursor-pointer ${className}`}
         />
 
-        {lightboxOpen && (
+        {/* Portal to <body>: ancestors with transforms (e.g. .card-enter) would
+            otherwise become the containing block and the overlay would center
+            inside the card instead of the screen */}
+        {lightboxOpen && createPortal(
           <div
             className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-6"
             onClick={() => setLightboxOpen(false)}
@@ -64,7 +68,8 @@ export function MemberAvatar({ member, size = 48, className = '' }: Props) {
                 ×
               </button>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
       </>
     );
