@@ -17,7 +17,6 @@ interface Props {
   memberAdjacentRoles?: RoleKey[];
   isLocked: boolean;
   isPast: boolean;
-  isNotYetOpen: boolean;
   isAdmin: boolean;
   allMembers?: Member[];
   variant?: 'row' | 'chip' | 'mini';
@@ -34,7 +33,7 @@ function notifyRole(targetMemberId: string, meetingNumber: number, meetingDate: 
 
 export function RoleSlot({
   meetingId, meetingNumber, meetingDate, roleKey, slotIndex, claim, memberId, memberExistingRoles,
-  memberAdjacentRoles = [], isLocked, isPast, isNotYetOpen, isAdmin, allMembers = [],
+  memberAdjacentRoles = [], isLocked, isPast, isAdmin, allMembers = [],
   variant = 'row', onChanged,
 }: Props) {
   const [busy, setBusy] = useState(false);
@@ -52,7 +51,7 @@ export function RoleSlot({
     ? roleClaimBlocked(roleKey, memberExistingRoles)
       ?? consecutiveRoleBlocked(roleKey, memberAdjacentRoles)
     : null;
-  const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && (!isNotYetOpen || isAdmin) && !blockReason;
+  const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && !blockReason;
   const isMultiRole = memberExistingRoles.length > 0;
 
   const isSpeaker = roleKey === 'speaker';
@@ -108,7 +107,7 @@ export function RoleSlot({
 
   // ── CHIP VARIANT ─────────────────────────────────────────────────────────
   if (variant === 'chip') {
-    const readOnly = (isPast || isLocked || isNotYetOpen) && !isAdmin;
+    const readOnly = (isPast || isLocked) && !isAdmin;
 
     const base = `rounded-xl border flex flex-col gap-1 p-2.5 transition-all duration-200 min-h-[72px]`;
 
@@ -223,7 +222,6 @@ export function RoleSlot({
             : busy ? 'Claiming…'
             : isAdmin ? '+ Assign'
             : canClaim ? '+ Claim'
-            : isNotYetOpen ? 'Not open yet'
             : !memberId || isGuest ? 'Sign in to claim'
             : '—'}
         </p>
@@ -233,7 +231,7 @@ export function RoleSlot({
 
   // ── MINI VARIANT (aux roles) ──────────────────────────────────────────────
   if (variant === 'mini') {
-    const readOnly = (isPast || isLocked || isNotYetOpen) && !isAdmin;
+    const readOnly = (isPast || isLocked) && !isAdmin;
     const filled = !!claim;
 
     const base = `rounded-xl border flex flex-col items-center justify-center gap-1 p-3 min-h-[80px] text-center transition-all duration-200`;
@@ -293,7 +291,6 @@ export function RoleSlot({
             : busy ? '…'
             : isAdmin ? '+ Assign'
             : canClaim ? '+ Claim'
-            : isNotYetOpen ? '—'
             : '—'}
         </span>
       </div>
@@ -302,8 +299,8 @@ export function RoleSlot({
 
   // ── ROW VARIANT (default) ─────────────────────────────────────────────────
 
-  // Read-only (past, locked, or not yet open)
-  if ((isPast || isLocked || isNotYetOpen) && !isAdmin) {
+  // Read-only (past or locked)
+  if ((isPast || isLocked) && !isAdmin) {
     return (
       <>
         <div className="flex items-center gap-2 py-2.5 px-3 rounded-xl
