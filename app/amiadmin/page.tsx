@@ -30,8 +30,8 @@ const ghostBtn = 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:b
 
 // ─── Gate screens ──────────────────────────────────────────────────────────────
 
-function GateScreen({ icon, title, body, cta, href }: {
-  icon: string; title: string; body: string; cta: string; href: string;
+function GateScreen({ icon, title, body, cta, href, onCta }: {
+  icon: string; title: string; body: string; cta: string; href?: string; onCta?: () => void;
 }) {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#020617]">
@@ -51,9 +51,15 @@ function GateScreen({ icon, title, body, cta, href }: {
           <div className="text-5xl">{icon}</div>
           <h2 className="text-xl font-black text-slate-900 dark:text-slate-100">{title}</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{body}</p>
-          <Link href={href} className="block mt-2 bg-gradient-to-r from-maroon-700 to-maroon-600 text-white rounded-xl px-6 py-3 text-sm font-semibold text-center">
-            {cta}
-          </Link>
+          {onCta ? (
+            <button onClick={onCta} className="block w-full mt-2 bg-gradient-to-r from-maroon-700 to-maroon-600 text-white rounded-xl px-6 py-3 text-sm font-semibold text-center">
+              {cta}
+            </button>
+          ) : (
+            <Link href={href!} className="block mt-2 bg-gradient-to-r from-maroon-700 to-maroon-600 text-white rounded-xl px-6 py-3 text-sm font-semibold text-center">
+              {cta}
+            </Link>
+          )}
         </div>
       </div>
     </div>
@@ -1045,7 +1051,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       style={{ backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -5%, rgba(196,30,58,0.06) 0%, transparent 70%)' }}>
 
       {/* Header */}
-      <header className="sticky top-0 z-40"
+      {/* top-9 clears the anthem banner (sticky top-0 z-50 h-9 in layout.tsx) */}
+      <header className="sticky top-9 z-40"
         style={{ background: 'linear-gradient(160deg, #6b0c1e 0%, #9d1530 40%, #0E2D6A 100%)', boxShadow: '0 4px 32px rgba(0,0,0,0.4)' }}>
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
@@ -1070,7 +1077,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       </header>
 
       {/* Tab bar */}
-      <div className="sticky top-[52px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
+      <div className="sticky top-[88px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-2xl mx-auto px-4">
           <div className="flex overflow-x-auto scrollbar-none">
             {tabs.map(({ id, label }) => (
@@ -1201,22 +1208,41 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
 export default function AdminPage() {
   const supabase = createClient();
-  const [state, setState] = useState<'loading' | 'no-identity' | 'no-access' | 'granted'>('loading');
+  const [state, setState] = useState<'loading' | 'no-identity' | 'no-access' | 'granted' | 'error'>('loading');
   const [currentMember, setCurrentMember] = useState<Member | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const memberId = localStorage.getItem(MEMBER_KEY);
     if (!memberId || memberId === 'guest') { setState('no-identity'); return; }
 
-    supabase.from('members').select('*').eq('id', memberId).single().then(({ data }) => {
-      if (!data) { setState('no-identity'); return; }
+    supabase.from('members').select('*').eq('id', memberId).single().then(({ data, error }) => {
+      // PGRST116 = no matching row (stale local id) → treat as signed out
+      if (error) { setState(error.code === 'PGRST116' ? 'no-identity' : 'error'); return; }
       const m = data as Member;
       setCurrentMember(m);
       setState(isAdminMember(m) ? 'granted' : 'no-access');
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, () => setState('error'));
+  }, [attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (state === 'loading') return null;
+  if (state === 'loading') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#020617]">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 rounded-full border-2 border-maroon-600 border-t-transparent animate-spin" />
+        <p className="text-xs text-slate-400 dark:text-slate-500">Opening admin panel…</p>
+      </div>
+    </div>
+  );
+
+  if (state === 'error') return (
+    <GateScreen
+      icon="📡"
+      title="Connection problem"
+      body="Couldn't verify your access. Check your internet connection and try again."
+      cta="↻ Try again"
+      onCta={() => { setState('loading'); setAttempt(a => a + 1); }}
+    />
+  );
 
   if (state === 'no-identity') return (
     <GateScreen
