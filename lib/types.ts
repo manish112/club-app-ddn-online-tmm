@@ -147,6 +147,18 @@ export interface GuestRegistration {
   created_at: string;
 }
 
+export interface SpeakerSlotRequest {
+  id: string;
+  meeting_id: string;
+  member_id: string;
+  status: 'pending' | 'approved' | 'denied';
+  request_note: string | null;
+  reviewer_id: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
 export interface Announcement {
   id: string;
   message: string;

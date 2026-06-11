@@ -6,7 +6,7 @@ import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
-  VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole,
+  VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
 import { isMeetingPast } from '@/lib/utils';
@@ -392,6 +392,182 @@ function GuestLog({ guestRegs, meetings }: { guestRegs: GuestRegistration[]; mee
   );
 }
 
+// ─── Requests panel ───────────────────────────────────────────────────────────
+
+function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
+  allMembers: Member[];
+  meetings: MeetingWithClaims[];
+  currentAdminId: string;
+  onChanged: () => void;
+}) {
+  const supabase = createClient();
+  const [requests, setRequests] = useState<SpeakerSlotRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [acting, setActing] = useState<string | null>(null);
+
+  const meetingMap = new Map(meetings.map(m => [m.id, m]));
+  const memberMap  = new Map(allMembers.map(m => [m.id, m]));
+
+  async function fetchRequests() {
+    const { data } = await supabase.from('speaker_slot_requests')
+      .select('*').order('created_at', { ascending: false });
+    setRequests((data ?? []) as SpeakerSlotRequest[]);
+    setLoading(false);
+  }
+
+  useEffect(() => { fetchRequests(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function approve(req: SpeakerSlotRequest) {
+    setActing(req.id);
+    const meeting = meetings.find(m => m.id === req.meeting_id);
+    if (!meeting) { setActing(null); return; }
+
+    const newSpeakerSlots = meeting.speaker_slots + 1;
+    const newEvalSlots    = meeting.evaluator_slots + 1;
+
+    await supabase.from('meetings').update({
+      speaker_slots: newSpeakerSlots,
+      evaluator_slots: newEvalSlots,
+    }).eq('id', req.meeting_id);
+
+    await supabase.from('role_claims').insert({
+      meeting_id: req.meeting_id,
+      role_key: 'speaker',
+      slot_index: newSpeakerSlots,
+      member_id: req.member_id,
+      admin_override: true,
+    });
+
+    await supabase.from('speaker_slot_requests').update({
+      status: 'approved',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id]?.trim() || null,
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
+
+    setActing(null);
+    fetchRequests();
+    onChanged();
+  }
+
+  async function deny(req: SpeakerSlotRequest) {
+    if (!commentInputs[req.id]?.trim()) {
+      alert('Please add a comment explaining why the request is denied.');
+      return;
+    }
+    setActing(req.id);
+    await supabase.from('speaker_slot_requests').update({
+      status: 'denied',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id].trim(),
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
+    setActing(null);
+    fetchRequests();
+  }
+
+  const pending  = requests.filter(r => r.status === 'pending');
+  const resolved = requests.filter(r => r.status !== 'pending');
+
+  if (loading) return <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-20 bg-slate-200 dark:bg-slate-800 rounded-2xl animate-pulse" />)}</div>;
+
+  return (
+    <div className="space-y-6 pb-8">
+      {/* Pending */}
+      <div>
+        <p className={labelCls}>Pending Requests ({pending.length})</p>
+        {pending.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No pending requests.</p>
+        ) : (
+          <div className="space-y-3">
+            {pending.map(req => {
+              const member  = memberMap.get(req.member_id);
+              const meeting = meetingMap.get(req.meeting_id);
+              return (
+                <div key={req.id} className={`${cardCls} p-4 space-y-3 border-l-4 border-amber-400 dark:border-amber-600`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                        TM {member?.display_name ?? 'Unknown'}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        🎙️ Speaker slot · {meeting ? `Meeting #${meeting.number} · ${new Date(meeting.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'Unknown meeting'}
+                      </p>
+                      {req.request_note && (
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 italic">
+                          &ldquo;{req.request_note}&rdquo;
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                        Requested {new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                  <textarea
+                    value={commentInputs[req.id] ?? ''}
+                    onChange={e => setCommentInputs(prev => ({ ...prev, [req.id]: e.target.value }))}
+                    placeholder="Add a comment (required for deny, optional for approve)…"
+                    rows={2}
+                    className={`${inputCls} text-xs resize-none`}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => approve(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✓ Approve'}
+                    </button>
+                    <button
+                      onClick={() => deny(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✗ Deny'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* History */}
+      {resolved.length > 0 && (
+        <div>
+          <p className={labelCls}>History</p>
+          <div className="space-y-2">
+            {resolved.map(req => {
+              const member  = memberMap.get(req.member_id);
+              const meeting = meetingMap.get(req.meeting_id);
+              const reviewer = req.reviewer_id ? memberMap.get(req.reviewer_id) : null;
+              return (
+                <div key={req.id} className={`${cardCls} p-3 border-l-4 ${req.status === 'approved' ? 'border-emerald-400 dark:border-emerald-600' : 'border-red-400 dark:border-red-700'}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                        {req.status === 'approved' ? '✓' : '✗'} TM {member?.display_name ?? '?'}
+                        {meeting ? ` · Meeting #${meeting.number}` : ''}
+                      </p>
+                      {req.review_comment && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 italic">&ldquo;{req.review_comment}&rdquo;</p>
+                      )}
+                      {reviewer && <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">by TM {reviewer.display_name}</p>}
+                    </div>
+                    <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400' : 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'}`}>
+                      {req.status}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Agenda settings ──────────────────────────────────────────────────────────
 
 function AgendaSettingsPanel() {
@@ -766,7 +942,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'announce' | 'settings'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -856,11 +1032,12 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     .filter(m => !memberSearch.trim() || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.display_name.toLowerCase().includes(memberSearch.toLowerCase()));
 
   const tabs = [
-    { id: 'meetings' as const, label: 'Meetings' },
-    { id: 'members'  as const, label: 'Members' },
-    { id: 'guests'   as const, label: 'Guests' },
-    { id: 'announce' as const, label: 'Announce' },
-    { id: 'settings' as const, label: 'Settings' },
+    { id: 'meetings'  as const, label: 'Meetings' },
+    { id: 'members'   as const, label: 'Members' },
+    { id: 'guests'    as const, label: 'Guests' },
+    { id: 'requests'  as const, label: 'Requests' },
+    { id: 'announce'  as const, label: 'Announce' },
+    { id: 'settings'  as const, label: 'Settings' },
   ];
 
   return (
@@ -919,6 +1096,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <AgendaSettingsPanel />
         ) : tab === 'guests' ? (
           <GuestLog guestRegs={guestRegs} meetings={meetings} />
+        ) : tab === 'requests' ? (
+          <RequestsPanel allMembers={members} meetings={meetings} currentAdminId={currentMember.id} onChanged={fetchAll} />
         ) : tab === 'announce' ? (
           <AnnouncementPanel current={currentAnnouncement} onChanged={fetchAll} />
         ) : tab === 'meetings' ? (

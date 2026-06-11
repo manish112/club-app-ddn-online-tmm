@@ -1,7 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Ballot, MeetingWithClaims, Member, RoleKey } from '@/lib/types';
+import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { getMeetingRoles } from '@/lib/types';
 import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, isMeetingOpenForClaims, getMeetingOpenDate } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
@@ -29,10 +29,45 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [editingTheme, setEditingTheme] = useState(false);
   const [themeInput, setThemeInput] = useState(meeting.theme ?? '');
   const [savingTheme, setSavingTheme] = useState(false);
+  const [slotRequest, setSlotRequest] = useState<SpeakerSlotRequest | null>(null);
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [requestNote, setRequestNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
   const locked = isMeetingLocked(meeting, lockBeforeMins);
-  const past = isMeetingPast(meeting);
+  const past   = isMeetingPast(meeting);
   const notYetOpen = !past && !isMeetingOpenForClaims(meeting);
 
+  useEffect(() => {
+    if (!memberId || memberId === 'guest') return;
+    supabase.from('speaker_slot_requests')
+      .select('*').eq('meeting_id', meeting.id).eq('member_id', memberId)
+      .maybeSingle()
+      .then(async ({ data }) => {
+        if (data?.status === 'pending' && locked) {
+          await supabase.from('speaker_slot_requests').update({
+            status: 'denied',
+            review_comment: 'Meeting locked — request could not be processed in time.',
+            reviewed_at: new Date().toISOString(),
+          }).eq('id', data.id);
+          setSlotRequest({ ...data, status: 'denied', review_comment: 'Meeting locked — request could not be processed in time.' });
+        } else {
+          setSlotRequest(data ?? null);
+        }
+      });
+  }, [meeting.id, memberId, locked]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function submitRequest() {
+    if (!memberId || memberId === 'guest') return;
+    setSubmitting(true);
+    const { data } = await supabase.from('speaker_slot_requests')
+      .insert({ meeting_id: meeting.id, member_id: memberId, request_note: requestNote.trim() || null })
+      .select().single();
+    setSlotRequest(data ?? null);
+    setSubmitting(false);
+    setShowRequestForm(false);
+    setRequestNote('');
+  }
   const isTMoD = !!memberId &&
     meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
 
@@ -56,6 +91,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
 
   const speakerRoles   = roles.filter((r) => r.roleKey === 'speaker');
   const evaluatorRoles = roles.filter((r) => r.roleKey === 'evaluator');
+  const allSpeakerSlotsFull = speakerRoles.length > 0 && speakerRoles.every(({ roleKey, slot }) => claimsMap.has(`${roleKey}:${slot}`));
+  const memberHasSpeakerSlot = meeting.role_claims.some(c => c.member_id === memberId && c.role_key === 'speaker');
+  const canRequestSlot = !past && !locked && allSpeakerSlotsFull && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
 
@@ -280,6 +318,62 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             ))}
           </div>
         </section>
+
+        {/* Speaker slot request */}
+        {!past && (canRequestSlot || slotRequest) && (
+          <div className="mt-1">
+            {slotRequest ? (
+              <div className={`rounded-xl px-3 py-2.5 border text-xs ${
+                slotRequest.status === 'pending'
+                  ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40 text-amber-700 dark:text-amber-400'
+                  : slotRequest.status === 'approved'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/40 text-red-600 dark:text-red-400'
+              }`}>
+                <p className="font-semibold">
+                  {slotRequest.status === 'pending' && '⏳ Extra speaker slot request pending'}
+                  {slotRequest.status === 'approved' && '✓ Extra speaker slot approved — you\'ve been added!'}
+                  {slotRequest.status === 'denied' && '✗ Extra speaker slot request denied'}
+                </p>
+                {slotRequest.review_comment && (
+                  <p className="mt-1 opacity-80">{slotRequest.review_comment}</p>
+                )}
+              </div>
+            ) : showRequestForm ? (
+              <div className="rounded-xl border border-maroon-200 dark:border-maroon-800/50 bg-maroon-50 dark:bg-maroon-950/20 p-3 space-y-2">
+                <p className="text-xs font-semibold text-maroon-700 dark:text-maroon-400">Request an extra speaker slot</p>
+                <textarea
+                  value={requestNote}
+                  onChange={e => setRequestNote(e.target.value)}
+                  placeholder="Why do you want to speak? (optional)"
+                  rows={2}
+                  maxLength={200}
+                  className="w-full text-xs border border-maroon-200 dark:border-maroon-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 resize-none focus:outline-none focus:ring-1 focus:ring-maroon-600 placeholder:text-slate-300 dark:placeholder:text-slate-600"
+                />
+                <div className="flex gap-2">
+                  <button onClick={submitRequest} disabled={submitting}
+                    className="flex-1 bg-maroon-700 hover:bg-maroon-800 text-white text-xs font-semibold rounded-lg py-2 disabled:opacity-40 active:scale-95 transition-all">
+                    {submitting ? 'Sending…' : 'Send Request'}
+                  </button>
+                  <button onClick={() => { setShowRequestForm(false); setRequestNote(''); }}
+                    className="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowRequestForm(true)}
+                className="w-full text-xs font-semibold text-maroon-600 dark:text-maroon-400
+                           border border-dashed border-maroon-300 dark:border-maroon-800/60
+                           hover:bg-maroon-50 dark:hover:bg-maroon-950/20 rounded-xl py-2.5
+                           transition-colors"
+              >
+                🎙️ Request extra speaker slot
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Evaluators — 2-column chip grid */}
         <section>
