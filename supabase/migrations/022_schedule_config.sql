@@ -1,0 +1,4 @@
+ALTER TABLE agenda_config
+  ADD COLUMN IF NOT EXISTS schedule_weekday INTEGER NOT NULL DEFAULT 3, -- 0=Sun … 6=Sat; 3=Wednesday
+  ADD COLUMN IF NOT EXISTS schedule_start_time TEXT NOT NULL DEFAULT '19:30',
+  ADD COLUMN IF NOT EXISTS schedule_end_time TEXT NOT NULL DEFAULT '21:00';

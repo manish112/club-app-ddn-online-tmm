@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { SiteFooter } from '@/components/SiteFooter';
@@ -87,13 +87,26 @@ function TimePicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+// ─── Schedule helpers ─────────────────────────────────────────────────────────
+
+const WEEKDAY_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+function nextWeekdayAfter(from: Date, weekday: number): Date {
+  const d = new Date(from);
+  d.setDate(d.getDate() + 1);
+  while (d.getDay() !== weekday) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+interface ScheduleConfig { weekday: number; startTime: string; endTime: string }
+
 // ─── Meeting form ──────────────────────────────────────────────────────────────
 
 interface MeetingFormData {
   number: string; date: string; start_time: string; end_time: string;
   theme: string; meeting_type: MeetingType; speaker_slots: string; evaluator_slots: string;
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '2', evaluator_slots: '2' };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1' };
 
 function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingFormData & { id: string }>; onSave: () => void; onCancel: () => void }) {
   const supabase = createClient();
@@ -101,15 +114,15 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     ...EMPTY_FORM, ...initial,
     start_time: initial?.start_time?.slice(0, 5) ?? '19:30',
     end_time: initial?.end_time?.slice(0, 5) ?? '21:00',
-    speaker_slots: String(initial?.speaker_slots ?? 2),
-    evaluator_slots: String(initial?.evaluator_slots ?? 2),
+    speaker_slots: String(initial?.speaker_slots ?? 1),
+    evaluator_slots: String(initial?.evaluator_slots ?? 1),
   });
   const [saving, setSaving] = useState(false);
 
   function set(field: keyof MeetingFormData, value: string) {
     setForm(f => {
       const next = { ...f, [field]: value };
-      if (field === 'meeting_type') { next.speaker_slots = value === 'speakathon' ? '4' : '2'; next.evaluator_slots = next.speaker_slots; }
+      if (field === 'meeting_type') { next.speaker_slots = value === 'speakathon' ? '4' : '1'; next.evaluator_slots = next.speaker_slots; }
       if (field === 'speaker_slots') next.evaluator_slots = value;
       return next;
     });
@@ -383,23 +396,36 @@ function GuestLog({ guestRegs, meetings }: { guestRegs: GuestRegistration[]; mee
 
 function AgendaSettingsPanel() {
   const supabase = createClient();
-  const [vals, setVals] = useState({ l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4, tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60 });
+  const [vals, setVals] = useState({
+    l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4,
+    tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
+  });
+  const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 3, startTime: '19:30', endTime: '21:00' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
-      if (data) setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60 });
+      if (data) {
+        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60 });
+        setSchedule({ weekday: data.schedule_weekday ?? 3, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
+      }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     setSaving(true);
-    await supabase.from('agenda_config').upsert({ id: 1, ...vals, updated_at: new Date().toISOString() });
+    await supabase.from('agenda_config').upsert({
+      id: 1, ...vals,
+      schedule_weekday: schedule.weekday,
+      schedule_start_time: schedule.startTime,
+      schedule_end_time: schedule.endTime,
+      updated_at: new Date().toISOString(),
+    });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
   }
 
-  function field(key: keyof typeof vals, label: string, hint?: string) {
+  function numField(key: keyof typeof vals, label: string, hint?: string) {
     return (
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
@@ -415,15 +441,44 @@ function AgendaSettingsPanel() {
 
   return (
     <div className="space-y-4 pb-8">
+      {/* Meeting schedule */}
+      <div className={`${cardCls} p-5 space-y-5`}>
+        <div>
+          <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Meeting Schedule</h3>
+          <p className="text-xs text-slate-500">Used to auto-create upcoming meetings when fewer than 3 are scheduled.</p>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <p className={labelCls}>Default day of week</p>
+            <select value={schedule.weekday} onChange={e => setSchedule(s => ({ ...s, weekday: parseInt(e.target.value) }))}
+              className={`${inputCls} mt-1`}>
+              {WEEKDAY_LABELS.map((label, i) => <option key={i} value={i}>{label}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className={labelCls}>Default start time</p>
+              <TimePicker value={schedule.startTime} onChange={v => setSchedule(s => ({ ...s, startTime: v }))} />
+            </div>
+            <div>
+              <p className={labelCls}>Default end time</p>
+              <TimePicker value={schedule.endTime} onChange={v => setSchedule(s => ({ ...s, endTime: v }))} />
+            </div>
+          </div>
+        </div>
+        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+      </div>
+
+      {/* Agenda timing */}
       <div className={`${cardCls} p-5 space-y-5`}>
         <div>
           <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Agenda Timing</h3>
           <p className="text-xs text-slate-500">Changes apply immediately to any agenda opened after saving.</p>
         </div>
-        <div className="space-y-1"><p className={labelCls}>Prepared Speeches</p><div className="space-y-3 pt-1">{field('l1_speech_mins', 'L1 speech max (mins)', 'Pathways Level 1 — standard is 6')}{field('other_speech_mins', 'Other speech max (mins)', 'Levels 2–5 — standard is 7')}</div></div>
-        <div className="space-y-1"><p className={labelCls}>Table Topics</p><div className="space-y-3 pt-1">{field('tt_speaker_count_min', 'Min speakers')}{field('tt_speaker_count_max', 'Max speakers')}{field('tt_mins_per_speaker', 'Max mins per speaker', 'Standard TT is 1–2½ min each')}</div></div>
-        <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{field('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
-        <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{field('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
+        <div className="space-y-1"><p className={labelCls}>Prepared Speeches</p><div className="space-y-3 pt-1">{numField('l1_speech_mins', 'L1 speech max (mins)', 'Pathways Level 1 — standard is 6')}{numField('other_speech_mins', 'Other speech max (mins)', 'Levels 2–5 — standard is 7')}</div></div>
+        <div className="space-y-1"><p className={labelCls}>Table Topics</p><div className="space-y-3 pt-1">{numField('tt_speaker_count_min', 'Min speakers')}{numField('tt_speaker_count_max', 'Max speakers')}{numField('tt_mins_per_speaker', 'Max mins per speaker', 'Standard TT is 1–2½ min each')}</div></div>
+        <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
+        <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{numField('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
         <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
     </div>
@@ -716,24 +771,73 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
   const [memberSearch, setMemberSearch] = useState('');
+  const [scheduleConfig, setScheduleConfig] = useState<ScheduleConfig | null>(null);
+  const [autoFillStatus, setAutoFillStatus] = useState<string | null>(null);
+  const [filling, setFilling] = useState(false);
+  const autoFilledRef = useRef(false);
 
   const fetchAll = useCallback(async () => {
-    const [{ data: m }, { data: mb }, { data: bl }, { data: gr }, { data: ann }] = await Promise.all([
+    const [{ data: m }, { data: mb }, { data: bl }, { data: gr }, { data: ann }, { data: cfg }] = await Promise.all([
       supabase.from('meetings').select('*, role_claims(*, member:members(*))').order('number', { ascending: false }).limit(20),
       supabase.from('members').select('*').order('name'),
       supabase.from('ballots').select('*'),
       supabase.from('guest_registrations').select('*').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*').eq('active', true).order('created_at', { ascending: false }).limit(1),
+      supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time').single(),
     ]);
     if (m)  setMeetings(m as MeetingWithClaims[]);
     if (mb) setMembers(mb as Member[]);
     if (bl) setBallotsMap(new Map((bl as Ballot[]).map(b => [b.meeting_id, b])));
     if (gr) setGuestRegs(gr as GuestRegistration[]);
     setCurrentAnnouncement((ann as Announcement[] | null)?.[0] ?? null);
+    if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 3, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00' });
     setLoading(false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  async function fillMeetings(cfg: ScheduleConfig, allMeetings: MeetingWithClaims[], silent = false) {
+    const upcoming = allMeetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number);
+    const needed = 3 - upcoming.length;
+    if (needed <= 0) {
+      if (!silent) setAutoFillStatus('Already have 3 or more upcoming meetings.');
+      return;
+    }
+    setFilling(true);
+    const maxNumber = allMeetings.reduce((max, m) => Math.max(max, m.number), 0);
+    const startFrom = upcoming.length > 0
+      ? new Date(upcoming[upcoming.length - 1].date + 'T00:00:00')
+      : new Date();
+    const rows = [];
+    let cur = new Date(startFrom);
+    let num = maxNumber + 1;
+    for (let i = 0; i < needed; i++) {
+      cur = nextWeekdayAfter(cur, cfg.weekday);
+      rows.push({
+        number: num++,
+        date: cur.toISOString().split('T')[0],
+        start_time: cfg.startTime + ':00',
+        end_time: cfg.endTime + ':00',
+        theme: 'TBD',
+        meeting_type: 'regular' as const,
+        speaker_slots: 1,
+        evaluator_slots: 1,
+      });
+    }
+    await supabase.from('meetings').insert(rows);
+    setFilling(false);
+    setAutoFillStatus(`✓ ${needed} meeting${needed > 1 ? 's' : ''} auto-scheduled (${rows.map(r => r.date).join(', ')})`);
+    setTimeout(() => setAutoFillStatus(null), 6000);
+    fetchAll();
+  }
+
+  // Auto-fill once on load if upcoming < 3 and schedule is configured
+  useEffect(() => {
+    if (loading || !scheduleConfig || autoFilledRef.current) return;
+    autoFilledRef.current = true;
+    const upcoming = meetings.filter(m => !isMeetingPast(m));
+    if (upcoming.length < 3) fillMeetings(scheduleConfig, meetings, true);
+  }, [loading, scheduleConfig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function deleteMeeting(id: string) {
     if (!confirm('Delete this meeting and all its role claims? This cannot be undone.')) return;
@@ -819,13 +923,33 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <AnnouncementPanel current={currentAnnouncement} onChanged={fetchAll} />
         ) : tab === 'meetings' ? (
           <div className="space-y-4 pb-8">
+            {autoFillStatus && (
+              <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-xl px-4 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+                {autoFillStatus}
+              </div>
+            )}
             {!showNewMeeting && !editingMeeting && (
-              <button onClick={() => setShowNewMeeting(true)}
-                className="w-full border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl py-4
-                           text-slate-400 dark:text-slate-500 hover:border-maroon-400 dark:hover:border-maroon-700/60
-                           hover:text-maroon-600 dark:hover:text-maroon-400 text-sm font-medium transition-colors">
-                + Add upcoming meeting
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setShowNewMeeting(true)}
+                  className="flex-1 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl py-4
+                             text-slate-400 dark:text-slate-500 hover:border-maroon-400 dark:hover:border-maroon-700/60
+                             hover:text-maroon-600 dark:hover:text-maroon-400 text-sm font-medium transition-colors">
+                  + Add meeting
+                </button>
+                {scheduleConfig && (
+                  <button
+                    onClick={() => fillMeetings(scheduleConfig, meetings)}
+                    disabled={filling}
+                    title={`Auto-schedule ${WEEKDAY_LABELS[scheduleConfig.weekday]}s to reach 3 upcoming meetings`}
+                    className={`shrink-0 px-4 py-2 rounded-2xl border-2 border-dashed text-sm font-medium transition-colors disabled:opacity-40 ${
+                      filling
+                        ? 'border-slate-300 dark:border-slate-700 text-slate-400'
+                        : 'border-emerald-300 dark:border-emerald-800/60 text-emerald-600 dark:text-emerald-500 hover:border-emerald-400 dark:hover:border-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/20'
+                    }`}>
+                    {filling ? '…' : '⚡ Auto-schedule'}
+                  </button>
+                )}
+              </div>
             )}
             {showNewMeeting && <MeetingForm onSave={() => { setShowNewMeeting(false); fetchAll(); }} onCancel={() => setShowNewMeeting(false)} />}
 
