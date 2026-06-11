@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { getMeetingRoles } from '@/lib/types';
-import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, isMeetingOpenForClaims, getMeetingOpenDate } from '@/lib/utils';
+import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -36,7 +36,6 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
 
   const locked = isMeetingLocked(meeting, lockBeforeMins);
   const past   = isMeetingPast(meeting);
-  const notYetOpen = !past && !isMeetingOpenForClaims(meeting);
 
   useEffect(() => {
     if (!memberId || memberId === 'guest') return;
@@ -115,7 +114,6 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     memberAdjacentRoles,
     isLocked: locked,
     isPast: past,
-    isNotYetOpen: notYetOpen,
     isAdmin,
     allMembers,
     onChanged,
@@ -190,21 +188,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   🔒 Locked
                 </span>
               )}
-              {!past && !locked && !notYetOpen && (
+              {!past && !locked && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold
                                  bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400
                                  px-2 py-0.5 rounded-full">
                   ● Roles open
                 </span>
               )}
-              {!past && notYetOpen && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
-                                 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400
-                                 px-2 py-0.5 rounded-full">
-                  🔐 Opens {getMeetingOpenDate(meeting)}
-                </span>
-              )}
-              {!past && !locked && !notYetOpen && (
+              {!past && !locked && (
                 <span className="text-[10px] text-slate-400 dark:text-slate-500">
                   Locks {getMeetingLockTimeIST(meeting, lockBeforeMins)} IST on meeting day
                 </span>

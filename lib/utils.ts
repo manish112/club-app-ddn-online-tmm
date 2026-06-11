@@ -100,24 +100,6 @@ export function getMeetingLockTimeIST(meeting: Meeting, lockBeforeMins = 60): st
   return formatTime(`${String(lh).padStart(2, '0')}:${String(lm).padStart(2, '0')}:00`);
 }
 
-// A meeting opens for role claiming once it is within 14 days of today.
-// Comparing calendar dates in UTC is fine here — we only care about the day,
-// not the exact moment, so sub-day IST/UTC drift is acceptable.
-export function isMeetingOpenForClaims(meeting: Meeting): boolean {
-  const [y, mo, d] = meeting.date.split('-').map(Number);
-  const meetingDay = Date.UTC(y, mo - 1, d);
-  const now = new Date();
-  const todayDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return (meetingDay - todayDay) / (24 * 60 * 60 * 1000) <= 14;
-}
-
-// Returns a short human-readable date when a meeting's roles will open,
-// i.e. 14 days before the meeting date.
-export function getMeetingOpenDate(meeting: Meeting): string {
-  const [y, mo, d] = meeting.date.split('-').map(Number);
-  const openDate = new Date(Date.UTC(y, mo - 1, d - 14));
-  return openDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-}
 
 // Meeting becomes "past" once its end_time (IST) has passed on the meeting date.
 export function isMeetingPast(meeting: Meeting): boolean {
