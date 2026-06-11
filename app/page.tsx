@@ -128,7 +128,7 @@ export default function Home() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
 
       {/* ── Header ── */}
-      <header className="sticky top-0 z-40"
+      <header className="sticky top-9 z-40"
         style={{
           background: 'linear-gradient(160deg, #6b0c1e 0%, #9d1530 40%, #0E2D6A 100%)',
           boxShadow: '0 4px 32px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.07) inset',
@@ -210,7 +210,7 @@ export default function Home() {
       )}
 
       {/* ── Tab bar ── */}
-      <div className="sticky top-[52px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
+      <div className="sticky top-[88px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-2xl mx-auto px-4">
           <div className="flex">
             {tabs.map(({ id, label }) => (

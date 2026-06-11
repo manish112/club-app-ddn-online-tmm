@@ -1,8 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Member, MeetingWithClaims, RoleKey } from '@/lib/types';
+
+import type { Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
+import Link from 'next/link';
 import { getMemberRecentRoles, formatMeetingDate, isMeetingPast } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
@@ -392,8 +394,36 @@ function PasswordCard({ member }: { member: Member }) {
 // ─── Main dashboard ───────────────────────────────────────────────────────────
 
 export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Props) {
+  const supabase = createClient();
   const mentor  = member.mentor_id ? allMembers.find((m) => m.id === member.mentor_id) : null;
   const mentees = allMembers.filter((m) => m.mentor_id === member.id && m.active);
+
+  const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
+  const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    // My own requests
+    supabase.from('speaker_slot_requests').select('*')
+      .eq('member_id', member.id).order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (!data) return;
+        const enriched = data
+          .map(r => {
+            const m = meetings.find(mt => mt.id === r.meeting_id);
+            const reviewer = r.reviewer_id ? allMembers.find(mb => mb.id === r.reviewer_id) : null;
+            return { ...r, meeting_number: m?.number, meeting_date: m?.date, _past: m ? isMeetingPast(m) : true, reviewer_name: reviewer?.display_name };
+          })
+          .filter(r => !r._past);
+        setMyRequests(enriched);
+      });
+    // Pending count for officers
+    if (isOfficer) {
+      supabase.from('speaker_slot_requests').select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+        .then(({ count }) => setPendingCount(count ?? 0));
+    }
+  }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
   const recentActivity = allActivity.slice(0, 8);
@@ -406,6 +436,23 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
 
   return (
     <div className="space-y-4 pb-8">
+
+      {/* Pending slot requests banner for president / VP Ed */}
+      {isOfficer && pendingCount > 0 && (
+        <Link href="/amiadmin"
+          className="flex items-center gap-3 px-4 py-3.5 rounded-2xl
+                     bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/50
+                     hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors group">
+          <span className="text-2xl shrink-0">🎙️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-amber-800 dark:text-amber-300">
+              {pendingCount} speaker slot request{pendingCount > 1 ? 's' : ''} pending review
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-500 mt-0.5">Tap to open admin panel → Requests</p>
+          </div>
+          <span className="text-amber-400 dark:text-amber-600 text-lg group-hover:translate-x-0.5 transition-transform">→</span>
+        </Link>
+      )}
 
       <ProfileCard member={member} onUpdated={onUpdated} />
 
@@ -461,6 +508,48 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           </div>
         );
       })()}
+
+      {/* My speaker slot requests */}
+      {myRequests.length > 0 && (
+        <div className={cardCls}>
+          {sectionLabel('🎙️ Speaker Slot Requests')}
+          <div className="space-y-2">
+            {myRequests.map(r => (
+              <div key={r.id} className={`rounded-xl px-3 py-2.5 border text-xs ${
+                r.status === 'pending'
+                  ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40'
+                  : r.status === 'approved'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40'
+                  : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/40'
+              }`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className={`font-bold ${
+                      r.status === 'pending' ? 'text-amber-700 dark:text-amber-400'
+                      : r.status === 'approved' ? 'text-emerald-700 dark:text-emerald-400'
+                      : 'text-red-600 dark:text-red-400'
+                    }`}>
+                      {r.status === 'pending' && '⏳ Pending'}
+                      {r.status === 'approved' && '✓ Approved'}
+                      {r.status === 'denied' && '✗ Denied'}
+                      {r.meeting_number ? ` · Meeting #${r.meeting_number}` : ''}
+                    </p>
+                    {r.request_note && <p className="mt-0.5 text-slate-500 dark:text-slate-400">Your note: {r.request_note}</p>}
+                    {r.review_comment && (
+                      <p className="mt-1 font-medium text-slate-700 dark:text-slate-300">
+                        <span className="text-slate-500 dark:text-slate-400">Club Officer notes{r.reviewer_name ? ` (TM ${r.reviewer_name})` : ''}:</span>{' '}{r.review_comment}
+                      </p>
+                    )}
+                  </div>
+                  <p className="shrink-0 text-slate-400 dark:text-slate-600">
+                    {r.meeting_date ? new Date(r.meeting_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <PasswordCard member={member} />
 
