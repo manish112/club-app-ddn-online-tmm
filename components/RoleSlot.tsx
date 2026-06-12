@@ -153,13 +153,13 @@ export function RoleSlot({
             {isOwn && <span className="text-[10px] font-normal text-maroon-400/80 dark:text-maroon-500 ml-1">(you)</span>}
           </p>
           {isSpeaker && claim.speech_title && (
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate leading-tight">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight break-words">
               &ldquo;{claim.speech_title}&rdquo;
             </p>
           )}
-          {isSpeaker && (claim.path || claim.speech_level) && (
-            <p className="text-[10px] text-slate-400 dark:text-slate-500">
-              {[claim.path, claim.speech_level ? `L${claim.speech_level}` : null].filter(Boolean).join(' · ')}
+          {isSpeaker && (claim.path || claim.speech_level || claim.project) && (
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 break-words">
+              {[claim.path, claim.speech_level ? `L${claim.speech_level}` : null, claim.project].filter(Boolean).join(' · ')}
             </p>
           )}
           {canEditDetails && (
