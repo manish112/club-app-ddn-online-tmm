@@ -109,6 +109,33 @@ create table if not exists announcements (
   created_at  timestamptz not null default now()
 );
 
+-- App-usage tracking (see migration 025). Server-only access via service role.
+create table if not exists device_captures (
+  id              uuid primary key default gen_random_uuid(),
+  visitor_id      text,
+  member_id       uuid references members(id) on delete set null,
+  ip              text,
+  user_agent      text,
+  browser         text,
+  browser_version text,
+  os              text,
+  os_version      text,
+  device_type     text,
+  device_vendor   text,
+  device_model    text,
+  screen          text,
+  timezone        text,
+  languages       text,
+  city            text,
+  region          text,
+  country         text,
+  path            text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists device_captures_created_at_idx on device_captures (created_at desc);
+create index if not exists device_captures_visitor_idx    on device_captures (visitor_id);
+create index if not exists device_captures_member_idx     on device_captures (member_id);
+
 -- ============================================================
 -- Row Level Security
 -- ============================================================
@@ -123,6 +150,8 @@ alter table ballots             enable row level security;
 alter table votes               enable row level security;
 alter table guest_registrations enable row level security;
 alter table announcements       enable row level security;
+-- device_captures: RLS on with no anon policies — server-only (service role).
+alter table device_captures     enable row level security;
 
 -- Public reads
 create policy "public read members"             on members             for select using (true);
@@ -163,6 +192,8 @@ create policy "anon insert votes" on votes for insert
 
 -- Guest registrations
 create policy "anon insert guest_registrations" on guest_registrations for insert with check (true);
+create policy "anon update guest_registrations" on guest_registrations for update  using (true);
+create policy "anon delete guest_registrations" on guest_registrations for delete  using (true);
 
 -- Announcements
 create policy "anon insert announcements" on announcements for insert with check (true);

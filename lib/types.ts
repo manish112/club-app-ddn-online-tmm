@@ -166,6 +166,40 @@ export interface Announcement {
   created_at: string;
 }
 
+// App-usage tracking row (device_captures). Written server-side by /api/capture.
+export interface DeviceCapture {
+  id: string;
+  visitor_id: string | null;
+  member_id: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  browser: string | null;
+  browser_version: string | null;
+  os: string | null;
+  os_version: string | null;
+  device_type: string | null;
+  device_vendor: string | null;
+  device_model: string | null;
+  screen: string | null;
+  timezone: string | null;
+  languages: string | null;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  path: string | null;
+  created_at: string;
+}
+
+// Client-collected signals POSTed to /api/capture (server adds IP + UA parse + geo).
+export interface CaptureClientSignals {
+  visitorId?: string | null;
+  memberId?: string | null;
+  screen?: string | null;
+  timezone?: string | null;
+  languages?: string | null;
+  path?: string | null;
+}
+
 // Ordered role slots for a meeting — TTM excluded when speakathon
 export function getMeetingRoles(meeting: Meeting): { roleKey: RoleKey; slot: number }[] {
   const roles: { roleKey: RoleKey; slot: number }[] = [];

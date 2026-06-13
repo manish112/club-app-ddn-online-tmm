@@ -217,18 +217,32 @@ function GuestManagerPanel({ currentMember }: { currentMember: Member }) {
   const upcomingMeetings = meetings.filter(m => m.date >= today);
 
   async function deleteGuest(id: string) {
-    await supabase.from('guest_registrations').delete().eq('id', id);
+    // .select() returns the affected rows, so we can tell a real delete (1 row)
+    // from one silently filtered out by RLS / a failed request (0 rows) rather
+    // than optimistically removing it from the UI and lying about success.
+    const { data, error } = await supabase.from('guest_registrations').delete().eq('id', id).select();
+    if (error || !data || data.length === 0) {
+      alert('Could not delete this guest — the change did not save. Please refresh and try again.');
+      fetchAll();
+      return;
+    }
     setGuests(prev => prev.filter(g => g.id !== id));
   }
 
   async function toggleConverted(guest: GuestRegistration) {
     const next = !guest.converted_to_member;
-    await supabase.from('guest_registrations').update({
+    const convertedAt = next ? new Date().toISOString() : null;
+    const { data, error } = await supabase.from('guest_registrations').update({
       converted_to_member: next,
-      converted_at: next ? new Date().toISOString() : null,
-    }).eq('id', guest.id);
+      converted_at: convertedAt,
+    }).eq('id', guest.id).select();
+    if (error || !data || data.length === 0) {
+      alert('Could not update this guest — the change did not save. Please refresh and try again.');
+      fetchAll();
+      return;
+    }
     setGuests(prev => prev.map(g => g.id === guest.id
-      ? { ...g, converted_to_member: next, converted_at: next ? new Date().toISOString() : null }
+      ? { ...g, converted_to_member: next, converted_at: convertedAt }
       : g
     ));
   }
