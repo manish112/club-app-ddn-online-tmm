@@ -7,6 +7,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
+  DeviceCapture,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
 import { isMeetingPast } from '@/lib/utils';
@@ -938,6 +939,119 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
   );
 }
 
+// ─── Usage / app-tracking panel ────────────────────────────────────────────────
+
+type CaptureRow = DeviceCapture & { member?: { display_name: string } | null };
+
+function UsagePanel({ currentMemberId }: { currentMemberId: string }) {
+  const [captures, setCaptures] = useState<CaptureRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/captures?memberId=${encodeURIComponent(currentMemberId)}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(r.status === 403 ? 'Admin access required.' : 'Could not load usage data.');
+        return r.json();
+      })
+      .then((d) => setCaptures(d.captures as CaptureRow[]))
+      .catch((e) => setError(e.message));
+  }, [currentMemberId]);
+
+  if (error) return <div className="text-center py-16 text-red-500 dark:text-red-400 text-sm">{error}</div>;
+  if (!captures) return <div className="space-y-3">{[1, 2, 3].map((i) => <div key={i} className="h-20 bg-slate-200 dark:bg-slate-800 rounded-2xl animate-pulse" />)}</div>;
+  if (captures.length === 0) return <div className="text-center py-16 text-slate-400 dark:text-slate-600 text-sm">No usage recorded yet.</div>;
+
+  const uniqueVisitors = new Set(captures.map((c) => c.visitor_id ?? c.ip ?? c.id)).size;
+  const since = new Date(Date.now() - 7 * 864e5).toISOString();
+  const last7 = captures.filter((c) => c.created_at >= since).length;
+
+  // Top breakdowns
+  const tally = (key: (c: CaptureRow) => string | null) => {
+    const m = new Map<string, number>();
+    for (const c of captures) {
+      const v = key(c) || 'Unknown';
+      m.set(v, (m.get(v) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  };
+  const byLocation = tally((c) => [c.city, c.country].filter(Boolean).join(', ') || null).slice(0, 8);
+  const byDevice   = tally((c) => c.device_type).slice(0, 5);
+  const byBrowser  = tally((c) => c.browser).slice(0, 5);
+
+  const fmtTime = (s: string) => new Date(s).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  const Stat = ({ label, value }: { label: string; value: number }) => (
+    <div className={`${cardCls} p-3 text-center`}>
+      <p className="text-2xl font-black text-slate-900 dark:text-slate-100">{value}</p>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 mt-0.5">{label}</p>
+    </div>
+  );
+
+  const BreakdownCard = ({ title, rows }: { title: string; rows: [string, number][] }) => {
+    const max = rows[0]?.[1] ?? 1;
+    return (
+      <div className={`${cardCls} p-4`}>
+        <p className={labelCls}>{title}</p>
+        <div className="space-y-1.5 mt-1">
+          {rows.map(([name, count]) => (
+            <div key={name} className="flex items-center gap-2">
+              <span className="text-xs text-slate-700 dark:text-slate-300 w-32 shrink-0 truncate">{name}</span>
+              <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-maroon-600 to-maroon-500 rounded-full" style={{ width: `${(count / max) * 100}%` }} />
+              </div>
+              <span className="text-xs text-slate-400 dark:text-slate-500 w-8 text-right shrink-0">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4 pb-8">
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Total opens" value={captures.length} />
+        <Stat label="Unique devices" value={uniqueVisitors} />
+        <Stat label="Last 7 days" value={last7} />
+      </div>
+
+      <BreakdownCard title="📍 Top locations" rows={byLocation} />
+      <div className="grid grid-cols-1 gap-4">
+        <BreakdownCard title="📱 Device type" rows={byDevice} />
+        <BreakdownCard title="🌐 Browser" rows={byBrowser} />
+      </div>
+
+      <div>
+        <p className={labelCls}>Recent sessions</p>
+        <div className="space-y-2 mt-1">
+          {captures.slice(0, 100).map((c) => (
+            <div key={c.id} className={`${cardCls} p-3`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {c.member?.display_name ? `TM ${c.member.display_name}` : 'Anonymous visitor'}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                    {[c.browser, c.os, c.device_type].filter(Boolean).join(' · ') || 'Unknown device'}
+                  </p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                    {[c.city, c.region, c.country].filter(Boolean).join(', ') || 'Location unknown'}
+                    {c.ip ? ` · ${c.ip}` : ''}
+                  </p>
+                </div>
+                <p className="text-[10px] text-slate-400 dark:text-slate-600 shrink-0 text-right">{fmtTime(c.created_at)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        {captures.length > 100 && (
+          <p className="text-center text-xs text-slate-400 dark:text-slate-600 mt-3">Showing 100 of {captures.length} most recent.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Admin panel ──────────────────────────────────────────────────────────────
 
 function AdminPanel({ currentMember }: { currentMember: Member }) {
@@ -948,7 +1062,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -1043,6 +1157,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     { id: 'guests'    as const, label: 'Guests' },
     { id: 'requests'  as const, label: 'Requests' },
     { id: 'announce'  as const, label: 'Announce' },
+    { id: 'usage'     as const, label: 'Usage' },
     { id: 'settings'  as const, label: 'Settings' },
   ];
 
@@ -1101,6 +1216,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-slate-200 dark:bg-slate-900/60 rounded-2xl h-32 animate-pulse" />)}</div>
         ) : tab === 'settings' ? (
           <AgendaSettingsPanel />
+        ) : tab === 'usage' ? (
+          <UsagePanel currentMemberId={currentMember.id} />
         ) : tab === 'guests' ? (
           <GuestLog guestRegs={guestRegs} meetings={meetings} />
         ) : tab === 'requests' ? (

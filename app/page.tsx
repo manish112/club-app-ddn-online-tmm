@@ -10,6 +10,7 @@ import type { MeetingWithClaims } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
 import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG } from '@/lib/utils';
+import { useCapture } from '@/lib/capture';
 import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -21,6 +22,9 @@ const DISMISS_KEY = (id: string) => `tm_announcement_${id}`;
 export default function Home() {
   const { meetings, members, ballots, announcement, loading, refetch } = useMeetings();
   const { memberId, deviceId, loaded, identify, clearIdentity } = useIdentity();
+
+  // App-usage tracking: record device/IP/browser once identity has loaded.
+  useCapture(memberId, loaded);
   const [activeTab, setActiveTab] = useState<Tab>('next');
   const [lockBeforeMins, setLockBeforeMins] = useState(DEFAULT_AGENDA_CONFIG.lockBeforeMins);
 
