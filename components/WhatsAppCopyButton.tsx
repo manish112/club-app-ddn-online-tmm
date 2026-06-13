@@ -8,6 +8,7 @@ type CopyMode = 'full' | 'no-intros' | 'intros-only';
 interface Props {
   meeting: MeetingWithClaims;
   members: Member[];
+  lockBeforeMins?: number;
 }
 
 function WhatsAppIcon() {
@@ -19,7 +20,7 @@ function WhatsAppIcon() {
   );
 }
 
-export function WhatsAppCopyButton({ meeting, members }: Props) {
+export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Props) {
   const [picking, setPicking] = useState(false);
   const [copiedMode, setCopiedMode] = useState<CopyMode | null>(null);
 
@@ -28,7 +29,7 @@ export function WhatsAppCopyButton({ meeting, members }: Props) {
     const text =
       mode === 'intros-only'
         ? buildWhatsAppIntros(meeting, membersById)
-        : buildWhatsAppAgenda(meeting, membersById, mode === 'full');
+        : buildWhatsAppAgenda(meeting, membersById, mode === 'full', lockBeforeMins);
     try {
       await navigator.clipboard.writeText(text);
     } catch {

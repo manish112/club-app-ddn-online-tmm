@@ -235,7 +235,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               </button>
             )}
             {!past && !hideWhatsApp && ballot?.status !== 'open' && ballot?.status !== 'closed' && (
-              <WhatsAppCopyButton meeting={meeting} members={allMembers} />
+              <WhatsAppCopyButton meeting={meeting} members={allMembers} lockBeforeMins={lockBeforeMins} />
             )}
           </div>
         </div>
