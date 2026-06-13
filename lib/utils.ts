@@ -1,5 +1,8 @@
 import type { Meeting, MeetingWithClaims, Member, RoleKey } from './types';
-import { ROLE_META } from './types';
+import { ROLE_META, getMeetingRoles } from './types';
+
+// Public app URL used in call-to-action prompts (e.g. WhatsApp agenda).
+export const APP_URL = 'https://dehradun-online-tm.vercel.app/';
 
 const TAG_ROLES: RoleKey[] = ['grammarian', 'ah_counter', 'timer', 'harkmaster'];
 
@@ -113,6 +116,12 @@ export function isMeetingPast(meeting: Meeting): boolean {
   return Date.now() >= new Date(Date.UTC(y, mo - 1, d + utcDay, utcH, utcM, 0)).getTime();
 }
 
+// True when every role slot in the meeting has been claimed.
+export function areAllRolesFilled(meeting: MeetingWithClaims): boolean {
+  const claimed = new Set(meeting.role_claims.map((c) => `${c.role_key}:${c.slot_index}`));
+  return getMeetingRoles(meeting).every(({ roleKey, slot }) => claimed.has(`${roleKey}:${slot}`));
+}
+
 // Format as ordinal: 3 → "3rd", 21 → "21st"
 function ordinal(n: number): string {
   const s = ['th', 'st', 'nd', 'rd'];
@@ -142,7 +151,8 @@ export function formatTime(timeStr: string): string {
 export function buildWhatsAppAgenda(
   meeting: MeetingWithClaims,
   membersById: Map<string, Member>,
-  includeIntros = true
+  includeIntros = true,
+  lockBeforeMins = 60
 ): string {
   const getClaimName = (roleKey: RoleKey, slot: number): string => {
     const claim = meeting.role_claims.find(
@@ -153,15 +163,27 @@ export function buildWhatsAppAgenda(
     return m ? `TM ${m.display_name}` : '';
   };
 
+  // Only invite people to claim roles while there's still an open slot and the
+  // meeting hasn't locked — otherwise the call-to-action is pointless noise.
+  const rolesOpen = !areAllRolesFilled(meeting) && !isMeetingLocked(meeting, lockBeforeMins);
+
   const lines: string[] = [];
 
-  lines.push('Please come forward to take the roles in the next meeting:');
+  if (rolesOpen) {
+    lines.push('Please come forward to take the roles in the next meeting:');
+    lines.push('');
+  }
   lines.push(`Dehradun Online Toastmasters Meeting #${meeting.number}`);
+  lines.push('');
   lines.push('Speak, Lead, Inspire');
+  lines.push('');
   lines.push(
     `🗓️ ${formatMeetingDate(meeting.date)}, ${formatTime(meeting.start_time)}- ${formatTime(meeting.end_time)} IST`
   );
-  if (meeting.theme) lines.push(`🌐 Theme: ${meeting.theme}`);
+  if (meeting.theme) {
+    lines.push('');
+    lines.push(`🌐 Theme: ${meeting.theme}`);
+  }
   lines.push('');
 
   // Prepared Speakers
@@ -204,6 +226,11 @@ export function buildWhatsAppAgenda(
   lines.push(`🔍 Ah-Counter- ${getClaimName('ah_counter', 1)}`);
   lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
   lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
+
+  if (rolesOpen) {
+    lines.push('');
+    lines.push(`Claim your role on the app: ${APP_URL}`);
+  }
 
   // Introductions section
   const roleOrder: { key: RoleKey; slots: number }[] = [
