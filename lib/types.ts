@@ -38,14 +38,15 @@ export type RoleKey =
 
 export type MeetingType = 'regular' | 'speakathon';
 
-export type LeadershipRole = 'president' | 'vp_education' | 'secretary' | 'vp_pr' | 'club_mentor';
+export type LeadershipRole = 'president' | 'vp_education' | 'vp_membership' | 'secretary' | 'vp_pr' | 'club_mentor';
 
 export const LEADERSHIP_ROLES: { value: LeadershipRole; label: string; exclusive: boolean }[] = [
-  { value: 'president',    label: 'Club President',      exclusive: true  },
-  { value: 'vp_education', label: 'VP Education',         exclusive: true  },
-  { value: 'secretary',    label: 'Secretary',            exclusive: true  },
-  { value: 'vp_pr',        label: 'VP Public Relations',  exclusive: true  },
-  { value: 'club_mentor',  label: 'Club Mentor',          exclusive: false },
+  { value: 'president',     label: 'Club President',      exclusive: true  },
+  { value: 'vp_education',  label: 'VP Education',         exclusive: true  },
+  { value: 'vp_membership', label: 'VP Membership',        exclusive: true  },
+  { value: 'secretary',     label: 'Secretary',            exclusive: true  },
+  { value: 'vp_pr',         label: 'VP Public Relations',  exclusive: true  },
+  { value: 'club_mentor',   label: 'Club Mentor',          exclusive: false },
 ];
 
 export interface Member {

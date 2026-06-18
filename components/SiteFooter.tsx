@@ -10,7 +10,7 @@ function WhatsAppIcon() {
   );
 }
 
-const CONTACT_ROLE_ORDER: LeadershipRole[] = ['president', 'vp_education', 'secretary', 'vp_pr'];
+const CONTACT_ROLE_ORDER: LeadershipRole[] = ['president', 'vp_education', 'vp_membership', 'secretary', 'vp_pr'];
 
 function waLink(phone: string) {
   const digits = phone.replace(/\D/g, '');
