@@ -80,6 +80,7 @@ export interface Meeting {
   meeting_type: MeetingType;
   speaker_slots: number;
   evaluator_slots: number;
+  disabled_roles: RoleKey[];   // role categories turned off for this meeting
   created_at: string;
 }
 
@@ -204,24 +205,33 @@ export interface CaptureClientSignals {
   path?: string | null;
 }
 
-// Ordered role slots for a meeting — TTM excluded when speakathon
+// Whether a role category is active for a meeting. A role can be turned off via
+// the per-meeting `disabled_roles` list; legacy speakathon meetings always have
+// Table Topics (ttm) off even if their disabled_roles wasn't backfilled.
+export function isRoleEnabled(meeting: Meeting, roleKey: RoleKey): boolean {
+  if (meeting.disabled_roles?.includes(roleKey)) return false;
+  if (roleKey === 'ttm' && meeting.meeting_type === 'speakathon') return false;
+  return true;
+}
+
+// Ordered role slots for a meeting — excludes any disabled category.
 export function getMeetingRoles(meeting: Meeting): { roleKey: RoleKey; slot: number }[] {
   const roles: { roleKey: RoleKey; slot: number }[] = [];
 
-  for (let i = 1; i <= meeting.speaker_slots; i++) {
-    roles.push({ roleKey: 'speaker', slot: i });
+  if (isRoleEnabled(meeting, 'speaker')) {
+    for (let i = 1; i <= meeting.speaker_slots; i++) {
+      roles.push({ roleKey: 'speaker', slot: i });
+    }
   }
-  for (let i = 1; i <= meeting.evaluator_slots; i++) {
-    roles.push({ roleKey: 'evaluator', slot: i });
+  if (isRoleEnabled(meeting, 'evaluator')) {
+    for (let i = 1; i <= meeting.evaluator_slots; i++) {
+      roles.push({ roleKey: 'evaluator', slot: i });
+    }
   }
 
-  const singleRoles: RoleKey[] =
-    meeting.meeting_type === 'speakathon'
-      ? ['tmod', 'ge', 'grammarian', 'ah_counter', 'timer', 'harkmaster']
-      : ['tmod', 'ttm', 'ge', 'grammarian', 'ah_counter', 'timer', 'harkmaster'];
-
+  const singleRoles: RoleKey[] = ['tmod', 'ttm', 'ge', 'grammarian', 'ah_counter', 'timer', 'harkmaster'];
   for (const roleKey of singleRoles) {
-    roles.push({ roleKey, slot: 1 });
+    if (isRoleEnabled(meeting, roleKey)) roles.push({ roleKey, slot: 1 });
   }
 
   return roles;
