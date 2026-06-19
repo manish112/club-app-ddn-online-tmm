@@ -7,9 +7,22 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
-  DeviceCapture,
+  DeviceCapture, RoleKey,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
+
+// Role categories an admin can switch off for a meeting, in display order.
+const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
+  { key: 'speaker',    label: 'Prepared Speeches' },
+  { key: 'evaluator',  label: 'Evaluators' },
+  { key: 'ttm',        label: 'Table Topics' },
+  { key: 'ge',         label: 'General Evaluator' },
+  { key: 'tmod',       label: 'TMoD' },
+  { key: 'grammarian', label: 'Grammarian' },
+  { key: 'ah_counter', label: 'Ah-Counter' },
+  { key: 'timer',      label: 'Timer' },
+  { key: 'harkmaster', label: 'Harkmaster' },
+];
 import { isMeetingPast } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -112,8 +125,9 @@ interface ScheduleConfig { weekday: number; startTime: string; endTime: string }
 interface MeetingFormData {
   number: string; date: string; start_time: string; end_time: string;
   theme: string; meeting_type: MeetingType; speaker_slots: string; evaluator_slots: string;
+  disabled_roles: RoleKey[];
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1' };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [] };
 
 function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingFormData & { id: string }>; onSave: () => void; onCancel: () => void }) {
   const supabase = createClient();
@@ -123,21 +137,43 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     end_time: initial?.end_time?.slice(0, 5) ?? '21:00',
     speaker_slots: String(initial?.speaker_slots ?? 1),
     evaluator_slots: String(initial?.evaluator_slots ?? 1),
+    disabled_roles: initial?.disabled_roles ?? [],
   });
   const [saving, setSaving] = useState(false);
 
   function set(field: keyof MeetingFormData, value: string) {
     setForm(f => {
       const next = { ...f, [field]: value };
-      if (field === 'meeting_type') { next.speaker_slots = value === 'speakathon' ? '4' : '1'; next.evaluator_slots = next.speaker_slots; }
       if (field === 'speaker_slots') next.evaluator_slots = value;
       return next;
     });
   }
 
+  function toggleRole(key: RoleKey) {
+    setForm(f => ({
+      ...f,
+      disabled_roles: f.disabled_roles.includes(key)
+        ? f.disabled_roles.filter(k => k !== key)
+        : [...f.disabled_roles, key],
+    }));
+  }
+
+  // Quick presets that set the disabled-role mix (and sensible slot counts).
+  function applyPreset(preset: 'regular' | 'speakathon' | 'table_topics') {
+    setForm(f => {
+      if (preset === 'speakathon') return { ...f, disabled_roles: ['ttm'], speaker_slots: '4', evaluator_slots: '4' };
+      if (preset === 'table_topics') return { ...f, disabled_roles: ['speaker', 'evaluator'] };
+      return { ...f, disabled_roles: [] };
+    });
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault(); setSaving(true);
-    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type: form.meeting_type, speaker_slots: parseInt(form.speaker_slots), evaluator_slots: parseInt(form.evaluator_slots) };
+    const disabled = form.disabled_roles;
+    // Keep the legacy meeting_type label in sync: a Speakathon = Table Topics off
+    // while prepared speeches stay on.
+    const meeting_type: MeetingType = disabled.includes('ttm') && !disabled.includes('speaker') ? 'speakathon' : 'regular';
+    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: parseInt(form.speaker_slots), evaluator_slots: parseInt(form.evaluator_slots), disabled_roles: disabled };
     if (initial?.id) await supabase.from('meetings').update(payload).eq('id', initial.id);
     else await supabase.from('meetings').insert(payload);
     setSaving(false); onSave();
@@ -153,11 +189,41 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
         <div><span className={labelCls}>End time</span><TimePicker value={form.end_time} onChange={v => set('end_time', v)} /></div>
       </div>
       <label><span className={labelCls}>Theme</span><input type="text" value={form.theme} onChange={e => set('theme', e.target.value)} placeholder="e.g. Mental Wellness" className={inputCls} /></label>
-      <label><span className={labelCls}>Meeting type</span>
-        <select value={form.meeting_type} onChange={e => set('meeting_type', e.target.value as MeetingType)} className={`${inputCls} mt-1`}>
-          <option value="regular">Regular</option><option value="speakathon">Speakathon</option>
-        </select>
-      </label>
+      <div>
+        <span className={labelCls}>Meeting format</span>
+        <div className="flex flex-wrap gap-1.5 mt-1 mb-2">
+          {([
+            { id: 'regular' as const,      label: 'Regular' },
+            { id: 'speakathon' as const,   label: 'Speakathon (no Table Topics)' },
+            { id: 'table_topics' as const, label: 'Table Topics session (no speeches)' },
+          ]).map(p => (
+            <button key={p.id} type="button" onClick={() => applyPreset(p.id)}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-full border
+                         border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300
+                         hover:border-maroon-300 dark:hover:border-maroon-700 hover:text-maroon-700 dark:hover:text-maroon-400
+                         active:scale-95 transition-all">
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Tap a category to enable/disable it for this meeting. Greyed = disabled.</p>
+        <div className="flex flex-wrap gap-1.5">
+          {TOGGLEABLE_ROLES.map(({ key, label }) => {
+            const enabled = !form.disabled_roles.includes(key);
+            return (
+              <button key={key} type="button" onClick={() => toggleRole(key)}
+                aria-pressed={enabled}
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 ${
+                  enabled
+                    ? 'border-emerald-300 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400'
+                    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-600 line-through'
+                }`}>
+                {enabled ? '✓' : '✕'} {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <label>
         <span className={labelCls}>Speaker / Evaluator pairs</span>
         <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Each speaker is paired with one evaluator</p>
@@ -1266,7 +1332,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                     {i > 0 && <hr className="border-slate-200 dark:border-slate-800 mb-4" />}
                     {editingMeeting?.id === m.id ? (
                       <MeetingForm
-                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.speaker_slots), evaluator_slots: String(m.evaluator_slots) }}
+                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.speaker_slots), evaluator_slots: String(m.evaluator_slots), disabled_roles: m.disabled_roles ?? [] }}
                         onSave={() => { setEditingMeeting(null); fetchAll(); }}
                         onCancel={() => setEditingMeeting(null)}
                       />

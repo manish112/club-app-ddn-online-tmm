@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerSlotRequest } from '@/lib/types';
-import { getMeetingRoles } from '@/lib/types';
+import { getMeetingRoles, isRoleEnabled } from '@/lib/types';
 import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
@@ -163,10 +163,15 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               <h2 className="font-serif text-xl font-black text-slate-900 dark:text-white leading-none">
                 Meeting #{meeting.number}
               </h2>
-              {meeting.meeting_type === 'speakathon' && (
+              {!isRoleEnabled(meeting, 'ttm') && isRoleEnabled(meeting, 'speaker') && (
                 <span className="text-[10px] font-black uppercase tracking-wide
                                  bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300
                                  px-2 py-0.5 rounded-full">Speakathon</span>
+              )}
+              {!isRoleEnabled(meeting, 'speaker') && (
+                <span className="text-[10px] font-black uppercase tracking-wide
+                                 bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300
+                                 px-2 py-0.5 rounded-full">Table Topics</span>
               )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -297,6 +302,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       <div className="p-4 space-y-5">
 
         {/* Speakers — 2-column chip grid */}
+        {speakerRoles.length > 0 && (
         <section>
           <SectionLabel icon="🎙️" text="Prepared Speakers" />
           <div className="grid grid-cols-2 gap-2 mt-2">
@@ -309,6 +315,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             ))}
           </div>
         </section>
+        )}
 
         {/* Speaker slot request */}
         {!past && (canRequestSlot || slotRequest) && (
@@ -367,6 +374,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         )}
 
         {/* Evaluators — 2-column chip grid */}
+        {evaluatorRoles.length > 0 && (
         <section>
           <SectionLabel icon="⚖️" text="Evaluators" />
           <div className="grid grid-cols-2 gap-2 mt-2">
@@ -379,8 +387,10 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             ))}
           </div>
         </section>
+        )}
 
         {/* Main roles — 3-column chip grid */}
+        {mainRoles.length > 0 && (
         <section>
           <SectionLabel icon="👥" text="Core Roles" />
           <div className="grid grid-cols-3 gap-2 mt-2">
@@ -393,10 +403,12 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             ))}
           </div>
         </section>
+        )}
 
         {/* Auxiliary roles — 2-column mini grid */}
+        {tagRoles.length > 0 && (
         <section>
-          <SectionLabel icon="🛠️" text="Support" />
+          <SectionLabel icon="🛠️" text="Auxiliary Roles" />
           <div className="grid grid-cols-2 gap-2 mt-2">
             {tagRoles.map(({ roleKey, slot }) => (
               <RoleSlot
@@ -407,6 +419,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             ))}
           </div>
         </section>
+        )}
       </div>
     </article>
 

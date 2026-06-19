@@ -32,6 +32,7 @@ create table if not exists meetings (
                     check (meeting_type in ('regular', 'speakathon')),
   speaker_slots   integer not null default 2,
   evaluator_slots integer not null default 2,
+  disabled_roles  text[] not null default '{}',
   created_at      timestamptz not null default now()
 );
 

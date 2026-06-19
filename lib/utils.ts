@@ -1,4 +1,5 @@
 import type { Meeting, MeetingWithClaims, Member, RoleKey } from './types';
+import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
 // Public app URL used in call-to-action prompts (e.g. WhatsApp agenda).
@@ -201,47 +202,49 @@ export function buildWhatsAppAgenda(
   lines.push('');
 
   // Prepared Speakers
-  lines.push('🎙️ Prepared Speakers:');
-  for (let i = 1; i <= meeting.speaker_slots; i++) {
-    const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === i);
-    const name = claim ? (membersById.get(claim.member_id) ? `TM ${membersById.get(claim.member_id)!.display_name}` : '') : '';
-    lines.push(` ${i}. ${name}`);
-    if (claim) {
-      const details: string[] = [];
-      if (claim.path)         details.push(`Path: ${claim.path}`);
-      if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
-      if (claim.project)      details.push(`Project: ${claim.project}`);
-      if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
-      const { min: tMin, max: tMax } = speechTimeRange(claim);
-      details.push(`Time: ${tMin}–${tMax} min`);
-      if (details.length > 0) lines.push(`    ${details.join(' | ')}`);
+  if (isRoleEnabled(meeting, 'speaker')) {
+    lines.push('🎙️ Prepared Speakers:');
+    for (let i = 1; i <= meeting.speaker_slots; i++) {
+      const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === i);
+      const name = claim ? (membersById.get(claim.member_id) ? `TM ${membersById.get(claim.member_id)!.display_name}` : '') : '';
+      lines.push(` ${i}. ${name}`);
+      if (claim) {
+        const details: string[] = [];
+        if (claim.path)         details.push(`Path: ${claim.path}`);
+        if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
+        if (claim.project)      details.push(`Project: ${claim.project}`);
+        if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
+        const { min: tMin, max: tMax } = speechTimeRange(claim);
+        details.push(`Time: ${tMin}–${tMax} min`);
+        if (details.length > 0) lines.push(`    ${details.join(' | ')}`);
+      }
     }
+    lines.push('');
   }
-  lines.push('');
 
   // Evaluators
-  lines.push('⚖️ Evaluators:');
-  for (let i = 1; i <= meeting.evaluator_slots; i++) {
-    const name = getClaimName('evaluator', i);
-    lines.push(` ${i}. ${name}`);
+  if (isRoleEnabled(meeting, 'evaluator')) {
+    lines.push('⚖️ Evaluators:');
+    for (let i = 1; i <= meeting.evaluator_slots; i++) {
+      const name = getClaimName('evaluator', i);
+      lines.push(` ${i}. ${name}`);
+    }
+    lines.push('');
   }
-  lines.push('');
 
   // Main Roles
   lines.push('Main Roles:');
-  lines.push(`🎤 TMoD- ${getClaimName('tmod', 1)}`);
-  if (meeting.meeting_type !== 'speakathon') {
-    lines.push(`💬 TTM- ${getClaimName('ttm', 1)}`);
-  }
-  lines.push(`📋 GE- ${getClaimName('ge', 1)}`);
+  if (isRoleEnabled(meeting, 'tmod')) lines.push(`🎤 TMoD- ${getClaimName('tmod', 1)}`);
+  if (isRoleEnabled(meeting, 'ttm'))  lines.push(`💬 TTM- ${getClaimName('ttm', 1)}`);
+  if (isRoleEnabled(meeting, 'ge'))   lines.push(`📋 GE- ${getClaimName('ge', 1)}`);
   lines.push('');
 
   // Auxiliary Roles
   lines.push('Auxiliary Roles:');
-  lines.push(`📚 Grammarian- ${getClaimName('grammarian', 1)}`);
-  lines.push(`🔍 Ah-Counter- ${getClaimName('ah_counter', 1)}`);
-  lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
-  lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
+  if (isRoleEnabled(meeting, 'grammarian')) lines.push(`📚 Grammarian- ${getClaimName('grammarian', 1)}`);
+  if (isRoleEnabled(meeting, 'ah_counter')) lines.push(`🔍 Ah-Counter- ${getClaimName('ah_counter', 1)}`);
+  if (isRoleEnabled(meeting, 'timer'))      lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
+  if (isRoleEnabled(meeting, 'harkmaster')) lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
 
   if (rolesOpen) {
     lines.push('');
@@ -249,17 +252,17 @@ export function buildWhatsAppAgenda(
   }
 
   // Introductions section
-  const roleOrder: { key: RoleKey; slots: number }[] = [
-    { key: 'speaker',    slots: meeting.speaker_slots },
-    { key: 'evaluator',  slots: meeting.evaluator_slots },
-    { key: 'tmod',       slots: 1 },
-    ...(meeting.meeting_type !== 'speakathon' ? [{ key: 'ttm' as RoleKey, slots: 1 }] : []),
-    { key: 'ge',         slots: 1 },
-    { key: 'grammarian', slots: 1 },
-    { key: 'ah_counter', slots: 1 },
-    { key: 'timer',      slots: 1 },
-    { key: 'harkmaster', slots: 1 },
-  ];
+  const roleOrder: { key: RoleKey; slots: number }[] = ([
+    { key: 'speaker'    as RoleKey, slots: meeting.speaker_slots },
+    { key: 'evaluator'  as RoleKey, slots: meeting.evaluator_slots },
+    { key: 'tmod'       as RoleKey, slots: 1 },
+    { key: 'ttm'        as RoleKey, slots: 1 },
+    { key: 'ge'         as RoleKey, slots: 1 },
+    { key: 'grammarian' as RoleKey, slots: 1 },
+    { key: 'ah_counter' as RoleKey, slots: 1 },
+    { key: 'timer'      as RoleKey, slots: 1 },
+    { key: 'harkmaster' as RoleKey, slots: 1 },
+  ]).filter((r) => isRoleEnabled(meeting, r.key));
 
   const introBlocks: string[] = [];
   for (const { key, slots } of roleOrder) {
@@ -295,17 +298,17 @@ export function buildWhatsAppIntros(
   meeting: MeetingWithClaims,
   membersById: Map<string, Member>
 ): string {
-  const roleOrder: { key: RoleKey; slots: number }[] = [
-    { key: 'speaker',    slots: meeting.speaker_slots },
-    { key: 'evaluator',  slots: meeting.evaluator_slots },
-    { key: 'tmod',       slots: 1 },
-    ...(meeting.meeting_type !== 'speakathon' ? [{ key: 'ttm' as RoleKey, slots: 1 }] : []),
-    { key: 'ge',         slots: 1 },
-    { key: 'grammarian', slots: 1 },
-    { key: 'ah_counter', slots: 1 },
-    { key: 'timer',      slots: 1 },
-    { key: 'harkmaster', slots: 1 },
-  ];
+  const roleOrder: { key: RoleKey; slots: number }[] = ([
+    { key: 'speaker'    as RoleKey, slots: meeting.speaker_slots },
+    { key: 'evaluator'  as RoleKey, slots: meeting.evaluator_slots },
+    { key: 'tmod'       as RoleKey, slots: 1 },
+    { key: 'ttm'        as RoleKey, slots: 1 },
+    { key: 'ge'         as RoleKey, slots: 1 },
+    { key: 'grammarian' as RoleKey, slots: 1 },
+    { key: 'ah_counter' as RoleKey, slots: 1 },
+    { key: 'timer'      as RoleKey, slots: 1 },
+    { key: 'harkmaster' as RoleKey, slots: 1 },
+  ]).filter((r) => isRoleEnabled(meeting, r.key));
 
   const lines: string[] = [];
   lines.push('📋 Role Player Introductions:');
@@ -454,7 +457,7 @@ export function buildAgendaSections(
   // ── Section 2: Prepared Speeches ─────────────────────────────────────────
   const s2speeches: AgendaRow[] = [];
 
-  for (let i = 1; i <= meeting.speaker_slots; i++) {
+  for (let i = 1; isRoleEnabled(meeting, 'speaker') && i <= meeting.speaker_slots; i++) {
     s2speeches.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
       "Shares the speaker's project & evaluation criteria", ` calls Evaluator ${i}`, getName('evaluator', i))); offset += 1;
 
@@ -483,7 +486,7 @@ export function buildAgendaSections(
 
   // ── Section 2: Table Topics ───────────────────────────────────────────────
   const s2: AgendaRow[] = [];
-  if (meeting.meeting_type !== 'speakathon') {
+  if (isRoleEnabled(meeting, 'ttm')) {
     const ttLabel = `${config.ttSpeakerCountMin}–${config.ttSpeakerCountMax} SPEAKERS · 1–${config.ttMinsPerSpeaker}½ MIN EACH`;
     s2.push(r(false, 'TMoD', getName('tmod'),
       undefined, undefined, ' carries the theme forward, then calls the Table Topics Master', getName('ttm'))); offset += 2;
@@ -499,23 +502,28 @@ export function buildAgendaSections(
   const s3: AgendaRow[] = [];
   s3.push(r(false, 'TMoD', getName('tmod'),
     undefined, undefined, ' calls the General Evaluator', getName('ge')));                       offset += 1;
-  s3.push(r(false, 'General Evaluator', getName('ge'),
-    undefined, undefined, ' calls the evaluators one by one:'));
+  if (isRoleEnabled(meeting, 'evaluator')) {
+    s3.push(r(false, 'General Evaluator', getName('ge'),
+      undefined, undefined, ' calls the evaluators one by one:'));
 
-  for (let i = 1; i <= meeting.evaluator_slots; i++) {
-    s3.push(r(true, `Evaluator ${i}`, getName('evaluator', i), '2–3 MIN', undefined,
-      ' delivers the evaluation'));                                                               offset += 3;
+    for (let i = 1; i <= meeting.evaluator_slots; i++) {
+      s3.push(r(true, `Evaluator ${i}`, getName('evaluator', i), '2–3 MIN', undefined,
+        ' delivers the evaluation'));                                                             offset += 3;
+    }
   }
 
-  s3.push(r(false, 'General Evaluator', getName('ge'),
-    undefined, undefined, " calls the role players' reports:"));
-  for (const { key, roleLabel } of [
+  const reportRoles = ([
     { key: 'timer'      as RoleKey, roleLabel: 'Timer'      },
     { key: 'ah_counter' as RoleKey, roleLabel: 'Ah-Counter' },
     { key: 'grammarian' as RoleKey, roleLabel: 'Grammarian' },
     { key: 'harkmaster' as RoleKey, roleLabel: 'Harkmaster' },
-  ]) {
-    s3.push(r(true, roleLabel, getName(key), '1–2 MIN', undefined, ' delivers the report'));     offset += 2;
+  ]).filter((rr) => isRoleEnabled(meeting, rr.key));
+  if (reportRoles.length > 0) {
+    s3.push(r(false, 'General Evaluator', getName('ge'),
+      undefined, undefined, " calls the role players' reports:"));
+    for (const { key, roleLabel } of reportRoles) {
+      s3.push(r(true, roleLabel, getName(key), '1–2 MIN', undefined, ' delivers the report'));   offset += 2;
+    }
   }
 
   s3.push(r(false, 'General Evaluator', getName('ge'),
