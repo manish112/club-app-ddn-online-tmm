@@ -148,6 +148,20 @@ export function formatTime(timeStr: string): string {
 }
 
 // Build the WhatsApp agenda text from a meeting + members index
+// Allotted time (minutes) for a prepared speech. A per-speech override wins;
+// otherwise falls back to the level-based default (L1 is shorter than L2–5).
+export function speechTimeRange(
+  claim: { speech_level: number | null; speech_min_mins: number | null; speech_max_mins: number | null } | null | undefined,
+  l1Max = 6,
+  otherMax = 7,
+): { min: number; max: number } {
+  const isL1 = claim?.speech_level === 1;
+  return {
+    min: claim?.speech_min_mins ?? (isL1 ? 4 : 5),
+    max: claim?.speech_max_mins ?? (isL1 ? l1Max : otherMax),
+  };
+}
+
 export function buildWhatsAppAgenda(
   meeting: MeetingWithClaims,
   membersById: Map<string, Member>,
@@ -198,6 +212,8 @@ export function buildWhatsAppAgenda(
       if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
       if (claim.project)      details.push(`Project: ${claim.project}`);
       if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
+      const { min: tMin, max: tMax } = speechTimeRange(claim);
+      details.push(`Time: ${tMin}–${tMax} min`);
       if (details.length > 0) lines.push(`    ${details.join(' | ')}`);
     }
   }
@@ -446,11 +462,9 @@ export function buildAgendaSections(
       (c) => c.role_key === 'speaker' && c.slot_index === i
     );
     const spkName  = spkClaim ? (membersById.get(spkClaim.member_id)?.display_name ?? '') : '';
-    const isL1     = spkClaim?.speech_level === 1;
-    const durLabel = isL1
-      ? `4–${config.l1SpeechMins} MIN`
-      : `5–${config.otherSpeechMins} MIN`;
-    const spkMins  = isL1 ? config.l1SpeechMins : config.otherSpeechMins;
+    const { min: spkMin, max: spkMax } = speechTimeRange(spkClaim, config.l1SpeechMins, config.otherSpeechMins);
+    const durLabel = `${spkMin}–${spkMax} MIN`;
+    const spkMins  = spkMax;
 
     let spkNote: string | undefined;
     if (spkClaim) {

@@ -141,8 +141,9 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
       ))}
 
       <p className="text-xs text-slate-400 italic mt-4 leading-relaxed border-t border-slate-100 pt-3">
-        Times are a guide, generated from the current role sign-ups. Speech allotments default to
-        the Pathways level (Level 1 = 4–{config.l1SpeechMins} min, others = 5–{config.otherSpeechMins} min).
+        Times are a guide, generated from the current role sign-ups. Each speech can set its own
+        time; otherwise it defaults to the Pathways level (Level 1 = 4–{config.l1SpeechMins} min,
+        others = 5–{config.otherSpeechMins} min).
       </p>
     </div>
   );

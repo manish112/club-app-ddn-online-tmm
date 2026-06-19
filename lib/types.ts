@@ -96,6 +96,9 @@ export interface RoleClaim {
   speech_level: number | null;
   project: string | null;
   speech_title: string | null;
+  // Allotted speech time in minutes; null falls back to the level-based default.
+  speech_min_mins: number | null;
+  speech_max_mins: number | null;
   member?: Member | null;
 }
 
