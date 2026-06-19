@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, RoleClaim, RoleKey } from '@/lib/types';
 import { LEVELS, PATHS, ROLE_META } from '@/lib/types';
-import { roleClaimBlocked, consecutiveRoleBlocked } from '@/lib/utils';
+import { roleClaimBlocked, consecutiveRoleBlocked, speechTimeRange } from '@/lib/utils';
 
 interface Props {
   meetingId: string;
@@ -162,6 +162,10 @@ export function RoleSlot({
               {[claim.path, claim.speech_level ? `L${claim.speech_level}` : null, claim.project].filter(Boolean).join(' · ')}
             </p>
           )}
+          {isSpeaker && (() => {
+            const { min, max } = speechTimeRange(claim);
+            return <p className="text-[10px] text-slate-400 dark:text-slate-500">⏱ {min}–{max} min</p>;
+          })()}
           {canEditDetails && (
             <button
               onClick={() => setEditingDetails(true)}
@@ -459,6 +463,7 @@ function SpeechDetailsBlock({
     claim.speech_level ? `L${claim.speech_level}` : null,
     claim.project,
   ].filter(Boolean);
+  const { min: tMin, max: tMax } = speechTimeRange(claim);
 
   return (
     <div className="ml-9 mt-1 mb-1 pl-3 border-l-2 border-maroon-100 dark:border-maroon-900/50">
@@ -472,6 +477,7 @@ function SpeechDetailsBlock({
       {hasMeta && (
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{metaParts.join(' · ')}</p>
       )}
+      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">⏱ {tMin}–{tMax} min</p>
       {canEdit && (
         <button
           onClick={() => setEditing(true)}
@@ -492,10 +498,18 @@ function SpeechEditorInline({
   const [level, setLevel] = useState<string>(claim.speech_level?.toString() ?? '');
   const [project, setProject] = useState<string>(claim.project ?? '');
   const [title, setTitle] = useState<string>(claim.speech_title ?? '');
+  const [minMins, setMinMins] = useState<string>((claim.speech_min_mins ?? 5).toString());
+  const [maxMins, setMaxMins] = useState<string>((claim.speech_max_mins ?? 7).toString());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function save() {
+    const min = Number(minMins);
+    const max = Number(maxMins);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max < 1 || max > 60 || min > max) {
+      setErr('Enter a valid time (min ≤ max, 1–60).');
+      return;
+    }
     setBusy(true);
     setErr(null);
     const { error } = await supabase
@@ -505,6 +519,8 @@ function SpeechEditorInline({
         speech_level: level ? Number(level) : null,
         project: project.trim() || null,
         speech_title: title.trim() || null,
+        speech_min_mins: min,
+        speech_max_mins: max,
       })
       .eq('id', claim.id);
     setBusy(false);
@@ -530,6 +546,17 @@ function SpeechEditorInline({
         placeholder="Project (e.g. Ice Breaker)" className={`w-full ${inputCls}`} maxLength={120} />
       <input type="text" value={title} onChange={(e) => setTitle(e.target.value)}
         placeholder="Speech title" className={`w-full ${inputCls}`} maxLength={160} />
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0">⏱ Time</span>
+        <input type="number" inputMode="numeric" min={1} max={60} value={minMins}
+          onChange={(e) => setMinMins(e.target.value)} aria-label="Minimum minutes"
+          className={`w-16 ${inputCls}`} />
+        <span className="text-xs text-slate-400">–</span>
+        <input type="number" inputMode="numeric" min={1} max={60} value={maxMins}
+          onChange={(e) => setMaxMins(e.target.value)} aria-label="Maximum minutes"
+          className={`w-16 ${inputCls}`} />
+        <span className="text-xs text-slate-400 dark:text-slate-500">min</span>
+      </div>
       {err && <p className="text-xs text-red-500">{err}</p>}
       <div className="flex items-center gap-2">
         <button

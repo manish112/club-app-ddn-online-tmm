@@ -48,10 +48,12 @@ create table if not exists role_claims (
   claimed_at     timestamptz not null default now(),
   admin_override boolean not null default false,
   -- Pathways speech metadata — only meaningful when role_key='speaker'
-  path           text,
-  speech_level   integer check (speech_level between 1 and 5),
-  project        text,
-  speech_title   text,
+  path            text,
+  speech_level    integer check (speech_level between 1 and 5),
+  project         text,
+  speech_title    text,
+  speech_min_mins integer check (speech_min_mins between 1 and 60),
+  speech_max_mins integer check (speech_max_mins between 1 and 60),
 
   constraint role_claims_slot_unique unique (meeting_id, role_key, slot_index)
 );
