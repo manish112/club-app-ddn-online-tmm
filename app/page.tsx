@@ -40,6 +40,7 @@ export default function Home() {
       });
   }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [themeReminderMeeting, setThemeReminderMeeting] = useState<MeetingWithClaims | null>(null);
   const themeReminderShown = useRef(false);
 
@@ -161,48 +162,76 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Right: auth + theme — labels collapse to icons on mobile to leave
-              room for the "Welcome, TM …" line. */}
+          {/* Right: auth + theme. Signed-in members get a single labelled
+              account menu so the buttons don't crowd out the welcome line and
+              every action reads clearly (title tooltips don't show on touch). */}
           <div className="flex items-center gap-1 shrink-0">
             {isGuest && (
               <span className="text-[10px] text-white/40 mr-0.5">Guest</span>
             )}
-            {currentMember && (currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
-              <Link href="/guestmgr" aria-label="Guests" title="Guests"
-                className="text-[11px] font-semibold text-white/70 hover:text-white
-                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
-                           transition-all min-h-[34px] flex items-center gap-1">
-                <span aria-hidden>👥</span>
-                <span className="hidden sm:inline">Guests</span>
-              </Link>
-            )}
-            {currentMember && (currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
-              <Link href="/amiadmin" aria-label="Admin" title="Admin"
-                className="text-[11px] font-semibold text-gold-300 hover:text-gold-200
-                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
-                           transition-all min-h-[34px] flex items-center gap-1">
-                <span aria-hidden>⚙️</span>
-                <span className="hidden sm:inline">Admin</span>
-              </Link>
-            )}
-            {loaded && (
-              <button
-                onClick={clearIdentity}
-                aria-label={memberId ? 'Switch user' : 'Sign in'}
-                title={memberId ? 'Switch user' : 'Sign in'}
-                className="text-[11px] font-semibold text-white/70 hover:text-white
-                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
-                           transition-all min-h-[34px] flex items-center gap-1"
-              >
-                {memberId ? (
+
+            {currentMember ? (
+              <div className="relative">
+                <button
+                  onClick={() => setMenuOpen((o) => !o)}
+                  aria-label="Account menu"
+                  aria-expanded={menuOpen}
+                  className="flex items-center gap-1 bg-white/10 hover:bg-white/20
+                             rounded-lg pl-1 pr-1.5 py-1 transition-all min-h-[34px]"
+                >
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white/25 text-white text-[11px] font-bold">
+                    {currentMember.display_name.trim().charAt(0).toUpperCase()}
+                  </span>
+                  <svg viewBox="0 0 20 20" className={`w-3.5 h-3.5 fill-white/70 transition-transform ${menuOpen ? 'rotate-180' : ''}`}>
+                    <path d="M5.5 7.5L10 12l4.5-4.5z" />
+                  </svg>
+                </button>
+                {menuOpen && (
                   <>
-                    <span aria-hidden>⇄</span>
-                    <span className="hidden sm:inline">Switch</span>
+                    <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-2 z-50 w-52 rounded-xl overflow-hidden
+                                    bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700
+                                    shadow-xl text-slate-700 dark:text-slate-200">
+                      <div className="px-3 py-2.5 border-b border-slate-100 dark:border-slate-800">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Signed in as</p>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          TM {currentMember.display_name}
+                        </p>
+                      </div>
+                      {(currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+                        <Link href="/guestmgr" onClick={() => setMenuOpen(false)}
+                          className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                          <span aria-hidden>👥</span> Manage Guests
+                        </Link>
+                      )}
+                      {(currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+                        <Link href="/amiadmin" onClick={() => setMenuOpen(false)}
+                          className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                          <span aria-hidden>⚙️</span> Admin Panel
+                        </Link>
+                      )}
+                      <button
+                        onClick={() => { setMenuOpen(false); clearIdentity(); }}
+                        className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 text-sm
+                                   border-t border-slate-100 dark:border-slate-800
+                                   hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                        <span aria-hidden>⇄</span> Switch user
+                      </button>
+                    </div>
                   </>
-                ) : (
-                  'Sign in'
                 )}
-              </button>
+              </div>
+            ) : (
+              loaded && (
+                <button
+                  onClick={clearIdentity}
+                  className="text-[11px] font-semibold text-white/70 hover:text-white
+                             bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
+                             transition-all min-h-[34px]"
+                >
+                  {memberId ? 'Switch' : 'Sign in'}
+                </button>
+              )
             )}
             <ThemeToggle />
           </div>
