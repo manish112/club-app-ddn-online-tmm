@@ -365,6 +365,7 @@ export interface AgendaConfig {
   ttMinsPerSpeaker: number;
   tmodConclusionMins: number;
   lockBeforeMins: number;
+  maxSpeakerSlots: number;
 }
 
 export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
@@ -375,6 +376,7 @@ export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
   ttMinsPerSpeaker: 2,
   tmodConclusionMins: 5,
   lockBeforeMins: 60,
+  maxSpeakerSlots: 2,
 };
 
 export function buildAgendaSections(

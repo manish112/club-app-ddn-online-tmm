@@ -27,14 +27,16 @@ export default function Home() {
   useCapture(memberId, loaded);
   const [activeTab, setActiveTab] = useState<Tab>('next');
   const [lockBeforeMins, setLockBeforeMins] = useState(DEFAULT_AGENDA_CONFIG.lockBeforeMins);
+  const [maxSpeakerSlots, setMaxSpeakerSlots] = useState(DEFAULT_AGENDA_CONFIG.maxSpeakerSlots);
 
   useEffect(() => {
     createClient()
       .from('agenda_config')
-      .select('lock_before_mins')
+      .select('lock_before_mins, max_speaker_slots')
       .single()
       .then(({ data }) => {
         if (data?.lock_before_mins) setLockBeforeMins(data.lock_before_mins);
+        if (data?.max_speaker_slots) setMaxSpeakerSlots(data.max_speaker_slots);
       });
   }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
@@ -159,35 +161,47 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Right: auth + theme */}
+          {/* Right: auth + theme — labels collapse to icons on mobile to leave
+              room for the "Welcome, TM …" line. */}
           <div className="flex items-center gap-1 shrink-0">
             {isGuest && (
-              <span className="text-[10px] text-white/40 mr-1">Guest</span>
+              <span className="text-[10px] text-white/40 mr-0.5">Guest</span>
             )}
             {currentMember && (currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
-              <Link href="/guestmgr"
+              <Link href="/guestmgr" aria-label="Guests" title="Guests"
                 className="text-[11px] font-semibold text-white/70 hover:text-white
-                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
-                           transition-all min-h-[34px] flex items-center">
-                Guests
+                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
+                           transition-all min-h-[34px] flex items-center gap-1">
+                <span aria-hidden>👥</span>
+                <span className="hidden sm:inline">Guests</span>
               </Link>
             )}
             {currentMember && (currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
-              <Link href="/amiadmin"
+              <Link href="/amiadmin" aria-label="Admin" title="Admin"
                 className="text-[11px] font-semibold text-gold-300 hover:text-gold-200
-                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
-                           transition-all min-h-[34px] flex items-center">
-                Admin
+                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
+                           transition-all min-h-[34px] flex items-center gap-1">
+                <span aria-hidden>⚙️</span>
+                <span className="hidden sm:inline">Admin</span>
               </Link>
             )}
             {loaded && (
               <button
                 onClick={clearIdentity}
+                aria-label={memberId ? 'Switch user' : 'Sign in'}
+                title={memberId ? 'Switch user' : 'Sign in'}
                 className="text-[11px] font-semibold text-white/70 hover:text-white
-                           bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg
-                           transition-all min-h-[34px]"
+                           bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg
+                           transition-all min-h-[34px] flex items-center gap-1"
               >
-                {memberId ? 'Switch' : 'Sign in'}
+                {memberId ? (
+                  <>
+                    <span aria-hidden>⇄</span>
+                    <span className="hidden sm:inline">Switch</span>
+                  </>
+                ) : (
+                  'Sign in'
+                )}
               </button>
             )}
             <ThemeToggle />
@@ -299,6 +313,7 @@ export default function Home() {
                     isAdmin={false}
                     hideWhatsApp={meetingTab !== 'next'}
                     lockBeforeMins={lockBeforeMins}
+                    maxSpeakerSlots={maxSpeakerSlots}
                     onChanged={refetch}
                   />
                 </div>

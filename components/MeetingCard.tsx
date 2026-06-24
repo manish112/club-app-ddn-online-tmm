@@ -19,10 +19,11 @@ interface Props {
   isAdmin: boolean;
   hideWhatsApp?: boolean;
   lockBeforeMins?: number;
+  maxSpeakerSlots?: number;
   onChanged: () => void;
 }
 
-export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, onChanged }: Props) {
+export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, maxSpeakerSlots = 2, onChanged }: Props) {
   const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
   const [showAgenda, setShowAgenda] = useState(false);
@@ -92,7 +93,10 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const evaluatorRoles = roles.filter((r) => r.roleKey === 'evaluator');
   const allSpeakerSlotsFull = speakerRoles.length > 0 && speakerRoles.every(({ roleKey, slot }) => claimsMap.has(`${roleKey}:${slot}`));
   const memberHasSpeakerSlot = meeting.role_claims.some(c => c.member_id === memberId && c.role_key === 'speaker');
-  const canRequestSlot = !past && !locked && allSpeakerSlotsFull && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
+  // Extra slots are capped: once the meeting is at the admin-set maximum, there's
+  // nothing left to request, so the button is hidden.
+  const belowSpeakerCap = meeting.speaker_slots < maxSpeakerSlots;
+  const canRequestSlot = !past && !locked && allSpeakerSlotsFull && belowSpeakerCap && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
 
