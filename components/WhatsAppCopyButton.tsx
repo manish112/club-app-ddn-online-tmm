@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { MeetingWithClaims, Member } from '@/lib/types';
 import { buildWhatsAppAgenda, buildWhatsAppIntros } from '@/lib/utils';
 
@@ -23,6 +24,8 @@ function WhatsAppIcon() {
 export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Props) {
   const [picking, setPicking] = useState(false);
   const [copiedMode, setCopiedMode] = useState<CopyMode | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   async function copy(mode: CopyMode) {
     const membersById = new Map(members.map((m) => [m.id, m]));
@@ -47,49 +50,81 @@ export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Pr
     setTimeout(() => setCopiedMode(null), 2500);
   }
 
-  if (copiedMode !== null) {
-    return (
-      <button disabled
-        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-[#1fba58] text-white shadow-sm min-h-[36px]">
-        <WhatsAppIcon />
-        Copied!
-      </button>
-    );
-  }
+  // A fixed, centred toast guarantees the "copied" feedback is visible on
+  // mobile regardless of where the button sits / scroll position. Portalled to
+  // <body> because MeetingCard's hover transform would otherwise trap the
+  // position:fixed overlay to the card (see photo-lightbox-portal-fix).
+  const toast =
+    mounted && copiedMode !== null
+      ? createPortal(
+          <div className="fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4 pointer-events-none">
+            <div className="flex items-center gap-2 bg-[#1fba58] text-white text-sm font-semibold px-5 py-3 rounded-full shadow-lg shadow-black/20">
+              <WhatsAppIcon />
+              Copied to clipboard!
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
-  if (picking) {
-    return (
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium shrink-0">Copy:</span>
-        <button onClick={() => copy('full')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#25D366] text-white hover:bg-[#1fba58] active:scale-95 transition-all shadow-sm">
-          Role players + intro
-        </button>
-        <button onClick={() => copy('no-intros')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-500 dark:bg-slate-600 text-white hover:bg-slate-600 dark:hover:bg-slate-500 active:scale-95 transition-all shadow-sm">
-          Role players only
-        </button>
-        <button onClick={() => copy('intros-only')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-navy-700 text-white hover:bg-navy-800 active:scale-95 transition-all shadow-sm">
-          Intro only
-        </button>
-        <button onClick={() => setPicking(false)}
-          className="px-1.5 py-1.5 rounded-lg text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
-          ✕
-        </button>
-      </div>
-    );
-  }
+  // The options are shown in a portalled bottom-sheet (centred on desktop) so
+  // they never overflow / squeeze the meeting card they live in, and each
+  // option carries a label + description so it's clear what gets copied.
+  const sheet =
+    mounted && picking
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            onClick={() => setPicking(false)}
+          >
+            <div
+              className="w-full max-w-xs bg-white dark:bg-slate-900 rounded-2xl shadow-2xl p-4 space-y-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="flex items-center justify-center w-7 h-7 rounded-full bg-[#25D366]">
+                  <WhatsAppIcon />
+                </span>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">Copy for WhatsApp</p>
+              </div>
+              <button onClick={() => copy('full')}
+                className="w-full text-left px-3 py-2.5 rounded-xl bg-[#25D366] hover:bg-[#1fba58] text-white active:scale-[0.98] transition-all">
+                <span className="block text-sm font-semibold">Role players + intro</span>
+                <span className="block text-[11px] text-white/80">Full agenda with member intros</span>
+              </button>
+              <button onClick={() => copy('no-intros')}
+                className="w-full text-left px-3 py-2.5 rounded-xl bg-slate-500 dark:bg-slate-700 hover:bg-slate-600 dark:hover:bg-slate-600 text-white active:scale-[0.98] transition-all">
+                <span className="block text-sm font-semibold">Role players only</span>
+                <span className="block text-[11px] text-white/80">Agenda without the intros</span>
+              </button>
+              <button onClick={() => copy('intros-only')}
+                className="w-full text-left px-3 py-2.5 rounded-xl bg-navy-700 hover:bg-navy-800 text-white active:scale-[0.98] transition-all">
+                <span className="block text-sm font-semibold">Intro only</span>
+                <span className="block text-[11px] text-white/80">Just the member introductions</span>
+              </button>
+              <button onClick={() => setPicking(false)}
+                className="w-full py-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
-    <button
-      onClick={() => setPicking(true)}
-      className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
-                 bg-[#25D366] text-white hover:bg-[#1fba58] active:scale-95
-                 transition-all min-h-[36px] shadow-sm"
-    >
-      <WhatsAppIcon />
-      Copy for WhatsApp
-    </button>
+    <>
+      {toast}
+      {sheet}
+      <button
+        onClick={() => setPicking(true)}
+        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
+                   bg-[#25D366] text-white hover:bg-[#1fba58] active:scale-95
+                   transition-all min-h-[36px] shadow-sm"
+      >
+        <WhatsAppIcon />
+        Copy for WhatsApp
+      </button>
+    </>
   );
 }

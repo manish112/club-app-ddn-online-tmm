@@ -478,6 +478,7 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
   const [loading, setLoading] = useState(true);
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [acting, setActing] = useState<string | null>(null);
+  const [maxSpeakerSlots, setMaxSpeakerSlots] = useState(2);
 
   const meetingMap = new Map(meetings.map(m => [m.id, m]));
   const memberMap  = new Map(allMembers.map(m => [m.id, m]));
@@ -489,12 +490,21 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
     setLoading(false);
   }
 
-  useEffect(() => { fetchRequests(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    fetchRequests();
+    supabase.from('agenda_config').select('max_speaker_slots').single()
+      .then(({ data }) => { if (data?.max_speaker_slots) setMaxSpeakerSlots(data.max_speaker_slots); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function approve(req: SpeakerSlotRequest) {
-    setActing(req.id);
     const meeting = meetings.find(m => m.id === req.meeting_id);
-    if (!meeting) { setActing(null); return; }
+    if (!meeting) return;
+
+    if (meeting.speaker_slots >= maxSpeakerSlots) {
+      alert(`This meeting is already at the maximum of ${maxSpeakerSlots} speaker slots. Raise the cap in Agenda Settings to approve more.`);
+      return;
+    }
+    setActing(req.id);
 
     const newSpeakerSlots = meeting.speaker_slots + 1;
     const newEvalSlots    = meeting.evaluator_slots + 1;
@@ -648,6 +658,7 @@ function AgendaSettingsPanel() {
   const [vals, setVals] = useState({
     l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4,
     tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
+    max_speaker_slots: 2,
   });
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 3, startTime: '19:30', endTime: '21:00' });
   const [saving, setSaving] = useState(false);
@@ -656,7 +667,7 @@ function AgendaSettingsPanel() {
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
       if (data) {
-        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60 });
+        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2 });
         setSchedule({ weekday: data.schedule_weekday ?? 3, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
       }
     });
@@ -727,6 +738,7 @@ function AgendaSettingsPanel() {
         <div className="space-y-1"><p className={labelCls}>Prepared Speeches</p><div className="space-y-3 pt-1">{numField('l1_speech_mins', 'L1 speech max (mins)', 'Pathways Level 1 — standard is 6')}{numField('other_speech_mins', 'Other speech max (mins)', 'Levels 2–5 — standard is 7')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Table Topics</p><div className="space-y-3 pt-1">{numField('tt_speaker_count_min', 'Min speakers')}{numField('tt_speaker_count_max', 'Max speakers')}{numField('tt_mins_per_speaker', 'Max mins per speaker', 'Standard TT is 1–2½ min each')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
+        <div className="space-y-1"><p className={labelCls}>Speaker Slots</p><div className="pt-1">{numField('max_speaker_slots', 'Max speaker slots per meeting', 'Upper cap for extra-slot requests. Meetings start with 1.')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{numField('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
         <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
@@ -1259,11 +1271,11 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
       {/* Tab bar */}
       <div className="sticky top-[88px] z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-2xl mx-auto px-4">
-          <div className="flex overflow-x-auto scrollbar-none">
+        <div className="max-w-2xl mx-auto px-2">
+          <div className="flex flex-wrap justify-center sm:justify-start">
             {tabs.map(({ id, label }) => (
               <button key={id} onClick={() => setTab(id)}
-                className={`relative shrink-0 flex-1 py-3 text-xs font-bold tracking-wide transition-all ${
+                className={`relative shrink-0 py-2.5 px-3 text-xs font-bold tracking-wide transition-all ${
                   tab === id
                     ? 'text-maroon-600 dark:text-maroon-400'
                     : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
