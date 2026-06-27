@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { getMeetingRoles, isRoleEnabled } from '@/lib/types';
@@ -99,6 +100,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const canRequestSlot = !past && !locked && allSpeakerSlotsFull && belowSpeakerCap && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
+  // When the Timer role is turned off for this meeting there's no slot to claim,
+  // but the in-app Speech Timer is still useful — surface a link to it instead.
+  const timerDisabled  = !isRoleEnabled(meeting, 'timer');
 
   // Date badge parts
   const dateObj   = new Date(meeting.date + 'T00:00:00');
@@ -410,7 +414,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         )}
 
         {/* Auxiliary roles — 2-column mini grid */}
-        {tagRoles.length > 0 && (
+        {(tagRoles.length > 0 || timerDisabled) && (
         <section>
           <SectionLabel icon="🛠️" text="Auxiliary Roles" />
           <div className="grid grid-cols-2 gap-2 mt-2">
@@ -421,6 +425,16 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                 variant="mini"
               />
             ))}
+            {timerDisabled && (
+              <Link
+                href="/timer"
+                className="rounded-xl border border-dashed border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center gap-1 p-3 min-h-[80px] text-center transition-all duration-200 hover:border-maroon-300 dark:hover:border-maroon-700 hover:bg-maroon-50/50 dark:hover:bg-maroon-950/10 active:scale-[0.97]"
+              >
+                <span className="text-xl leading-none">⌛️</span>
+                <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 leading-tight">Timer</span>
+                <span className="text-xs font-semibold leading-tight text-maroon-600 dark:text-maroon-400">⏱️ Open timer</span>
+              </Link>
+            )}
           </div>
         </section>
         )}

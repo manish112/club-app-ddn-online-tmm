@@ -167,8 +167,13 @@ export function buildWhatsAppAgenda(
   meeting: MeetingWithClaims,
   membersById: Map<string, Member>,
   includeIntros = true,
-  lockBeforeMins = 60
+  lockBeforeMins = 60,
+  baseUrl: string = APP_URL
 ): string {
+  // Build links off wherever the app is actually running (passed in by the
+  // client), falling back to the canonical URL for server-side callers.
+  const base = baseUrl.replace(/\/+$/, '');
+  const timerUrl = `${base}/timer`;
   const getClaimName = (roleKey: RoleKey, slot: number): string => {
     const claim = meeting.role_claims.find(
       (c) => c.role_key === roleKey && c.slot_index === slot
@@ -246,9 +251,12 @@ export function buildWhatsAppAgenda(
   if (isRoleEnabled(meeting, 'timer'))      lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
   if (isRoleEnabled(meeting, 'harkmaster')) lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
 
+  lines.push('');
+  lines.push(`⏱️ Speech Timer (use during the meeting): ${timerUrl}`);
+
   if (rolesOpen) {
     lines.push('');
-    lines.push(`Claim your role on the app: ${APP_URL}`);
+    lines.push(`Claim your role on the app: ${base}/`);
   }
 
   // Introductions section

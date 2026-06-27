@@ -29,10 +29,11 @@ export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Pr
 
   async function copy(mode: CopyMode) {
     const membersById = new Map(members.map((m) => [m.id, m]));
+    const baseUrl = window.location.origin;
     const text =
       mode === 'intros-only'
         ? buildWhatsAppIntros(meeting, membersById)
-        : buildWhatsAppAgenda(meeting, membersById, mode === 'full', lockBeforeMins);
+        : buildWhatsAppAgenda(meeting, membersById, mode === 'full', lockBeforeMins, baseUrl);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
