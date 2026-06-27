@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, RoleClaim, RoleKey } from '@/lib/types';
 import { LEVELS, PATHS, ROLE_META } from '@/lib/types';
@@ -297,6 +298,15 @@ export function RoleSlot({
             : canClaim ? '+ Claim'
             : '—'}
         </span>
+        {roleKey === 'timer' && (
+          <Link
+            href="/timer"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 text-[10px] font-semibold text-maroon-600 dark:text-maroon-400 hover:underline"
+          >
+            ⏱️ Open timer
+          </Link>
+        )}
       </div>
     );
   }
