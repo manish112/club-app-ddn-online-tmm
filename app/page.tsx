@@ -198,6 +198,10 @@ export default function Home() {
                           TM {currentMember.display_name}
                         </p>
                       </div>
+                      <Link href="/timer" onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                        <span aria-hidden>⏱️</span> Speech Timer
+                      </Link>
                       {(currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
                         <Link href="/guestmgr" onClick={() => setMenuOpen(false)}
                           className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
@@ -282,6 +286,20 @@ export default function Home() {
 
       {/* ── Content ── */}
       <main className="max-w-2xl mx-auto px-4 py-6">
+        {/* Speech Timer — open to everyone, handy during meetings */}
+        <Link href="/timer"
+          className="group flex items-center gap-3 mb-4 rounded-2xl border border-maroon-200 dark:border-maroon-800/50
+                     bg-gradient-to-r from-maroon-50 to-white dark:from-maroon-950/40 dark:to-slate-900
+                     px-4 py-3 shadow-card-light dark:shadow-card-dark active:scale-[0.99] transition-all">
+          <span className="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-maroon-600 text-white text-xl">⏱️</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">Speech Timer</span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400">Green/yellow/red timing for speeches, Table Topics &amp; evaluations</span>
+          </span>
+          <svg viewBox="0 0 20 20" className="w-4 h-4 shrink-0 fill-maroon-500 group-hover:translate-x-0.5 transition-transform">
+            <path d="M7.5 5.5L12 10l-4.5 4.5z" />
+          </svg>
+        </Link>
         {(() => {
           const meetingTab: 'next' | 'upcoming' | 'past' =
             activeTab === 'profile' ? 'next' : activeTab;

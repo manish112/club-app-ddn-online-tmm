@@ -10,6 +10,10 @@ import type {
   DeviceCapture, RoleKey,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
+import {
+  DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
+  type TimerModes, type TimerModeKey, type TimerThresholds,
+} from '@/lib/timer';
 
 // Role categories an admin can switch off for a meeting, in display order.
 const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
@@ -662,6 +666,21 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
 
 // ─── Agenda settings ──────────────────────────────────────────────────────────
 
+function TimerMMSS({ value, onChange }: { value: number; onChange: (secs: number) => void }) {
+  const m = Math.floor(value / 60);
+  const s = value % 60;
+  const cls = 'w-12 border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-1 text-sm text-center bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-maroon-600';
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input type="number" min={0} max={59} value={m} aria-label="minutes"
+        onChange={e => onChange(Math.max(0, parseInt(e.target.value) || 0) * 60 + s)} className={cls} />
+      <span className="text-slate-400 text-sm">:</span>
+      <input type="number" min={0} max={59} value={s} aria-label="seconds"
+        onChange={e => onChange(m * 60 + Math.min(59, Math.max(0, parseInt(e.target.value) || 0)))} className={cls} />
+    </span>
+  );
+}
+
 function AgendaSettingsPanel() {
   const supabase = createClient();
   const [vals, setVals] = useState({
@@ -671,6 +690,7 @@ function AgendaSettingsPanel() {
   });
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 3, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
+  const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -680,9 +700,14 @@ function AgendaSettingsPanel() {
         setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2 });
         setSchedule({ weekday: data.schedule_weekday ?? 3, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
+        setTimerModes(normalizeModes(data.timer_modes));
       }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function setTimerThreshold(key: TimerModeKey, field: keyof TimerThresholds, secs: number) {
+    setTimerModes(prev => ({ ...prev, [key]: { ...prev[key], [field]: secs } }));
+  }
 
   function toggleDefaultRole(key: RoleKey) {
     setDefaultDisabledRoles(prev =>
@@ -698,6 +723,7 @@ function AgendaSettingsPanel() {
       schedule_start_time: schedule.startTime,
       schedule_end_time: schedule.endTime,
       default_disabled_roles: defaultDisabledRoles,
+      timer_modes: timerModes,
       updated_at: new Date().toISOString(),
     });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
@@ -778,6 +804,28 @@ function AgendaSettingsPanel() {
         <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Speaker Slots</p><div className="pt-1">{numField('max_speaker_slots', 'Max speaker slots per meeting', 'Upper cap for extra-slot requests. Meetings start with 1.')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{numField('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
+        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+      </div>
+
+      {/* Speech timer */}
+      <div className={`${cardCls} p-5 space-y-5`}>
+        <div>
+          <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Speech Timer</h3>
+          <p className="text-xs text-slate-500">Club-wide green / yellow / red times and grace period for the <Link href="/timer" className="text-maroon-600 dark:text-maroon-400 underline">timer page</Link>. Shown as mm:ss; grace is the extra time allowed after red.</p>
+        </div>
+        {TIMER_MODE_META.map(({ key, label, hint }) => (
+          <div key={key} className="space-y-2">
+            <p className={labelCls}>{label} <span className="text-slate-400 normal-case font-medium">· {hint}</span></p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-0.5">
+              {(['green', 'yellow', 'red', 'grace'] as const).map(field => (
+                <div key={field} className="flex items-center justify-between gap-2">
+                  <span className="text-sm capitalize text-slate-700 dark:text-slate-300">{field}</span>
+                  <TimerMMSS value={timerModes[key][field]} onChange={s => setTimerThreshold(key, field, s)} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
         <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
     </div>
