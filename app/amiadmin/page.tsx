@@ -141,6 +141,15 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   });
   const [saving, setSaving] = useState(false);
 
+  // For a brand-new meeting, seed the role mix from the club-wide default.
+  useEffect(() => {
+    if (initial?.id) return;
+    supabase.from('agenda_config').select('default_disabled_roles').single().then(({ data }) => {
+      const defaults = (data?.default_disabled_roles ?? []) as RoleKey[];
+      if (defaults.length) setForm(f => ({ ...f, disabled_roles: defaults }));
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function set(field: keyof MeetingFormData, value: string) {
     setForm(f => {
       const next = { ...f, [field]: value };
@@ -661,6 +670,7 @@ function AgendaSettingsPanel() {
     max_speaker_slots: 2,
   });
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 3, startTime: '19:30', endTime: '21:00' });
+  const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -669,9 +679,16 @@ function AgendaSettingsPanel() {
       if (data) {
         setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2 });
         setSchedule({ weekday: data.schedule_weekday ?? 3, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
+        setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
       }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleDefaultRole(key: RoleKey) {
+    setDefaultDisabledRoles(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  }
 
   async function save() {
     setSaving(true);
@@ -680,6 +697,7 @@ function AgendaSettingsPanel() {
       schedule_weekday: schedule.weekday,
       schedule_start_time: schedule.startTime,
       schedule_end_time: schedule.endTime,
+      default_disabled_roles: defaultDisabledRoles,
       updated_at: new Date().toISOString(),
     });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
@@ -723,6 +741,26 @@ function AgendaSettingsPanel() {
             <div>
               <p className={labelCls}>Default end time</p>
               <TimePicker value={schedule.endTime} onChange={v => setSchedule(s => ({ ...s, endTime: v }))} />
+            </div>
+          </div>
+          <div>
+            <p className={labelCls}>Default roles for new meetings</p>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 mb-1.5">New meetings (manual or auto-scheduled) open with these categories on. Tap to enable/disable. Greyed = off by default.</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TOGGLEABLE_ROLES.map(({ key, label }) => {
+                const enabled = !defaultDisabledRoles.includes(key);
+                return (
+                  <button key={key} type="button" onClick={() => toggleDefaultRole(key)}
+                    aria-pressed={enabled}
+                    className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 ${
+                      enabled
+                        ? 'border-emerald-300 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400'
+                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-600 line-through'
+                    }`}>
+                    {enabled ? '✓' : '✕'} {label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

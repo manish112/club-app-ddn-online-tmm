@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient();
 
   const [{ data: cfg }, { data: allMeetings }] = await Promise.all([
-    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time').single(),
+    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles').single(),
     supabase.from('meetings').select('id, number, date, start_time, end_time').order('number', { ascending: false }),
   ]);
 
@@ -45,6 +45,9 @@ export async function GET(req: NextRequest) {
   const weekday   = cfg.schedule_weekday ?? 3;
   const startTime = cfg.schedule_start_time ?? '19:30';
   const endTime   = cfg.schedule_end_time ?? '21:00';
+  const disabledRoles: string[] = cfg.default_disabled_roles ?? [];
+  // Mirror the admin form: a Speakathon = Table Topics off while speeches stay on.
+  const meetingType = disabledRoles.includes('ttm') && !disabledRoles.includes('speaker') ? 'speakathon' : 'regular';
   const maxNumber = allMeetings.reduce((max, m) => Math.max(max, m.number), 0);
   const startFrom = upcoming.length > 0
     ? new Date(upcoming[upcoming.length - 1].date + 'T00:00:00')
@@ -62,9 +65,10 @@ export async function GET(req: NextRequest) {
       start_time: startTime + ':00',
       end_time: endTime + ':00',
       theme: 'TBD',
-      meeting_type: 'regular',
+      meeting_type: meetingType,
       speaker_slots: 1,
       evaluator_slots: 1,
+      disabled_roles: disabledRoles,
     });
   }
 
