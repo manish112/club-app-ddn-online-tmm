@@ -190,6 +190,9 @@ export default function TimerPage() {
   // Grace countdown shown while in the red window (still within grace).
   const graceLeft = stage === 'red' ? Math.ceil(t.red + t.grace - elapsed) : 0;
   const ss = stage === 'under' && running ? STARTED_STYLE : STAGE_STYLE[stage];
+  // Paused = halted mid-count but not stopped/reset; reveal the elapsed time too.
+  const paused = !running && !stopped && elapsed > 0;
+  const showClock = showTime || stopped || paused;
 
   return (
     <main className="min-h-[calc(100vh-2.25rem)] bg-slate-50 dark:bg-slate-950">
@@ -219,7 +222,7 @@ export default function TimerPage() {
 
         {/* Big timer surface */}
         <div className={`flex flex-col items-center justify-center min-h-[16rem] rounded-3xl border-2 ${ss.border} ${ss.bg} ${ss.text} px-6 py-10 text-center shadow-lg transition-colors duration-300`}>
-          {(showTime || stopped) && (
+          {showClock && (
             <div className="flex items-center justify-center gap-2 mb-3">
               <span className={`inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full ${ss.chip}`}>
                 {running && (
@@ -233,7 +236,7 @@ export default function TimerPage() {
             </div>
           )}
           <div className="w-full text-center leading-none">
-            {showTime || stopped ? (
+            {showClock ? (
               <span className="font-mono font-bold tabular-nums text-7xl sm:text-8xl">
                 {formatClock(elapsed)}
               </span>
@@ -246,12 +249,14 @@ export default function TimerPage() {
           <div className={`w-full text-center mt-4 h-5 text-sm font-medium ${ss.sub}`}>
             {stopped
               ? `⏱ Final time: ${formatClock(elapsed)}`
-              : stage === 'over'
-                ? '⛔ Over time — please conclude'
-                : stage === 'red'
-                  ? `Grace: ${formatClock(graceLeft)} left`
-                  : running
-                    ? ''
+              : paused
+                ? `⏸ Paused at ${formatClock(elapsed)}`
+                : stage === 'over'
+                  ? '⛔ Over time — please conclude'
+                  : stage === 'red'
+                    ? `Grace: ${formatClock(graceLeft)} left`
+                    : running
+                      ? ''
                     : `Green ${formatClock(t.green)} · Yellow ${formatClock(t.yellow)} · Red ${formatClock(t.red)}`}
           </div>
         </div>
