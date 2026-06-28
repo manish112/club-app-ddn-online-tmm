@@ -357,7 +357,7 @@ export default function Home() {
                     }
                     deviceId={deviceId}
                     ballot={ballots.get(m.id)}
-                    isAdmin={false}
+                    isAdmin={currentMember?.is_admin === true}
                     hideWhatsApp={meetingTab !== 'next'}
                     lockBeforeMins={lockBeforeMins}
                     maxSpeakerSlots={maxSpeakerSlots}

@@ -78,6 +78,12 @@ export function RoleSlot({
     if (!claim || !canRelease || busy) return;
     setBusy(true);
     await supabase.from('role_claims').delete().eq('id', claim.id);
+    // The theme belongs to the Toastmaster of the Day — when that role is given
+    // up (or removed by an admin), reset the theme to TBD so it isn't left
+    // pointing at a TMoD who's no longer on the meeting.
+    if (roleKey === 'tmod') {
+      await supabase.from('meetings').update({ theme: 'TBD' }).eq('id', meetingId);
+    }
     setBusy(false);
     notifyRole(claim.member_id, meetingNumber, meetingDate, roleKey, 'released');
     onChanged();

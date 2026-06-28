@@ -70,6 +70,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   }
   const isTMoD = !!memberId &&
     meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
+  // Admins can edit the theme on any meeting (even locked/past); the TMoD can
+  // edit their own meeting's theme.
+  const canEditTheme = isTMoD || isAdmin;
 
   async function saveTheme() {
     setSavingTheme(true);
@@ -251,7 +254,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       </div>
 
       {/* ── Theme band ── */}
-      {(meeting.theme || isTMoD) && (
+      {(meeting.theme || canEditTheme) && (
         <div className={`px-4 py-2.5 border-b flex items-center gap-3
           ${past
             ? 'bg-slate-50 dark:bg-slate-900 border-slate-100 dark:border-slate-800'
@@ -291,7 +294,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                 ) : (
                   <p className="text-xs text-slate-400 italic">No theme set yet</p>
                 )}
-                {isTMoD && (
+                {canEditTheme && (
                   <button onClick={() => setEditingTheme(true)}
                     className="text-sm min-h-[32px] min-w-[32px] shrink-0 opacity-50 hover:opacity-100 transition-opacity"
                     title="Edit theme">✏️</button>
