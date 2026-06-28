@@ -10,14 +10,22 @@ import {
 
 const OVERRIDE_KEY = 'tm_timer_overrides';
 const MUTE_KEY = 'tm_timer_muted';
+const SHOWTIME_KEY = 'tm_timer_showtime';
 
 // Per-stage visual treatment for the big timer surface.
-const STAGE_STYLE: Record<TimerStage, { bg: string; label: string; chip: string }> = {
-  under: { bg: 'bg-slate-800',                          label: 'Ready',     chip: 'bg-slate-600 text-slate-100' },
-  green: { bg: 'bg-emerald-600',                        label: 'Green',     chip: 'bg-emerald-800 text-emerald-50' },
-  yellow:{ bg: 'bg-amber-500',                          label: 'Yellow',    chip: 'bg-amber-700 text-amber-50' },
-  red:   { bg: 'bg-red-600',                            label: 'Red',       chip: 'bg-red-800 text-red-50' },
-  over:  { bg: 'bg-red-700 animate-[pulse_0.8s_ease-in-out_infinite]', label: 'Over time', chip: 'bg-black/40 text-white' },
+type StageStyle = { bg: string; text: string; sub: string; label: string; chip: string; border: string };
+const STAGE_STYLE: Record<TimerStage, StageStyle> = {
+  under: { bg: 'bg-slate-800',  text: 'text-white', sub: 'text-white/90', label: 'Ready',     chip: 'bg-slate-600 text-slate-100', border: 'border-transparent' },
+  green: { bg: 'bg-emerald-600', text: 'text-white', sub: 'text-white/90', label: 'Green',     chip: 'bg-emerald-800 text-emerald-50', border: 'border-transparent' },
+  yellow:{ bg: 'bg-amber-500',   text: 'text-white', sub: 'text-white/90', label: 'Yellow',    chip: 'bg-amber-700 text-amber-50', border: 'border-transparent' },
+  red:   { bg: 'bg-red-600',     text: 'text-white', sub: 'text-white/90', label: 'Red',       chip: 'bg-red-800 text-red-50', border: 'border-transparent' },
+  over:  { bg: 'bg-red-700 animate-[pulse_0.8s_ease-in-out_infinite]', text: 'text-white', sub: 'text-white/90', label: 'Over time', chip: 'bg-black/40 text-white', border: 'border-transparent' },
+};
+
+// Shown while the timer is running but has not yet reached the green threshold,
+// so starting the clock visibly changes the card (off-white, not idle grey).
+const STARTED_STYLE: StageStyle = {
+  bg: 'bg-stone-100', text: 'text-slate-900', sub: 'text-slate-500', label: 'Started', chip: 'bg-slate-200 text-slate-600', border: 'border-black',
 };
 
 function MMSSInput({ value, onChange }: { value: number; onChange: (secs: number) => void }) {
@@ -41,9 +49,11 @@ export default function TimerPage() {
   const [mode, setMode] = useState<TimerModeKey>('speech');
   const [showSettings, setShowSettings] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [showTime, setShowTime] = useState(false);
 
   // Timer state: elapsed = accumulated + (running ? now - startedAt : 0)
   const [running, setRunning] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const accumulatedRef = useRef(0);
   const startedAtRef = useRef(0);
@@ -57,6 +67,7 @@ export default function TimerPage() {
   // ── Load club defaults + local override + mute pref ─────────────────────────
   useEffect(() => {
     setMuted(localStorage.getItem(MUTE_KEY) === '1');
+    setShowTime(localStorage.getItem(SHOWTIME_KEY) === '1');
     let override: Partial<TimerModes> | null = null;
     try { override = JSON.parse(localStorage.getItem(OVERRIDE_KEY) || 'null'); } catch { /* ignore */ }
 
@@ -122,6 +133,7 @@ export default function TimerPage() {
   function start() {
     ensureAudio();
     startedAtRef.current = Date.now();
+    setStopped(false);
     setRunning(true);
   }
   function pause() {
@@ -129,10 +141,21 @@ export default function TimerPage() {
     setElapsed(accumulatedRef.current);
     setRunning(false);
   }
+  // Stop ends the timing and reveals the final elapsed time, even when the
+  // count-up is otherwise hidden.
+  function stop() {
+    if (running) {
+      accumulatedRef.current = accumulatedRef.current + (Date.now() - startedAtRef.current) / 1000;
+      setElapsed(accumulatedRef.current);
+    }
+    setRunning(false);
+    setStopped(true);
+  }
   function reset() {
     accumulatedRef.current = 0;
     setElapsed(0);
     setRunning(false);
+    setStopped(false);
     prevStageRef.current = 'under';
   }
   function changeMode(key: TimerModeKey) {
@@ -141,6 +164,9 @@ export default function TimerPage() {
   }
   function toggleMute() {
     setMuted(m => { localStorage.setItem(MUTE_KEY, m ? '0' : '1'); return !m; });
+  }
+  function toggleShowTime() {
+    setShowTime(v => { localStorage.setItem(SHOWTIME_KEY, v ? '0' : '1'); return !v; });
   }
 
   function updateThreshold(key: TimerModeKey, field: keyof TimerThresholds, secs: number) {
@@ -163,7 +189,7 @@ export default function TimerPage() {
 
   // Grace countdown shown while in the red window (still within grace).
   const graceLeft = stage === 'red' ? Math.ceil(t.red + t.grace - elapsed) : 0;
-  const ss = STAGE_STYLE[stage];
+  const ss = stage === 'under' && running ? STARTED_STYLE : STAGE_STYLE[stage];
 
   return (
     <main className="min-h-[calc(100vh-2.25rem)] bg-slate-50 dark:bg-slate-950">
@@ -192,35 +218,61 @@ export default function TimerPage() {
         </div>
 
         {/* Big timer surface */}
-        <div className={`rounded-3xl ${ss.bg} text-white px-6 py-10 text-center shadow-lg transition-colors duration-300`}>
-          <div className="flex items-center justify-center gap-2 mb-3">
-            <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full ${ss.chip}`}>
-              {ss.label}
-            </span>
+        <div className={`flex flex-col items-center justify-center min-h-[16rem] rounded-3xl border-2 ${ss.border} ${ss.bg} ${ss.text} px-6 py-10 text-center shadow-lg transition-colors duration-300`}>
+          {(showTime || stopped) && (
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span className={`inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full ${ss.chip}`}>
+                {running && (
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-current opacity-75 animate-ping" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-current" />
+                  </span>
+                )}
+                {ss.label}
+              </span>
+            </div>
+          )}
+          <div className="w-full text-center leading-none">
+            {showTime || stopped ? (
+              <span className="font-mono font-bold tabular-nums text-7xl sm:text-8xl">
+                {formatClock(elapsed)}
+              </span>
+            ) : (
+              <span className={`font-serif font-bold uppercase tracking-wide text-5xl sm:text-6xl ${running && stage !== 'over' ? 'animate-pulse' : ''}`}>
+                {ss.label}
+              </span>
+            )}
           </div>
-          <div className="font-mono font-bold tabular-nums leading-none text-7xl sm:text-8xl">
-            {formatClock(elapsed)}
-          </div>
-          <div className="mt-4 h-5 text-sm font-medium text-white/90">
-            {stage === 'over'
-              ? '⛔ Over time — please conclude'
-              : stage === 'red'
-                ? `Grace: ${formatClock(graceLeft)} left`
-                : `Green ${formatClock(t.green)} · Yellow ${formatClock(t.yellow)} · Red ${formatClock(t.red)}`}
+          <div className={`w-full text-center mt-4 h-5 text-sm font-medium ${ss.sub}`}>
+            {stopped
+              ? `⏱ Final time: ${formatClock(elapsed)}`
+              : stage === 'over'
+                ? '⛔ Over time — please conclude'
+                : stage === 'red'
+                  ? `Grace: ${formatClock(graceLeft)} left`
+                  : running
+                    ? ''
+                    : `Green ${formatClock(t.green)} · Yellow ${formatClock(t.yellow)} · Red ${formatClock(t.red)}`}
           </div>
         </div>
 
         {/* Controls */}
         <div className="grid grid-cols-3 gap-2 mt-4">
-          {!running ? (
+          {running ? (
+            <>
+              <button onClick={pause}
+                className="bg-slate-800 dark:bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold active:scale-95 transition-all">
+                Pause
+              </button>
+              <button onClick={stop}
+                className="bg-red-700 text-white rounded-xl py-3 text-sm font-semibold active:scale-95 transition-all">
+                Stop
+              </button>
+            </>
+          ) : (
             <button onClick={start}
               className="col-span-2 bg-gradient-to-r from-maroon-700 to-maroon-600 text-white rounded-xl py-3 text-sm font-semibold active:scale-95 transition-all">
               {elapsed > 0 ? 'Resume' : 'Start'}
-            </button>
-          ) : (
-            <button onClick={pause}
-              className="col-span-2 bg-slate-800 dark:bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold active:scale-95 transition-all">
-              Pause
             </button>
           )}
           <button onClick={reset}
@@ -234,6 +286,9 @@ export default function TimerPage() {
           <div className="flex items-center gap-3">
             <button onClick={toggleMute} className="text-slate-500 dark:text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400">
               {muted ? '🔇 Sound off' : '🔔 Sound on'}
+            </button>
+            <button onClick={toggleShowTime} className="text-slate-500 dark:text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400">
+              {showTime ? '🙈 Hide time' : '👁 Show time'}
             </button>
             <button onClick={toggleFullscreen} className="text-slate-500 dark:text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400">
               ⛶ Fullscreen
