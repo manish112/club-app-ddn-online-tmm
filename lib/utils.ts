@@ -447,16 +447,20 @@ export function buildAgendaSections(
     undefined, meeting.theme || 'Theme introduction', ' opens & introduces the theme'));         offset += 3;
   s1.push(r(false, 'TMoD', getName('tmod'),
     undefined, undefined, ' calls the General Evaluator', getName('ge')));                       offset += 1;
-  s1.push(r(false, 'General Evaluator', getName('ge'),
-    undefined, undefined, ' calls the role players one by one:'));
-
-  for (const { key, roleLabel, note } of [
+  const openingRoles = ([
     { key: 'timer'      as RoleKey, roleLabel: 'Timer',      note: undefined as string | undefined },
     { key: 'ah_counter' as RoleKey, roleLabel: 'Ah-Counter', note: undefined },
     { key: 'grammarian' as RoleKey, roleLabel: 'Grammarian', note: 'Introduces the Word of the Day & Idiom of the Day' },
     { key: 'harkmaster' as RoleKey, roleLabel: 'Harkmaster', note: undefined },
-  ]) {
-    s1.push(r(true, roleLabel, getName(key), '2–3 MIN', note, ' comes up & explains the role')); offset += 3;
+  ]).filter((rr) => isRoleEnabled(meeting, rr.key));
+
+  if (openingRoles.length > 0) {
+    s1.push(r(false, 'General Evaluator', getName('ge'),
+      undefined, undefined, ' calls the role players one by one:'));
+
+    for (const { key, roleLabel, note } of openingRoles) {
+      s1.push(r(true, roleLabel, getName(key), '2–3 MIN', note, ' comes up & explains the role')); offset += 3;
+    }
   }
 
   s1.push(r(false, 'General Evaluator', getName('ge'),
