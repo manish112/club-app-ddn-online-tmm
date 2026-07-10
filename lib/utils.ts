@@ -1,4 +1,4 @@
-import type { Meeting, MeetingWithClaims, Member, RoleKey } from './types';
+import type { Meeting, MeetingWithClaims, Member, RoleKey, SpeakerGroup } from './types';
 import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
@@ -6,6 +6,115 @@ import { ROLE_META, getMeetingRoles } from './types';
 export const APP_URL = 'https://dehradun-online-tm.vercel.app/';
 
 const TAG_ROLES: RoleKey[] = ['grammarian', 'ah_counter', 'timer', 'harkmaster'];
+
+// ── Speaker groups & speaking order ───────────────────────────────────────────
+// A speakathon splits speakers into named groups (heats) and an admin-arrangeable
+// speaking order. These helpers give a single source of truth for that layout,
+// shared by the meeting card, judging page, WhatsApp copy and the agenda.
+
+export interface SpeakerBucket { group: SpeakerGroup | null; slots: number[] }
+
+// Which group a speaker slot belongs to (null = unassigned / no valid group).
+export function groupIdForSlot(meeting: Meeting, slot: number): string | null {
+  const ids = new Set((meeting.speaker_groups ?? []).map((g) => g.id));
+  const gid = meeting.pair_groups?.[String(slot)];
+  return gid && ids.has(gid) ? gid : null;
+}
+
+// All speaker slots (1..speaker_slots) in the saved speaking order; slots missing
+// from pair_order are appended by natural index.
+export function orderedSpeakerSlots(meeting: Meeting): number[] {
+  const all = Array.from({ length: meeting.speaker_slots }, (_, i) => i + 1);
+  const pref = (meeting.pair_order ?? []).filter((s) => all.includes(s));
+  return [...pref, ...all.filter((s) => !pref.includes(s))];
+}
+
+// Speakers grouped by heat, each group's slots in speaking order. When no groups
+// are defined, returns a single unnamed bucket with all slots in order.
+export function speakerBuckets(meeting: Meeting): SpeakerBucket[] {
+  const groups = meeting.speaker_groups ?? [];
+  const ordered = orderedSpeakerSlots(meeting);
+  if (groups.length === 0) return [{ group: null, slots: ordered }];
+  const buckets: SpeakerBucket[] = [];
+  for (const g of groups) buckets.push({ group: g, slots: ordered.filter((s) => groupIdForSlot(meeting, s) === g.id) });
+  const unassigned = ordered.filter((s) => groupIdForSlot(meeting, s) === null);
+  if (unassigned.length) buckets.push({ group: null, slots: unassigned });
+  return buckets;
+}
+
+// True when the meeting is a grouped speakathon (speakers split into named heats).
+export function hasSpeakerGroups(meeting: Meeting): boolean {
+  return isRoleEnabled(meeting, 'speaker') && (meeting.speaker_groups?.length ?? 0) > 0;
+}
+
+// Shared WhatsApp "role player" section. For a grouped speakathon, speakers are
+// listed by heat in speaking order (numbered per group, with their speech details
+// and paired evaluator); everyone else follows as normal intro blocks.
+function buildRolePlayerBlocks(meeting: MeetingWithClaims, membersById: Map<string, Member>): string[] {
+  const blocks: string[] = [];
+  const grouped = hasSpeakerGroups(meeting);
+  const claimFor = (roleKey: RoleKey, slot: number) =>
+    meeting.role_claims.find((c) => c.role_key === roleKey && c.slot_index === slot);
+
+  if (grouped) {
+    blocks.push('🎙️ *Prepared Speeches*');
+    blocks.push('');
+    for (const bucket of speakerBuckets(meeting)) {
+      const rows: string[] = [];
+      let n = 0;
+      for (const slot of bucket.slots) {
+        const sc = claimFor('speaker', slot);
+        const speaker = sc && membersById.get(sc.member_id);
+        if (!sc || !speaker) continue;
+        n += 1;
+        const meta = [sc.path, sc.speech_level ? `L${sc.speech_level}` : null, sc.project].filter(Boolean).join(' · ');
+        const title = sc.speech_title ? ` — "${sc.speech_title}"` : '';
+        rows.push(`${n}. 🎙️ TM ${speaker.display_name}${title}${meta ? ` (${meta})` : ''}`);
+        const ec = claimFor('evaluator', slot);
+        const evaluator = ec && membersById.get(ec.member_id);
+        if (evaluator) rows.push(`   ⚖️ Evaluator: TM ${evaluator.display_name}`);
+      }
+      if (rows.length) {
+        blocks.push(`*${bucket.group ? bucket.group.name : 'Unassigned'}*`);
+        blocks.push(...rows);
+        blocks.push('');
+      }
+    }
+  }
+
+  // Speaker & evaluator are folded into the grouped section above for a speakathon.
+  const roleOrder = ([
+    ...(grouped ? [] : [
+      { key: 'speaker'   as RoleKey, slots: meeting.speaker_slots },
+      { key: 'evaluator' as RoleKey, slots: meeting.evaluator_slots },
+    ]),
+    { key: 'jury'       as RoleKey, slots: meeting.jury_slots ?? 0 },
+    { key: 'tmod'       as RoleKey, slots: 1 },
+    { key: 'ttm'        as RoleKey, slots: 1 },
+    { key: 'ge'         as RoleKey, slots: 1 },
+    { key: 'grammarian' as RoleKey, slots: 1 },
+    { key: 'ah_counter' as RoleKey, slots: 1 },
+    { key: 'timer'      as RoleKey, slots: 1 },
+    { key: 'harkmaster' as RoleKey, slots: 1 },
+  ] as { key: RoleKey; slots: number }[]).filter((r) => isRoleEnabled(meeting, r.key));
+
+  for (const { key, slots } of roleOrder) {
+    const meta = ROLE_META[key];
+    for (let slot = 1; slot <= slots; slot++) {
+      const claim = claimFor(key, slot);
+      if (!claim) continue;
+      const member = membersById.get(claim.member_id);
+      if (!member) continue;
+      const label = slots > 1
+        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
+        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
+      blocks.push(label);
+      if (member.introduction) blocks.push(member.introduction);
+      blocks.push('');
+    }
+  }
+  return blocks;
+}
 
 export function roleClaimBlocked(
   targetRole: RoleKey,
@@ -206,33 +315,65 @@ export function buildWhatsAppAgenda(
   }
   lines.push('');
 
-  // Prepared Speakers
+  // Speech details for one speaker claim, as a " | "-joined line.
+  const speakerDetail = (slot: number): string | null => {
+    const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === slot);
+    if (!claim) return null;
+    const details: string[] = [];
+    if (claim.path)         details.push(`Path: ${claim.path}`);
+    if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
+    if (claim.project)      details.push(`Project: ${claim.project}`);
+    if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
+    const { min: tMin, max: tMax } = speechTimeRange(claim);
+    details.push(`Time: ${tMin}–${tMax} min`);
+    return details.join(' | ');
+  };
+
+  const grouped = hasSpeakerGroups(meeting);
+
+  // Prepared Speakers — grouped by heat (in speaking order) for a speakathon,
+  // otherwise a flat 1..N list. Evaluators pair inline when grouped.
   if (isRoleEnabled(meeting, 'speaker')) {
-    lines.push('🎙️ Prepared Speakers:');
-    for (let i = 1; i <= meeting.speaker_slots; i++) {
-      const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === i);
-      const name = claim ? (membersById.get(claim.member_id) ? `TM ${membersById.get(claim.member_id)!.display_name}` : '') : '';
-      lines.push(` ${i}. ${name}`);
-      if (claim) {
-        const details: string[] = [];
-        if (claim.path)         details.push(`Path: ${claim.path}`);
-        if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
-        if (claim.project)      details.push(`Project: ${claim.project}`);
-        if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
-        const { min: tMin, max: tMax } = speechTimeRange(claim);
-        details.push(`Time: ${tMin}–${tMax} min`);
-        if (details.length > 0) lines.push(`    ${details.join(' | ')}`);
+    if (grouped) {
+      lines.push('🎙️ Prepared Speeches (by group):');
+      for (const bucket of speakerBuckets(meeting)) {
+        if (bucket.slots.length === 0) continue;
+        lines.push(`*${bucket.group ? bucket.group.name : 'Unassigned'}*`);
+        let n = 0;
+        for (const slot of bucket.slots) {
+          n += 1;
+          lines.push(` ${n}. ${getClaimName('speaker', slot)}`);
+          const detail = speakerDetail(slot);
+          if (detail) lines.push(`    ${detail}`);
+          if (isRoleEnabled(meeting, 'evaluator')) lines.push(`    ⚖️ Evaluator: ${getClaimName('evaluator', slot)}`);
+        }
       }
+      lines.push('');
+    } else {
+      lines.push('🎙️ Prepared Speakers:');
+      for (let i = 1; i <= meeting.speaker_slots; i++) {
+        lines.push(` ${i}. ${getClaimName('speaker', i)}`);
+        const detail = speakerDetail(i);
+        if (detail) lines.push(`    ${detail}`);
+      }
+      lines.push('');
+    }
+  }
+
+  // Evaluators — grouped meetings already show them paired above.
+  if (!grouped && isRoleEnabled(meeting, 'evaluator')) {
+    lines.push('⚖️ Evaluators:');
+    for (let i = 1; i <= meeting.evaluator_slots; i++) {
+      lines.push(` ${i}. ${getClaimName('evaluator', i)}`);
     }
     lines.push('');
   }
 
-  // Evaluators
-  if (isRoleEnabled(meeting, 'evaluator')) {
-    lines.push('⚖️ Evaluators:');
-    for (let i = 1; i <= meeting.evaluator_slots; i++) {
-      const name = getClaimName('evaluator', i);
-      lines.push(` ${i}. ${name}`);
+  // Jury (speakathon judges)
+  if ((meeting.jury_slots ?? 0) > 0) {
+    lines.push('🧑‍⚖️ Jury:');
+    for (let i = 1; i <= meeting.jury_slots; i++) {
+      lines.push(` ${i}. ${getClaimName('jury', i)}`);
     }
     lines.push('');
   }
@@ -259,37 +400,8 @@ export function buildWhatsAppAgenda(
     lines.push(`Claim your role on the app: ${base}/`);
   }
 
-  // Introductions section
-  const roleOrder: { key: RoleKey; slots: number }[] = ([
-    { key: 'speaker'    as RoleKey, slots: meeting.speaker_slots },
-    { key: 'evaluator'  as RoleKey, slots: meeting.evaluator_slots },
-    { key: 'tmod'       as RoleKey, slots: 1 },
-    { key: 'ttm'        as RoleKey, slots: 1 },
-    { key: 'ge'         as RoleKey, slots: 1 },
-    { key: 'grammarian' as RoleKey, slots: 1 },
-    { key: 'ah_counter' as RoleKey, slots: 1 },
-    { key: 'timer'      as RoleKey, slots: 1 },
-    { key: 'harkmaster' as RoleKey, slots: 1 },
-  ]).filter((r) => isRoleEnabled(meeting, r.key));
-
-  const introBlocks: string[] = [];
-  for (const { key, slots } of roleOrder) {
-    const meta = ROLE_META[key];
-    for (let slot = 1; slot <= slots; slot++) {
-      const claim = meeting.role_claims.find((c) => c.role_key === key && c.slot_index === slot);
-      if (!claim) continue;
-      const member = membersById.get(claim.member_id);
-      if (!member) continue;
-
-      const label = slots > 1
-        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
-        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
-      introBlocks.push(label);
-
-      if (member.introduction) introBlocks.push(member.introduction);
-      introBlocks.push('');
-    }
-  }
+  // Introductions section — grouped by heat for a speakathon.
+  const introBlocks = buildRolePlayerBlocks(meeting, membersById);
 
   if (includeIntros && introBlocks.length > 0) {
     lines.push('');
@@ -306,40 +418,11 @@ export function buildWhatsAppIntros(
   meeting: MeetingWithClaims,
   membersById: Map<string, Member>
 ): string {
-  const roleOrder: { key: RoleKey; slots: number }[] = ([
-    { key: 'speaker'    as RoleKey, slots: meeting.speaker_slots },
-    { key: 'evaluator'  as RoleKey, slots: meeting.evaluator_slots },
-    { key: 'tmod'       as RoleKey, slots: 1 },
-    { key: 'ttm'        as RoleKey, slots: 1 },
-    { key: 'ge'         as RoleKey, slots: 1 },
-    { key: 'grammarian' as RoleKey, slots: 1 },
-    { key: 'ah_counter' as RoleKey, slots: 1 },
-    { key: 'timer'      as RoleKey, slots: 1 },
-    { key: 'harkmaster' as RoleKey, slots: 1 },
-  ]).filter((r) => isRoleEnabled(meeting, r.key));
-
   const lines: string[] = [];
   lines.push('📋 Role Player Introductions:');
   lines.push(`Dehradun Online Toastmasters Meeting #${meeting.number}`);
   lines.push('');
-
-  for (const { key, slots } of roleOrder) {
-    const meta = ROLE_META[key];
-    for (let slot = 1; slot <= slots; slot++) {
-      const claim = meeting.role_claims.find((c) => c.role_key === key && c.slot_index === slot);
-      if (!claim) continue;
-      const member = membersById.get(claim.member_id);
-      if (!member) continue;
-
-      const label = slots > 1
-        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
-        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
-      lines.push(label);
-      if (member.introduction) lines.push(member.introduction);
-      lines.push('');
-    }
-  }
-
+  lines.push(...buildRolePlayerBlocks(meeting, membersById));
   return lines.join('\n');
 }
 
@@ -471,31 +554,44 @@ export function buildAgendaSections(
   // ── Section 2: Prepared Speeches ─────────────────────────────────────────
   const s2speeches: AgendaRow[] = [];
 
-  for (let i = 1; isRoleEnabled(meeting, 'speaker') && i <= meeting.speaker_slots; i++) {
-    s2speeches.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
-      "Shares the speaker's project & evaluation criteria", ` calls Evaluator ${i}`, getName('evaluator', i))); offset += 1;
+  // Speakers are walked by heat and in speaking order (numbered per group); a
+  // grouped speakathon gets a heading row before each group's speeches.
+  const grouped = hasSpeakerGroups(meeting);
+  if (isRoleEnabled(meeting, 'speaker')) {
+    for (const bucket of speakerBuckets(meeting)) {
+      if (bucket.slots.length === 0) continue;
+      if (grouped) {
+        s2speeches.push(r(false, `▸ ${bucket.group ? bucket.group.name : 'Unassigned'}`));
+      }
+      let n = 0;
+      for (const slot of bucket.slots) {
+        n += 1;
+        s2speeches.push(r(false, 'TMoD', getName('tmod'), '1 MIN',
+          "Shares the speaker's project & evaluation criteria", ` calls Evaluator ${n}`, getName('evaluator', slot))); offset += 1;
 
-    const spkClaim = meeting.role_claims.find(
-      (c) => c.role_key === 'speaker' && c.slot_index === i
-    );
-    const spkName  = spkClaim ? (membersById.get(spkClaim.member_id)?.display_name ?? '') : '';
-    const { min: spkMin, max: spkMax } = speechTimeRange(spkClaim, config.l1SpeechMins, config.otherSpeechMins);
-    const durLabel = `${spkMin}–${spkMax} MIN`;
-    const spkMins  = spkMax;
+        const spkClaim = meeting.role_claims.find(
+          (c) => c.role_key === 'speaker' && c.slot_index === slot
+        );
+        const spkName  = spkClaim ? (membersById.get(spkClaim.member_id)?.display_name ?? '') : '';
+        const { min: spkMin, max: spkMax } = speechTimeRange(spkClaim, config.l1SpeechMins, config.otherSpeechMins);
+        const durLabel = `${spkMin}–${spkMax} MIN`;
+        const spkMins  = spkMax;
 
-    let spkNote: string | undefined;
-    if (spkClaim) {
-      const meta: string[] = [];
-      if (spkClaim.path)         meta.push(spkClaim.path);
-      if (spkClaim.speech_level) meta.push(`L${spkClaim.speech_level}`);
-      if (spkClaim.project)      meta.push(spkClaim.project);
-      const metaStr = meta.join(' · ');
-      if (spkClaim.speech_title && metaStr) spkNote = `"${spkClaim.speech_title}" — ${metaStr}`;
-      else if (spkClaim.speech_title)       spkNote = `"${spkClaim.speech_title}"`;
-      else if (metaStr)                     spkNote = metaStr;
+        let spkNote: string | undefined;
+        if (spkClaim) {
+          const meta: string[] = [];
+          if (spkClaim.path)         meta.push(spkClaim.path);
+          if (spkClaim.speech_level) meta.push(`L${spkClaim.speech_level}`);
+          if (spkClaim.project)      meta.push(spkClaim.project);
+          const metaStr = meta.join(' · ');
+          if (spkClaim.speech_title && metaStr) spkNote = `"${spkClaim.speech_title}" — ${metaStr}`;
+          else if (spkClaim.speech_title)       spkNote = `"${spkClaim.speech_title}"`;
+          else if (metaStr)                     spkNote = metaStr;
+        }
+
+        s2speeches.push(r(false, 'TMoD', getName('tmod'), durLabel, spkNote, ` calls Speaker ${n}`, spkName)); offset += spkMins;
+      }
     }
-
-    s2speeches.push(r(false, 'TMoD', getName('tmod'), durLabel, spkNote, ` calls Speaker ${i}`, spkName)); offset += spkMins;
   }
 
   // ── Section 2: Table Topics ───────────────────────────────────────────────
