@@ -7,7 +7,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
-  DeviceCapture, RoleKey,
+  DeviceCapture, RoleKey, SpeakerGroup,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
 import {
@@ -130,8 +130,14 @@ interface MeetingFormData {
   number: string; date: string; start_time: string; end_time: string;
   theme: string; meeting_type: MeetingType; speaker_slots: string; evaluator_slots: string;
   disabled_roles: RoleKey[];
+  jury_slots: string;
+  speaker_groups: SpeakerGroup[];
+  pair_groups: Record<string, string>;
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [] };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {} };
+
+const newGroupId = () =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingFormData & { id: string }>; onSave: () => void; onCancel: () => void }) {
   const supabase = createClient();
@@ -142,6 +148,9 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     speaker_slots: String(initial?.speaker_slots ?? 1),
     evaluator_slots: String(initial?.evaluator_slots ?? 1),
     disabled_roles: initial?.disabled_roles ?? [],
+    jury_slots: String(initial?.jury_slots ?? 0),
+    speaker_groups: initial?.speaker_groups ?? [],
+    pair_groups: initial?.pair_groups ?? {},
   });
   const [saving, setSaving] = useState(false);
 
@@ -174,10 +183,32 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   // Quick presets that set the disabled-role mix (and sensible slot counts).
   function applyPreset(preset: 'regular' | 'speakathon' | 'table_topics') {
     setForm(f => {
-      if (preset === 'speakathon') return { ...f, disabled_roles: ['ttm'], speaker_slots: '4', evaluator_slots: '4' };
-      if (preset === 'table_topics') return { ...f, disabled_roles: ['speaker', 'evaluator'] };
-      return { ...f, disabled_roles: [] };
+      if (preset === 'speakathon') return {
+        ...f, disabled_roles: ['ttm'], speaker_slots: '4', evaluator_slots: '4',
+        jury_slots: f.jury_slots === '0' ? '3' : f.jury_slots,
+        speaker_groups: f.speaker_groups.length ? f.speaker_groups : [
+          { id: newGroupId(), name: 'Group A' },
+          { id: newGroupId(), name: 'Group B' },
+        ],
+      };
+      if (preset === 'table_topics') return { ...f, disabled_roles: ['speaker', 'evaluator'], jury_slots: '0', speaker_groups: [], pair_groups: {} };
+      return { ...f, disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {} };
     });
+  }
+
+  function addGroup() {
+    setForm(f => ({ ...f, speaker_groups: [...f.speaker_groups, { id: newGroupId(), name: `Group ${String.fromCharCode(65 + f.speaker_groups.length)}` }] }));
+  }
+  function renameGroup(id: string, name: string) {
+    setForm(f => ({ ...f, speaker_groups: f.speaker_groups.map(g => g.id === id ? { ...g, name } : g) }));
+  }
+  function removeGroup(id: string) {
+    setForm(f => ({
+      ...f,
+      speaker_groups: f.speaker_groups.filter(g => g.id !== id),
+      // Drop any pair assignments pointing at the removed group.
+      pair_groups: Object.fromEntries(Object.entries(f.pair_groups).filter(([, gid]) => gid !== id)),
+    }));
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -186,9 +217,25 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     // Keep the legacy meeting_type label in sync: a Speakathon = Table Topics off
     // while prepared speeches stay on.
     const meeting_type: MeetingType = disabled.includes('ttm') && !disabled.includes('speaker') ? 'speakathon' : 'regular';
-    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: parseInt(form.speaker_slots), evaluator_slots: parseInt(form.evaluator_slots), disabled_roles: disabled };
-    if (initial?.id) await supabase.from('meetings').update(payload).eq('id', initial.id);
-    else await supabase.from('meetings').insert(payload);
+    const speakerSlots = parseInt(form.speaker_slots);
+    // Prune pair→group entries whose group was removed or whose slot no longer exists.
+    const validGroupIds = new Set(form.speaker_groups.map(g => g.id));
+    const pair_groups = Object.fromEntries(
+      Object.entries(form.pair_groups).filter(([slot, gid]) =>
+        validGroupIds.has(gid) && Number(slot) >= 1 && Number(slot) <= speakerSlots)
+    );
+    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
+    if (initial?.id) {
+      await supabase.from('meetings').update(payload).eq('id', initial.id);
+      // Reducing the pair count leaves speaker/evaluator claims stranded beyond the
+      // new range; delete them so they don't linger (e.g. on the judging page).
+      await supabase.from('role_claims').delete()
+        .eq('meeting_id', initial.id)
+        .in('role_key', ['speaker', 'evaluator'])
+        .gt('slot_index', speakerSlots);
+    } else {
+      await supabase.from('meetings').insert(payload);
+    }
     setSaving(false); onSave();
   }
 
@@ -242,6 +289,36 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
         <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Each speaker is paired with one evaluator</p>
         <input type="number" min={1} max={20} value={form.speaker_slots} onChange={e => set('speaker_slots', e.target.value)} className={`${inputCls} w-24`} />
       </label>
+      {!form.disabled_roles.includes('speaker') && (
+      <label>
+        <span className={labelCls}>Jury seats</span>
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Judges are assigned by an admin only (0 = no jury)</p>
+        <input type="number" min={0} max={20} value={form.jury_slots} onChange={e => set('jury_slots', e.target.value)} className={`${inputCls} w-24`} />
+      </label>
+      )}
+      {!form.disabled_roles.includes('speaker') && (
+      <div>
+        <span className={labelCls}>Speaker groups</span>
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1.5">Named heats for a speakathon. Assign each speaker+evaluator pair to a group on the meeting card.</p>
+        <div className="space-y-1.5">
+          {form.speaker_groups.map((g) => (
+            <div key={g.id} className="flex items-center gap-2">
+              <input type="text" value={g.name} onChange={e => renameGroup(g.id, e.target.value)}
+                placeholder="Group name" maxLength={40} className={`${inputCls} flex-1`} />
+              <button type="button" onClick={() => removeGroup(g.id)}
+                className="shrink-0 text-slate-400 hover:text-red-500 dark:hover:text-red-400 px-2 py-1.5 text-sm"
+                aria-label={`Remove ${g.name}`}>✕</button>
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={addGroup}
+          className="mt-1.5 text-[11px] font-semibold text-maroon-600 dark:text-maroon-400
+                     border border-dashed border-maroon-300 dark:border-maroon-800/60
+                     hover:bg-maroon-50 dark:hover:bg-maroon-950/20 rounded-lg px-3 py-1.5 transition-colors">
+          + Add group
+        </button>
+      </div>
+      )}
       <div className="flex gap-3 pt-1">
         <button type="submit" disabled={saving} className={`flex-1 ${primaryBtn}`}>{saving ? 'Saving…' : 'Save'}</button>
         <button type="button" onClick={onCancel} className={`flex-1 ${ghostBtn}`}>Cancel</button>
@@ -1430,16 +1507,22 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                     {i > 0 && <hr className="border-slate-200 dark:border-slate-800 mb-4" />}
                     {editingMeeting?.id === m.id ? (
                       <MeetingForm
-                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.speaker_slots), evaluator_slots: String(m.evaluator_slots), disabled_roles: m.disabled_roles ?? [] }}
+                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.speaker_slots), evaluator_slots: String(m.evaluator_slots), disabled_roles: m.disabled_roles ?? [], jury_slots: String(m.jury_slots ?? 0), speaker_groups: m.speaker_groups ?? [], pair_groups: m.pair_groups ?? {} }}
                         onSave={() => { setEditingMeeting(null); fetchAll(); }}
                         onCancel={() => setEditingMeeting(null)}
                       />
                     ) : (
                       <div>
                         <MeetingCard meeting={m} allMembers={members} memberId={currentMember.id} isAdmin={true} onChanged={fetchAll} />
-                        <div className="flex gap-1 mt-2 px-1">
+                        <div className="flex gap-1 mt-2 px-1 flex-wrap">
                           <button onClick={() => setEditingMeeting(m)} className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">Edit meeting</button>
                           <button onClick={() => deleteMeeting(m.id)} className="text-xs text-slate-400 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">Delete</button>
+                          {(m.jury_slots ?? 0) > 0 && (
+                            <>
+                              <Link href={`/judge/${m.id}`} className="text-xs text-maroon-600 dark:text-maroon-400 hover:text-maroon-800 dark:hover:text-maroon-300 px-3 py-1.5 rounded-lg hover:bg-maroon-50 dark:hover:bg-maroon-950/20 transition-colors">🧑‍⚖️ Judge page</Link>
+                              <Link href={`/contest/${m.id}`} className="text-xs text-maroon-600 dark:text-maroon-400 hover:text-maroon-800 dark:hover:text-maroon-300 px-3 py-1.5 rounded-lg hover:bg-maroon-50 dark:hover:bg-maroon-950/20 transition-colors">🏆 Results &amp; compute</Link>
+                            </>
+                          )}
                         </div>
                         {showVoting && <VotingControls meeting={m} ballot={ballot} allMembers={members} onChanged={fetchAll} />}
                       </div>

@@ -33,6 +33,12 @@ create table if not exists meetings (
   speaker_slots   integer not null default 1,
   evaluator_slots integer not null default 2,
   disabled_roles  text[] not null default '{}',
+  jury_slots      integer not null default 0,          -- admin-assigned judges (speakathon)
+  speaker_groups  jsonb not null default '[]'::jsonb,  -- named heats: [{ id, name }]
+  pair_groups     jsonb not null default '{}'::jsonb,  -- speaker slot_index → group id
+  pair_order      jsonb not null default '[]'::jsonb,  -- speaking order: [slot_index, …]
+  contest_locked  boolean not null default false,      -- locks jury scoring when true
+  contest_reset_locked boolean not null default false,  -- disables the reset-scores action
   created_at      timestamptz not null default now()
 );
 
@@ -42,7 +48,7 @@ create table if not exists role_claims (
   role_key       text not null
                    check (role_key in (
                      'speaker','evaluator','tmod','ttm','ge',
-                     'grammarian','ah_counter','timer','harkmaster'
+                     'grammarian','ah_counter','timer','harkmaster','jury'
                    )),
   slot_index     integer not null default 1,
   member_id      uuid not null references members(id),
@@ -139,6 +145,32 @@ create index if not exists device_captures_created_at_idx on device_captures (cr
 create index if not exists device_captures_visitor_idx    on device_captures (visitor_id);
 create index if not exists device_captures_member_idx     on device_captures (member_id);
 
+-- Speakathon contest scoring (see migration 033).
+create table if not exists jury_scores (
+  id                   uuid primary key default gen_random_uuid(),
+  meeting_id           uuid not null references meetings(id) on delete cascade,
+  judge_member_id      uuid not null references members(id),
+  contestant_member_id uuid not null references members(id),
+  scores               jsonb   not null default '{}'::jsonb,  -- { rubricKey: points }
+  total                integer not null default 0,
+  updated_at           timestamptz not null default now(),
+  created_at           timestamptz not null default now(),
+  constraint jury_scores_unique unique (meeting_id, judge_member_id, contestant_member_id)
+);
+
+create table if not exists contest_results (
+  id                   uuid primary key default gen_random_uuid(),
+  meeting_id           uuid not null references meetings(id) on delete cascade,
+  contestant_member_id uuid not null references members(id),
+  item_avgs            jsonb   not null default '{}'::jsonb,  -- { rubricKey: avg }
+  final_score          numeric not null default 0,
+  rank                 integer,
+  judge_count          integer not null default 0,
+  revealed             boolean not null default false,
+  computed_at          timestamptz not null default now(),
+  constraint contest_results_unique unique (meeting_id, contestant_member_id)
+);
+
 -- ============================================================
 -- Row Level Security
 -- ============================================================
@@ -155,6 +187,8 @@ alter table guest_registrations enable row level security;
 alter table announcements       enable row level security;
 -- device_captures: RLS on with no anon policies — server-only (service role).
 alter table device_captures     enable row level security;
+alter table jury_scores         enable row level security;
+alter table contest_results     enable row level security;
 
 -- Public reads
 create policy "public read members"             on members             for select using (true);
@@ -202,6 +236,16 @@ create policy "anon delete guest_registrations" on guest_registrations for delet
 create policy "anon insert announcements" on announcements for insert with check (true);
 create policy "anon update announcements" on announcements for update  using (true);
 create policy "anon delete announcements" on announcements for delete  using (true);
+
+-- Contest scoring (public read + anon writes; UI gates visibility)
+create policy "public read jury_scores"     on jury_scores     for select using (true);
+create policy "anon insert jury_scores"     on jury_scores     for insert with check (true);
+create policy "anon update jury_scores"     on jury_scores     for update  using (true);
+create policy "anon delete jury_scores"     on jury_scores     for delete  using (true);
+create policy "public read contest_results" on contest_results for select using (true);
+create policy "anon insert contest_results" on contest_results for insert with check (true);
+create policy "anon update contest_results" on contest_results for update  using (true);
+create policy "anon delete contest_results" on contest_results for delete  using (true);
 
 -- ============================================================
 -- Functions (SECURITY DEFINER bypasses RLS for aggregates + admin actions)

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, RoleClaim, RoleKey } from '@/lib/types';
-import { LEVELS, PATHS, ROLE_META } from '@/lib/types';
+import { ASSIGN_ONLY_ROLES, LEVELS, PATHS, ROLE_META } from '@/lib/types';
 import { roleClaimBlocked, consecutiveRoleBlocked, speechTimeRange } from '@/lib/utils';
 
 interface Props {
@@ -44,14 +44,17 @@ export function RoleSlot({
   const meta = ROLE_META[roleKey];
 
   const isOwn = claim ? claim.member_id === memberId : false;
-  const canRelease = claim && (isOwn || isAdmin) && (!isLocked || isAdmin);
-
   const isGuest = memberId === 'guest';
-  const blockReason = (!claim && memberId && !isGuest && !isAdmin)
+  // Assign-only roles (e.g. Jury) can never be self-claimed — only an admin fills
+  // them, and only an admin can remove them (members can't drop themselves).
+  const assignOnly = ASSIGN_ONLY_ROLES.includes(roleKey);
+  const canRelease = claim && (isAdmin || (isOwn && !assignOnly)) && (!isLocked || isAdmin);
+
+  const blockReason = (!claim && memberId && !isGuest && !isAdmin && !assignOnly)
     ? roleClaimBlocked(roleKey, memberExistingRoles)
       ?? consecutiveRoleBlocked(roleKey, memberAdjacentRoles)
     : null;
-  const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && !blockReason;
+  const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && !blockReason && !assignOnly;
   const isMultiRole = memberExistingRoles.length > 0;
 
   const isSpeaker = roleKey === 'speaker';
@@ -232,6 +235,7 @@ export function RoleSlot({
             : busy ? 'Claiming…'
             : isAdmin ? '+ Assign'
             : canClaim ? '+ Claim'
+            : assignOnly ? <span className="italic text-[10px]">Admin assigns</span>
             : !memberId || isGuest ? 'Sign in to claim'
             : '—'}
         </p>
@@ -301,6 +305,7 @@ export function RoleSlot({
             : busy ? '…'
             : isAdmin ? '+ Assign'
             : canClaim ? '+ Claim'
+            : assignOnly ? 'Admin assigns'
             : '—'}
         </span>
       </div>
@@ -419,6 +424,18 @@ export function RoleSlot({
         <span className="text-base shrink-0">{meta.emoji}</span>
         <span className="text-sm text-slate-400 dark:text-slate-500 font-medium shrink-0">{meta.label}</span>
         <span className="ml-auto text-xs text-slate-300 dark:text-slate-600 italic">{blockReason}</span>
+      </div>
+    );
+  }
+
+  // Assign-only role (e.g. Jury) with no claim — members see a muted placeholder.
+  if (assignOnly) {
+    return (
+      <div className="flex items-center gap-2 py-2.5 px-3 rounded-xl border border-dashed
+                      border-slate-100 dark:border-slate-800 opacity-60">
+        <span className="text-base shrink-0">{meta.emoji}</span>
+        <span className="text-sm text-slate-400 dark:text-slate-500 font-medium shrink-0">{meta.label}</span>
+        <span className="ml-auto text-xs text-slate-300 dark:text-slate-600 italic">Admin assigns</span>
       </div>
     );
   }

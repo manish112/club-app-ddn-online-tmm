@@ -1,9 +1,9 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerSlotRequest } from '@/lib/types';
+import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
 import { getMeetingRoles, isRoleEnabled } from '@/lib/types';
-import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST } from '@/lib/utils';
+import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -100,8 +100,40 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // nothing left to request, so the button is hidden.
   const belowSpeakerCap = meeting.speaker_slots < maxSpeakerSlots;
   const canRequestSlot = !past && !locked && allSpeakerSlotsFull && belowSpeakerCap && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
+  const juryRoles      = roles.filter((r) => r.roleKey === 'jury');
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
+  const evaluatorEnabled = isRoleEnabled(meeting, 'evaluator');
+
+  // Speaker groups (heats): when defined, speakers + their paired evaluators are
+  // rendered grouped (in speaking order) instead of as two flat grids. Group
+  // membership is keyed by the speaker's slot index (speaker i pairs with
+  // evaluator i); the speaking order lives in meeting.pair_order.
+  const speakerGroups: SpeakerGroup[] = meeting.speaker_groups ?? [];
+  const hasGroups = hasSpeakerGroups(meeting);
+  const groupBuckets = hasGroups ? speakerBuckets(meeting) : [];
+
+  async function assignPairGroup(slotIndex: number, groupId: string) {
+    const next: Record<string, string> = { ...(meeting.pair_groups ?? {}) };
+    if (groupId) next[String(slotIndex)] = groupId;
+    else delete next[String(slotIndex)];
+    await supabase.from('meetings').update({ pair_groups: next }).eq('id', meeting.id);
+    onChanged();
+  }
+
+  // Move a speaker up/down within its group by swapping it with the nearest
+  // same-group neighbour in the global speaking order.
+  async function movePair(slotIndex: number, dir: -1 | 1) {
+    const gid = groupIdForSlot(meeting, slotIndex);
+    const order = orderedSpeakerSlots(meeting);
+    const idx = order.indexOf(slotIndex);
+    let j = idx + dir;
+    while (j >= 0 && j < order.length && groupIdForSlot(meeting, order[j]) !== gid) j += dir;
+    if (j < 0 || j >= order.length) return;
+    [order[idx], order[j]] = [order[j], order[idx]];
+    await supabase.from('meetings').update({ pair_order: order }).eq('id', meeting.id);
+    onChanged();
+  }
 
   // Date badge parts
   const dateObj   = new Date(meeting.date + 'T00:00:00');
@@ -308,8 +340,64 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       {/* ── Role sections ── */}
       <div className="p-4 space-y-5">
 
-        {/* Speakers — 2-column chip grid */}
-        {speakerRoles.length > 0 && (
+        {/* Speakers — grouped by heat when groups are defined, else a flat grid */}
+        {hasGroups ? (
+          groupBuckets.map(({ group, slots }) => (
+            slots.length === 0 && !isAdmin ? null : (
+            <section key={group?.id ?? 'unassigned'}>
+              <SectionLabel icon="🎙️" text={group ? group.name : 'Unassigned'} />
+              <div className="space-y-2 mt-2">
+                {slots.length === 0 ? (
+                  <p className="text-xs italic text-slate-300 dark:text-slate-600 px-1">No pairs in this group yet</p>
+                ) : slots.map((slot, i) => (
+                  <div key={slot} className="space-y-1.5 rounded-xl bg-slate-50/60 dark:bg-slate-800/30 p-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-maroon-600 dark:text-maroon-400">
+                        Speaker {i + 1}
+                      </span>
+                      {isAdmin && (
+                        <div className="ml-auto flex items-center gap-1">
+                          <button
+                            onClick={() => movePair(slot, -1)}
+                            disabled={i === 0}
+                            aria-label="Move up"
+                            className="w-6 h-6 rounded-lg text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400 hover:bg-white dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors text-xs"
+                          >▲</button>
+                          <button
+                            onClick={() => movePair(slot, 1)}
+                            disabled={i === slots.length - 1}
+                            aria-label="Move down"
+                            className="w-6 h-6 rounded-lg text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400 hover:bg-white dark:hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors text-xs"
+                          >▼</button>
+                          <select
+                            value={groupIdForSlot(meeting, slot) ?? ''}
+                            onChange={(e) => assignPairGroup(slot, e.target.value)}
+                            aria-label="Group"
+                            className="text-[11px] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1
+                                       bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300
+                                       focus:outline-none focus:ring-1 focus:ring-maroon-400"
+                          >
+                            <option value="">Unassigned</option>
+                            {speakerGroups.map((g) => (
+                              <option key={g.id} value={g.id}>{g.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <RoleSlot {...slotProps('speaker', slot)} variant="chip" />
+                      {evaluatorEnabled && slot <= meeting.evaluator_slots && (
+                        <RoleSlot {...slotProps('evaluator', slot)} variant="chip" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+            )
+          ))
+        ) : speakerRoles.length > 0 && (
         <section>
           <SectionLabel icon="🎙️" text="Prepared Speakers" />
           <div className="grid grid-cols-2 gap-2 mt-2">
@@ -380,12 +468,28 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           </div>
         )}
 
-        {/* Evaluators — 2-column chip grid */}
-        {evaluatorRoles.length > 0 && (
+        {/* Evaluators — 2-column chip grid (grouped mode pairs them with speakers above) */}
+        {!hasGroups && evaluatorRoles.length > 0 && (
         <section>
           <SectionLabel icon="⚖️" text="Evaluators" />
           <div className="grid grid-cols-2 gap-2 mt-2">
             {evaluatorRoles.map(({ roleKey, slot }) => (
+              <RoleSlot
+                key={`${roleKey}:${slot}`}
+                {...slotProps(roleKey as RoleKey, slot)}
+                variant="chip"
+              />
+            ))}
+          </div>
+        </section>
+        )}
+
+        {/* Jury — admin-assigned panel of judges */}
+        {juryRoles.length > 0 && (
+        <section>
+          <SectionLabel icon="🧑‍⚖️" text="Jury" />
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {juryRoles.map(({ roleKey, slot }) => (
               <RoleSlot
                 key={`${roleKey}:${slot}`}
                 {...slotProps(roleKey as RoleKey, slot)}

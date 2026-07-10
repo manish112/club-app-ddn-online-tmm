@@ -2,8 +2,9 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
-import type { Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
+import type { ContestResult, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
+import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
 import { getMemberRecentRoles, formatMeetingDate, isMeetingPast } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
@@ -19,6 +20,12 @@ interface Props {
 
 function leadershipLabel(role: string | null) {
   return LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? null;
+}
+
+function ordinal(n: number): string {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] ?? s[v] ?? s[0]);
 }
 
 const cardCls = 'bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-card-light dark:shadow-card-dark p-5';
@@ -401,6 +408,12 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
+  const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number })[]>([]);
+
+  // Meetings this member is judging (jury) that haven't happened yet.
+  const judgingMeetings = meetings
+    .filter((m) => !isMeetingPast(m) && m.role_claims.some((c) => c.role_key === 'jury' && c.member_id === member.id))
+    .sort((a, b) => a.number - b.number);
 
   useEffect(() => {
     // My own requests
@@ -423,6 +436,17 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
         .eq('status', 'pending')
         .then(({ count }) => setPendingCount(count ?? 0));
     }
+    // Contest results revealed to this member
+    supabase.from('contest_results').select('*')
+      .eq('contestant_member_id', member.id).eq('revealed', true)
+      .then(({ data }) => {
+        if (!data) return;
+        const enriched = (data as ContestResult[]).map((r) => ({
+          ...r,
+          meeting_number: meetings.find((m) => m.id === r.meeting_id)?.number,
+        }));
+        setMyResults(enriched);
+      });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
@@ -453,6 +477,49 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           <span className="text-amber-400 dark:text-amber-600 text-lg group-hover:translate-x-0.5 transition-transform">→</span>
         </Link>
       )}
+
+      {/* Jury judging link(s) */}
+      {judgingMeetings.map((m) => (
+        <Link key={m.id} href={`/judge/${m.id}`}
+          className="flex items-center gap-3 px-4 py-3.5 rounded-2xl
+                     bg-maroon-50 dark:bg-maroon-950/30 border border-maroon-300 dark:border-maroon-800/50
+                     hover:bg-maroon-100 dark:hover:bg-maroon-950/50 transition-colors group">
+          <span className="text-2xl shrink-0">🧑‍⚖️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-maroon-800 dark:text-maroon-300">You’re a judge for Meeting #{m.number}</p>
+            <p className="text-xs text-maroon-600 dark:text-maroon-500 mt-0.5">Tap to score the contestants →</p>
+          </div>
+          <span className="text-maroon-400 dark:text-maroon-600 text-lg group-hover:translate-x-0.5 transition-transform">→</span>
+        </Link>
+      ))}
+
+      {/* Contest results revealed to this member */}
+      {myResults.map((r) => (
+        <div key={r.id} className={cardCls}>
+          {sectionLabel('🏆 Your Contest Result')}
+          <div className="flex items-end justify-between mb-3">
+            <div>
+              {r.meeting_number && <p className="text-xs text-slate-400 dark:text-slate-500">Meeting #{r.meeting_number}</p>}
+              {r.rank != null && (
+                <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">{ordinal(r.rank)} place</p>
+              )}
+            </div>
+            <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">
+              {Number(r.final_score)}<span className="text-base font-medium text-slate-400"> / {RUBRIC_TOTAL}</span>
+            </p>
+          </div>
+          <div className="space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
+            {CONTEST_RUBRIC.map((item) => (
+              <div key={item.key} className="flex items-center justify-between text-sm">
+                <span className="text-slate-600 dark:text-slate-300">{item.label}</span>
+                <span className="tabular-nums text-slate-800 dark:text-slate-100">
+                  {r.item_avgs?.[item.key] ?? 0} <span className="text-slate-400 text-xs">/ {item.max}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
 
       <ProfileCard member={member} onUpdated={onUpdated} />
 

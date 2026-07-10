@@ -34,9 +34,20 @@ export type RoleKey =
   | 'grammarian'
   | 'ah_counter'
   | 'timer'
-  | 'harkmaster';
+  | 'harkmaster'
+  | 'jury';
+
+// Roles that only an admin may fill — members never see a claim affordance.
+export const ASSIGN_ONLY_ROLES: RoleKey[] = ['jury'];
 
 export type MeetingType = 'regular' | 'speakathon';
+
+// A named speaker group (heat) within a speakathon. `id` is a stable client-
+// generated string so renaming a group doesn't break the pair→group mapping.
+export interface SpeakerGroup {
+  id: string;
+  name: string;
+}
 
 export type LeadershipRole = 'president' | 'vp_education' | 'vp_membership' | 'secretary' | 'vp_pr' | 'club_mentor';
 
@@ -81,6 +92,13 @@ export interface Meeting {
   speaker_slots: number;
   evaluator_slots: number;
   disabled_roles: RoleKey[];   // role categories turned off for this meeting
+  // Speakathon extras (0 / empty for regular meetings)
+  jury_slots: number;                    // admin-assigned judges; jury shown when > 0
+  speaker_groups: SpeakerGroup[];        // named heats
+  pair_groups: Record<string, string>;   // speaker slot_index → group id
+  pair_order: number[];                  // speaking order of speaker slots
+  contest_locked: boolean;               // when true, jury scoring is locked
+  contest_reset_locked: boolean;         // when true, the reset-scores action is disabled
   created_at: string;
 }
 
@@ -127,10 +145,11 @@ export interface MeetingWithClaims extends Meeting {
 
 export const ROLE_META: Record<
   RoleKey,
-  { label: string; emoji: string; section: 'speaker' | 'evaluator' | 'main' | 'tag' }
+  { label: string; emoji: string; section: 'speaker' | 'evaluator' | 'main' | 'tag' | 'jury' }
 > = {
   speaker:    { label: 'Prepared Speaker', emoji: '🎙️', section: 'speaker' },
   evaluator:  { label: 'Evaluator',        emoji: '⚖️',  section: 'evaluator' },
+  jury:       { label: 'Jury',             emoji: '🧑‍⚖️', section: 'jury' },
   tmod:       { label: 'TMoD',             emoji: '🎤',  section: 'main' },
   ttm:        { label: 'TTM',              emoji: '💬',  section: 'main' },
   ge:         { label: 'GE',               emoji: '📋',  section: 'main' },
@@ -162,6 +181,31 @@ export interface SpeakerSlotRequest {
   review_comment: string | null;
   reviewed_at: string | null;
   created_at: string;
+}
+
+// One jury member's 8-item rubric ballot for one contestant (speakathon contest).
+export interface JuryScore {
+  id: string;
+  meeting_id: string;
+  judge_member_id: string;
+  contestant_member_id: string;
+  scores: Record<string, number>;   // rubric item key → points
+  total: number;
+  updated_at: string;
+  created_at: string;
+}
+
+// Admin-computed result per contestant: per-item averages, final score, rank & reveal flag.
+export interface ContestResult {
+  id: string;
+  meeting_id: string;
+  contestant_member_id: string;
+  item_avgs: Record<string, number>;
+  final_score: number;
+  rank: number | null;
+  judge_count: number;
+  revealed: boolean;
+  computed_at: string;
 }
 
 export interface Announcement {
@@ -227,6 +271,12 @@ export function getMeetingRoles(meeting: Meeting): { roleKey: RoleKey; slot: num
     for (let i = 1; i <= meeting.evaluator_slots; i++) {
       roles.push({ roleKey: 'evaluator', slot: i });
     }
+  }
+
+  // Jury is admin-assigned only and lives outside the disabled-roles model; it
+  // appears whenever the meeting has been given jury seats.
+  for (let i = 1; i <= (meeting.jury_slots ?? 0); i++) {
+    roles.push({ roleKey: 'jury', slot: i });
   }
 
   const singleRoles: RoleKey[] = ['tmod', 'ttm', 'ge', 'grammarian', 'ah_counter', 'timer', 'harkmaster'];
