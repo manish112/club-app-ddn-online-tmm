@@ -56,8 +56,13 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 
 // Average each rubric item across the judges who scored a contestant, sum to a
 // final score, then rank contestants (standard competition ranking: ties share a
-// rank, the next rank skips accordingly). Pure — callers persist the output.
-export function computeContestResults(scores: JuryScore[], contestantIds: string[]): ComputedResult[] {
+// rank, the next rank skips accordingly). When `groupOf` is supplied, ranking is
+// done independently within each group (heat). Pure — callers persist the output.
+export function computeContestResults(
+  scores: JuryScore[],
+  contestantIds: string[],
+  groupOf?: (contestantId: string) => string,
+): ComputedResult[] {
   const byContestant = new Map<string, JuryScore[]>();
   for (const id of contestantIds) byContestant.set(id, []);
   for (const s of scores) {
@@ -76,14 +81,25 @@ export function computeContestResults(scores: JuryScore[], contestantIds: string
     return { contestant_member_id: id, item_avgs, final_score, rank: 0, judge_count: ballots.length };
   });
 
-  // Rank by final score desc; contestants with no ballots are unranked (rank 0).
-  const scored = results.filter((r) => r.judge_count > 0).sort((a, b) => b.final_score - a.final_score);
-  let lastScore = Number.POSITIVE_INFINITY;
-  let lastRank = 0;
-  scored.forEach((r, i) => {
-    if (r.final_score < lastScore) { lastRank = i + 1; lastScore = r.final_score; }
-    r.rank = lastRank;
-  });
+  // Rank by final score desc within each group; contestants with no ballots are
+  // unranked (rank 0). Without a grouping function everyone shares one group.
+  const keyOf = groupOf ?? (() => '__all__');
+  const groups = new Map<string, ComputedResult[]>();
+  for (const r of results) {
+    if (r.judge_count === 0) continue;
+    const k = keyOf(r.contestant_member_id);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => b.final_score - a.final_score);
+    let lastScore = Number.POSITIVE_INFINITY;
+    let lastRank = 0;
+    arr.forEach((r, i) => {
+      if (r.final_score < lastScore) { lastRank = i + 1; lastScore = r.final_score; }
+      r.rank = lastRank;
+    });
+  }
 
   return results;
 }

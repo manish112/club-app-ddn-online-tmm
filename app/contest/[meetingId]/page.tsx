@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import { useIdentity } from '@/hooks/useIdentity';
 import type { ContestResult, JuryScore, Member, MeetingWithClaims } from '@/lib/types';
-import { formatMeetingDate } from '@/lib/utils';
+import { formatMeetingDate, groupIdForSlot, hasSpeakerGroups } from '@/lib/utils';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL, computeContestResults } from '@/lib/contest';
 
 export default function ContestResultsPage() {
@@ -75,6 +75,11 @@ export default function ContestResultsPage() {
   const contestantIds = contestants.map((c) => c.id);
   const judgeIds = Array.from(new Set(meeting.role_claims.filter((c) => c.role_key === 'jury').map((c) => c.member_id)));
 
+  // Group helpers: contestant → their heat (for per-group ranking & display).
+  const grouped = hasSpeakerGroups(meeting);
+  const slotOf = new Map(contestants.map((c) => [c.id, c.slot]));
+  const groupIdOf = (id: string) => groupIdForSlot(meeting, slotOf.get(id) ?? 0);
+
   const expectedBallots = judgeIds.length * contestants.length;
   const submitted = scores.filter((s) => contestantIds.includes(s.contestant_member_id) && judgeIds.includes(s.judge_member_id)).length;
   const complete = expectedBallots > 0 && submitted >= expectedBallots;
@@ -87,7 +92,9 @@ export default function ContestResultsPage() {
 
   async function compute() {
     setComputing(true);
-    const computed = computeContestResults(scores, contestantIds);
+    // Rank within each heat when the meeting is grouped.
+    const groupOf = grouped ? (id: string) => String(groupIdOf(id) ?? 'unassigned') : undefined;
+    const computed = computeContestResults(scores, contestantIds, groupOf);
     const revealedBy = new Map(results.map((r) => [r.contestant_member_id, r.revealed]));
     const rows = computed.map((r) => ({
       meeting_id: meetingId,
@@ -128,6 +135,14 @@ export default function ContestResultsPage() {
   }
 
   const ranked = [...results].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99) || b.final_score - a.final_score);
+
+  // Results split by heat, each list ordered by its within-group rank.
+  const resultBuckets: { name: string | null; items: typeof ranked }[] = grouped
+    ? [
+        ...meeting.speaker_groups.map((g) => ({ name: g.name, items: ranked.filter((r) => groupIdOf(r.contestant_member_id) === g.id) })),
+        { name: 'Unassigned', items: ranked.filter((r) => groupIdOf(r.contestant_member_id) === null) },
+      ].filter((b) => b.items.length > 0)
+    : [{ name: null, items: ranked }];
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -197,11 +212,22 @@ export default function ContestResultsPage() {
         {ranked.length === 0 ? (
           <p className="text-sm text-slate-400">No results computed yet.</p>
         ) : (
-          <div className="space-y-3">
-            {ranked.map((r) => {
-              const isOpen = expanded === r.contestant_member_id;
-              const judgeBallots = scoresByContestant.get(r.contestant_member_id) ?? [];
-              return (
+          <div className="space-y-6">
+            {resultBuckets.map((bucket, bi) => (
+              <div key={bi}>
+                {bucket.name && (
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-maroon-700 to-maroon-600 text-white text-sm font-black px-3 py-1.5 shadow-sm">
+                      🏆 {bucket.name}
+                    </span>
+                    <div className="flex-1 h-px bg-maroon-200 dark:bg-maroon-900/50" />
+                  </div>
+                )}
+                <div className="space-y-3">
+                  {bucket.items.map((r) => {
+                    const isOpen = expanded === r.contestant_member_id;
+                    const judgeBallots = scoresByContestant.get(r.contestant_member_id) ?? [];
+                    return (
                 <div key={r.contestant_member_id} className="rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 overflow-hidden">
                   <div className="flex items-center gap-3 px-4 py-3">
                     <span className="shrink-0 w-8 h-8 rounded-full bg-maroon-700 text-white flex items-center justify-center text-sm font-black">
@@ -264,8 +290,11 @@ export default function ContestResultsPage() {
                     </div>
                   )}
                 </div>
-              );
-            })}
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

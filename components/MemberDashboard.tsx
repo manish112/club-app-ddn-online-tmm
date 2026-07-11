@@ -6,7 +6,7 @@ import type { ContestResult, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequ
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
-import { getMemberRecentRoles, formatMeetingDate, isMeetingPast } from '@/lib/utils';
+import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -408,7 +408,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
-  const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number })[]>([]);
+  const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number; group_name?: string | null })[]>([]);
 
   // Meetings this member is judging (jury) that haven't happened yet.
   const judgingMeetings = meetings
@@ -441,10 +441,16 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
       .eq('contestant_member_id', member.id).eq('revealed', true)
       .then(({ data }) => {
         if (!data) return;
-        const enriched = (data as ContestResult[]).map((r) => ({
-          ...r,
-          meeting_number: meetings.find((m) => m.id === r.meeting_id)?.number,
-        }));
+        const enriched = (data as ContestResult[]).map((r) => {
+          const m = meetings.find((mt) => mt.id === r.meeting_id);
+          let group_name: string | null = null;
+          if (m) {
+            const spk = m.role_claims.find((c) => c.role_key === 'speaker' && c.member_id === member.id);
+            const gid = spk ? groupIdForSlot(m, spk.slot_index) : null;
+            group_name = gid ? (m.speaker_groups.find((g) => g.id === gid)?.name ?? null) : null;
+          }
+          return { ...r, meeting_number: m?.number, group_name };
+        });
         setMyResults(enriched);
       });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -499,9 +505,11 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           {sectionLabel('🏆 Your Contest Result')}
           <div className="flex items-end justify-between mb-3">
             <div>
-              {r.meeting_number && <p className="text-xs text-slate-400 dark:text-slate-500">Meeting #{r.meeting_number}</p>}
+              {r.meeting_number && <p className="text-xs text-slate-400 dark:text-slate-500">Meeting #{r.meeting_number}{r.group_name ? ` · ${r.group_name}` : ''}</p>}
               {r.rank != null && (
-                <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">{ordinal(r.rank)} place</p>
+                <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">
+                  {ordinal(r.rank)}{r.group_name ? ` in ${r.group_name}` : ' place'}
+                </p>
               )}
             </div>
             <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">
