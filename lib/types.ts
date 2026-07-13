@@ -99,6 +99,7 @@ export interface Meeting {
   pair_order: number[];                  // speaking order of speaker slots
   contest_locked: boolean;               // when true, jury scoring is locked
   contest_reset_locked: boolean;         // when true, the reset-scores action is disabled
+  contest_show_ranking: boolean;         // when false, ranks are hidden in results
   created_at: string;
 }
 
@@ -202,7 +203,8 @@ export interface ContestResult {
   contestant_member_id: string;
   item_avgs: Record<string, number>;
   final_score: number;
-  rank: number | null;
+  rank: number | null;          // within the heat
+  overall_rank: number | null;  // across all contestants
   judge_count: number;
   revealed: boolean;
   computed_at: string;

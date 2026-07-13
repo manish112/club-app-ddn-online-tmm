@@ -408,7 +408,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
-  const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number; group_name?: string | null })[]>([]);
+  const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number; group_name?: string | null; show_ranking?: boolean })[]>([]);
 
   // Meetings this member is judging (jury) that haven't happened yet.
   const judgingMeetings = meetings
@@ -449,7 +449,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
             const gid = spk ? groupIdForSlot(m, spk.slot_index) : null;
             group_name = gid ? (m.speaker_groups.find((g) => g.id === gid)?.name ?? null) : null;
           }
-          return { ...r, meeting_number: m?.number, group_name };
+          return { ...r, meeting_number: m?.number, group_name, show_ranking: m?.contest_show_ranking ?? true };
         });
         setMyResults(enriched);
       });
@@ -506,10 +506,13 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           <div className="flex items-end justify-between mb-3">
             <div>
               {r.meeting_number && <p className="text-xs text-slate-400 dark:text-slate-500">Meeting #{r.meeting_number}{r.group_name ? ` · ${r.group_name}` : ''}</p>}
-              {r.rank != null && (
+              {r.show_ranking && r.rank != null && (
                 <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">
                   {ordinal(r.rank)}{r.group_name ? ` in ${r.group_name}` : ' place'}
                 </p>
+              )}
+              {r.show_ranking && r.group_name && r.overall_rank != null && (
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{ordinal(r.overall_rank)} overall</p>
               )}
             </div>
             <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">
