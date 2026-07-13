@@ -66,6 +66,7 @@ export default function ContestResultsPage() {
 
   const locked = meeting.contest_locked;
   const resetLocked = meeting.contest_reset_locked;
+  const showRanking = meeting.contest_show_ranking;
   const nameOf = (id: string) => members.find((m) => m.id === id)?.display_name ?? '—';
 
   const contestants = meeting.role_claims
@@ -102,6 +103,7 @@ export default function ContestResultsPage() {
       item_avgs: r.item_avgs,
       final_score: r.final_score,
       rank: r.rank || null,
+      overall_rank: r.overall_rank || null,
       judge_count: r.judge_count,
       revealed: revealedBy.get(r.contestant_member_id) ?? false,
       computed_at: new Date().toISOString(),
@@ -134,7 +136,20 @@ export default function ContestResultsPage() {
     await loadAll();
   }
 
-  const ranked = [...results].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99) || b.final_score - a.final_score);
+  async function setShowRanking(next: boolean) {
+    await supabase.from('meetings').update({ contest_show_ranking: next }).eq('id', meetingId);
+    await loadAll();
+  }
+
+  // Within a heat, order by rank when shown, else by score.
+  const ranked = [...results].sort((a, b) =>
+    showRanking ? (a.rank ?? 99) - (b.rank ?? 99) || b.final_score - a.final_score
+                : b.final_score - a.final_score);
+
+  // Overall standing across all contestants (by overall_rank).
+  const overallStanding = [...results]
+    .filter((r) => r.judge_count > 0)
+    .sort((a, b) => (a.overall_rank ?? 99) - (b.overall_rank ?? 99) || b.final_score - a.final_score);
 
   // Results split by heat, each list ordered by its within-group rank.
   const resultBuckets: { name: string | null; items: typeof ranked }[] = grouped
@@ -147,7 +162,12 @@ export default function ContestResultsPage() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="max-w-2xl mx-auto px-4 py-6">
-        <Link href={isAdmin ? '/amiadmin' : '/'} className="text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors">← Back</Link>
+        <div className="flex items-center justify-between">
+          <Link href={isAdmin ? '/amiadmin' : '/'} className="text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors">← Back</Link>
+          {isAdmin && (
+            <Link href={`/contest/${meeting.id}/scores`} className="text-sm font-semibold text-maroon-600 dark:text-maroon-400 hover:text-maroon-800 dark:hover:text-maroon-300 transition-colors">📊 Judge scorecards →</Link>
+          )}
+        </div>
 
         <div className="mt-4 mb-5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Speech Contest · Results</p>
@@ -198,6 +218,12 @@ export default function ContestResultsPage() {
                              border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800">
                   {resetLocked ? '↩︎ Enable reset' : '🚫 Disable reset'}
                 </button>
+                <button
+                  onClick={() => setShowRanking(!showRanking)}
+                  className="rounded-xl px-4 py-2.5 text-sm font-semibold min-h-[44px] border transition-all active:scale-95
+                             border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800">
+                  {showRanking ? '🙈 Hide ranking' : '🏅 Show ranking'}
+                </button>
               </div>
               {!complete && !locked && (
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2">
@@ -208,7 +234,23 @@ export default function ContestResultsPage() {
           )}
         </div>
 
-        {/* Results */}
+        {/* Overall standing (across all heats) */}
+        {showRanking && grouped && overallStanding.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-900 dark:bg-slate-800 text-white text-sm font-black uppercase tracking-widest">🏆 Overall Standing</div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {overallStanding.map((r) => (
+                <div key={r.contestant_member_id} className="flex items-center gap-3 px-4 py-2.5">
+                  <span className="shrink-0 w-7 h-7 rounded-full bg-slate-900 dark:bg-slate-700 text-white flex items-center justify-center text-xs font-black">{r.overall_rank ?? '—'}</span>
+                  <span className="flex-1 min-w-0 text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">TM {nameOf(r.contestant_member_id)}</span>
+                  <span className="shrink-0 tabular-nums font-black text-slate-900 dark:text-white">{Number(r.final_score)}<span className="text-xs font-medium text-slate-400"> / {RUBRIC_TOTAL}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Results — {grouped ? 'by heat' : 'ranked'} */}
         {ranked.length === 0 ? (
           <p className="text-sm text-slate-400">No results computed yet.</p>
         ) : (
@@ -230,9 +272,11 @@ export default function ContestResultsPage() {
                     return (
                 <div key={r.contestant_member_id} className="rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 overflow-hidden">
                   <div className="flex items-center gap-3 px-4 py-3">
-                    <span className="shrink-0 w-8 h-8 rounded-full bg-maroon-700 text-white flex items-center justify-center text-sm font-black">
-                      {r.rank ?? '—'}
-                    </span>
+                    {showRanking && (
+                      <span className="shrink-0 w-8 h-8 rounded-full bg-maroon-700 text-white flex items-center justify-center text-sm font-black">
+                        {r.rank ?? '—'}
+                      </span>
+                    )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-900 dark:text-white truncate">TM {nameOf(r.contestant_member_id)}</p>
                       <p className="text-[11px] text-slate-400 dark:text-slate-500">{r.judge_count} judge{r.judge_count === 1 ? '' : 's'}</p>

@@ -48,11 +48,35 @@ export interface ComputedResult {
   contestant_member_id: string;
   item_avgs: Record<string, number>;
   final_score: number;
-  rank: number;
+  rank: number;          // within the heat (== overall_rank when ungrouped)
+  overall_rank: number;  // across all contestants
   judge_count: number;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+// Assign standard-competition ranks (ties share a rank) within buckets keyed by
+// keyOf. Contestants with no ballots (judge_count 0) are left unranked (0).
+function assignRanks(results: ComputedResult[], keyOf: (id: string) => string): Map<string, number> {
+  const buckets = new Map<string, ComputedResult[]>();
+  for (const r of results) {
+    if (r.judge_count === 0) continue;
+    const k = keyOf(r.contestant_member_id);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k)!.push(r);
+  }
+  const ranks = new Map<string, number>();
+  for (const arr of buckets.values()) {
+    arr.sort((a, b) => b.final_score - a.final_score);
+    let lastScore = Number.POSITIVE_INFINITY;
+    let lastRank = 0;
+    arr.forEach((r, i) => {
+      if (r.final_score < lastScore) { lastRank = i + 1; lastScore = r.final_score; }
+      ranks.set(r.contestant_member_id, lastRank);
+    });
+  }
+  return ranks;
+}
 
 // Average each rubric item across the judges who scored a contestant, sum to a
 // final score, then rank contestants (standard competition ranking: ties share a
@@ -78,27 +102,16 @@ export function computeContestResults(
       item_avgs[item.key] = round1(sum / ballots.length);
     }
     const final_score = round1(CONTEST_RUBRIC.reduce((s, item) => s + item_avgs[item.key], 0));
-    return { contestant_member_id: id, item_avgs, final_score, rank: 0, judge_count: ballots.length };
+    return { contestant_member_id: id, item_avgs, final_score, rank: 0, overall_rank: 0, judge_count: ballots.length };
   });
 
-  // Rank by final score desc within each group; contestants with no ballots are
-  // unranked (rank 0). Without a grouping function everyone shares one group.
-  const keyOf = groupOf ?? (() => '__all__');
-  const groups = new Map<string, ComputedResult[]>();
+  // Overall standing (everyone) plus per-heat rank (falls back to overall when
+  // there's no grouping function).
+  const overall = assignRanks(results, () => '__all__');
+  const grouped = groupOf ? assignRanks(results, groupOf) : overall;
   for (const r of results) {
-    if (r.judge_count === 0) continue;
-    const k = keyOf(r.contestant_member_id);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k)!.push(r);
-  }
-  for (const arr of groups.values()) {
-    arr.sort((a, b) => b.final_score - a.final_score);
-    let lastScore = Number.POSITIVE_INFINITY;
-    let lastRank = 0;
-    arr.forEach((r, i) => {
-      if (r.final_score < lastScore) { lastRank = i + 1; lastScore = r.final_score; }
-      r.rank = lastRank;
-    });
+    r.overall_rank = overall.get(r.contestant_member_id) ?? 0;
+    r.rank = grouped.get(r.contestant_member_id) ?? 0;
   }
 
   return results;

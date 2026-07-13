@@ -39,6 +39,7 @@ create table if not exists meetings (
   pair_order      jsonb not null default '[]'::jsonb,  -- speaking order: [slot_index, …]
   contest_locked  boolean not null default false,      -- locks jury scoring when true
   contest_reset_locked boolean not null default false,  -- disables the reset-scores action
+  contest_show_ranking boolean not null default true,   -- show/hide ranks in results
   created_at      timestamptz not null default now()
 );
 
@@ -164,7 +165,8 @@ create table if not exists contest_results (
   contestant_member_id uuid not null references members(id),
   item_avgs            jsonb   not null default '{}'::jsonb,  -- { rubricKey: avg }
   final_score          numeric not null default 0,
-  rank                 integer,
+  rank                 integer,                          -- rank within the heat
+  overall_rank         integer,                          -- rank across all contestants
   judge_count          integer not null default 0,
   revealed             boolean not null default false,
   computed_at          timestamptz not null default now(),
