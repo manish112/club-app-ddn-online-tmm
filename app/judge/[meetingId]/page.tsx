@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import { useIdentity } from '@/hooks/useIdentity';
 import type { JuryScore, Member, MeetingWithClaims, RoleClaim } from '@/lib/types';
-import { formatMeetingDate, speakerBuckets } from '@/lib/utils';
+import { formatMeetingDate, speakerBuckets, isMeetingPast } from '@/lib/utils';
 import { CONTEST_RUBRIC, RUBRIC_CATEGORIES, RUBRIC_TOTAL } from '@/lib/contest';
 import { ContestBallot } from '@/components/ContestBallot';
 
@@ -72,6 +72,17 @@ export default function JudgePage() {
       <Centered>
         <p className="mb-1 font-semibold text-slate-700 dark:text-slate-200">You’re not a judge for this meeting.</p>
         <p className="text-sm text-slate-400">Only members assigned to the jury can score contestants.</p>
+      </Centered>
+    );
+  }
+
+  // Once the meeting is over, judging closes — the ballot is no longer available.
+  if (isMeetingPast(meeting)) {
+    return (
+      <Centered>
+        <p className="mb-1 font-semibold text-slate-700 dark:text-slate-200">This contest has ended.</p>
+        <p className="mb-3 text-sm text-slate-400">Scoring closed once the meeting was over.</p>
+        <Link href={`/contest/${meeting.id}`} className="text-maroon-600 dark:text-maroon-400 font-semibold">🏆 View results →</Link>
       </Centered>
     );
   }

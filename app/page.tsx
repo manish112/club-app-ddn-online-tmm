@@ -15,7 +15,7 @@ import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
 import Image from 'next/image';
 
-type Tab = 'next' | 'upcoming' | 'past' | 'profile';
+type Tab = 'next' | 'past' | 'profile';
 
 const DISMISS_KEY = (id: string) => `tm_announcement_${id}`;
 
@@ -105,19 +105,16 @@ export default function Home() {
   const past   = meetings.filter((m) =>  isMeetingPast(m)).sort((a, b) => b.number - a.number);
 
   const nextMeeting      = future[0] ?? null;
-  const upcomingMeetings = future.slice(1, 3);
   const nextBallotStatus = nextMeeting ? (ballots.get(nextMeeting.id)?.status ?? null) : null;
   const nextTabLabel     = nextBallotStatus === 'open' ? 'Current Meeting' : 'Next Meeting';
 
-  const meetingTabContent: Record<'next' | 'upcoming' | 'past', typeof meetings> = {
+  const meetingTabContent: Record<'next' | 'past', typeof meetings> = {
     next:     nextMeeting ? [nextMeeting] : [],
-    upcoming: upcomingMeetings,
     past,
   };
 
-  const emptyState: Record<'next' | 'upcoming' | 'past', { text: string; cta?: string }> = {
+  const emptyState: Record<'next' | 'past', { text: string; cta?: string }> = {
     next:     { text: 'No upcoming meeting scheduled.', cta: 'Schedule one in Admin →' },
-    upcoming: { text: 'No future meetings scheduled yet.', cta: 'Add meetings in Admin →' },
     past:     { text: 'No past meetings yet.' },
   };
 
@@ -127,7 +124,6 @@ export default function Home() {
   const tabs = [
     ...(currentMember ? [{ id: 'profile' as Tab, label: 'My Profile' }] : []),
     { id: 'next' as Tab, label: nextTabLabel },
-    { id: 'upcoming' as Tab, label: 'Future Meetings' },
     { id: 'past' as Tab, label: 'Past Meetings' },
   ];
 
@@ -301,7 +297,7 @@ export default function Home() {
           </svg>
         </Link>
         {(() => {
-          const meetingTab: 'next' | 'upcoming' | 'past' =
+          const meetingTab: 'next' | 'past' =
             activeTab === 'profile' ? 'next' : activeTab;
 
           if (activeTab === 'profile' && currentMember) {

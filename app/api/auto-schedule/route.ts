@@ -8,6 +8,17 @@ function nextWeekdayAfter(from: Date, weekday: number): Date {
   return d;
 }
 
+// Format a Date as YYYY-MM-DD from its LOCAL components. `nextWeekdayAfter`
+// matches the weekday in local time, so read the date back in local time too —
+// `toISOString()` converts to UTC and, in a timezone ahead of UTC (e.g. IST),
+// rolls the date back a day (Jul 29 → Jul 28).
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function isMeetingPast(m: { date: string; end_time: string }): boolean {
   const [y, mo, d] = m.date.split('-').map(Number);
   const [h, min]   = m.end_time.split(':').map(Number);
@@ -36,10 +47,15 @@ export async function GET(req: NextRequest) {
   if (!allMeetings) return NextResponse.json({ error: 'failed to load meetings' }, { status: 500 });
 
   const upcoming = allMeetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number);
-  const needed   = 3 - upcoming.length;
+
+  // We only ever create ONE upcoming meeting: the "next" meeting. It's created
+  // only once the current one is over (i.e. when there are no upcoming meetings
+  // left). Existing meetings are never deleted — any already-created future
+  // meetings stay in the DB; the UI just shows the next meeting only.
+  const needed = upcoming.length === 0 ? 1 : 0;
 
   if (needed <= 0) {
-    return NextResponse.json({ ok: true, created: 0, message: 'already have 3+ upcoming meetings' });
+    return NextResponse.json({ ok: true, created: 0, message: 'next meeting already exists' });
   }
 
   const weekday   = cfg.schedule_weekday ?? 3;
@@ -49,9 +65,13 @@ export async function GET(req: NextRequest) {
   // Mirror the admin form: a Speakathon = Table Topics off while speeches stay on.
   const meetingType = disabledRoles.includes('ttm') && !disabledRoles.includes('speaker') ? 'speakathon' : 'regular';
   const maxNumber = allMeetings.reduce((max, m) => Math.max(max, m.number), 0);
-  const startFrom = upcoming.length > 0
-    ? new Date(upcoming[upcoming.length - 1].date + 'T00:00:00')
-    : new Date();
+  // Advance from whichever is later: today, or the last meeting on record — so
+  // the next meeting always lands on the next configured weekday AFTER the most
+  // recent meeting and never reuses or precedes an existing meeting's date.
+  const latestDateStr = allMeetings.reduce((max, m) => (m.date > max ? m.date : max), '');
+  const latestDate = latestDateStr ? new Date(latestDateStr + 'T00:00:00') : new Date(0);
+  const now = new Date();
+  const startFrom = latestDate > now ? latestDate : now;
 
   const rows = [];
   let cur = new Date(startFrom);
@@ -61,7 +81,7 @@ export async function GET(req: NextRequest) {
     cur = nextWeekdayAfter(cur, weekday);
     rows.push({
       number: num++,
-      date: cur.toISOString().split('T')[0],
+      date: toLocalDateStr(cur),
       start_time: startTime + ':00',
       end_time: endTime + ':00',
       theme: 'TBD',
