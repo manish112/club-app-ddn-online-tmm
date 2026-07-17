@@ -122,6 +122,17 @@ function nextWeekdayAfter(from: Date, weekday: number): Date {
   return d;
 }
 
+// Format a Date as YYYY-MM-DD from its LOCAL components. `nextWeekdayAfter`
+// matches the weekday in local time, so we must read the date back in local
+// time too — `toISOString()` converts to UTC and, in a timezone ahead of UTC
+// (e.g. IST), rolls the date back a day (Jul 29 → Jul 28).
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 interface ScheduleConfig { weekday: number; startTime: string; endTime: string }
 
 // ─── Meeting form ──────────────────────────────────────────────────────────────
@@ -1335,16 +1346,22 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
   async function fillMeetings(cfg: ScheduleConfig, allMeetings: MeetingWithClaims[], silent = false) {
     const upcoming = allMeetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number);
-    const needed = 3 - upcoming.length;
+    // We only ever keep ONE upcoming meeting: the "next" meeting. It's created
+    // only once the current one is over (i.e. no upcoming meetings remain).
+    const needed = upcoming.length === 0 ? 1 : 0;
     if (needed <= 0) {
-      if (!silent) setAutoFillStatus('Already have 3 or more upcoming meetings.');
+      if (!silent) setAutoFillStatus('Next meeting already exists.');
       return;
     }
     setFilling(true);
     const maxNumber = allMeetings.reduce((max, m) => Math.max(max, m.number), 0);
-    const startFrom = upcoming.length > 0
-      ? new Date(upcoming[upcoming.length - 1].date + 'T00:00:00')
-      : new Date();
+    // Advance from whichever is later: today, or the last meeting on record — so
+    // the next meeting always lands on the next configured weekday AFTER the most
+    // recent meeting and never reuses or precedes an existing meeting's date.
+    const latestDateStr = allMeetings.reduce((max, m) => (m.date > max ? m.date : max), '');
+    const latestDate = latestDateStr ? new Date(latestDateStr + 'T00:00:00') : new Date(0);
+    const now = new Date();
+    const startFrom = latestDate > now ? latestDate : now;
     const rows = [];
     let cur = new Date(startFrom);
     let num = maxNumber + 1;
@@ -1352,7 +1369,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       cur = nextWeekdayAfter(cur, cfg.weekday);
       rows.push({
         number: num++,
-        date: cur.toISOString().split('T')[0],
+        date: toLocalDateStr(cur),
         start_time: cfg.startTime + ':00',
         end_time: cfg.endTime + ':00',
         theme: 'TBD',
@@ -1368,12 +1385,12 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     fetchAll();
   }
 
-  // Auto-fill once on load if upcoming < 3 and schedule is configured
+  // Auto-fill once on load: create the next meeting only if none is upcoming.
   useEffect(() => {
     if (loading || !scheduleConfig || autoFilledRef.current) return;
     autoFilledRef.current = true;
     const upcoming = meetings.filter(m => !isMeetingPast(m));
-    if (upcoming.length < 3) fillMeetings(scheduleConfig, meetings, true);
+    if (upcoming.length === 0) fillMeetings(scheduleConfig, meetings, true);
   }, [loading, scheduleConfig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function deleteMeeting(id: string) {
@@ -1484,7 +1501,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                   <button
                     onClick={() => fillMeetings(scheduleConfig, meetings)}
                     disabled={filling}
-                    title={`Auto-schedule ${WEEKDAY_LABELS[scheduleConfig.weekday]}s to reach 3 upcoming meetings`}
+                    title={`Create the next ${WEEKDAY_LABELS[scheduleConfig.weekday]} meeting if none is upcoming`}
                     className={`shrink-0 px-4 py-2 rounded-2xl border-2 border-dashed text-sm font-medium transition-colors disabled:opacity-40 ${
                       filling
                         ? 'border-slate-300 dark:border-slate-700 text-slate-400'
