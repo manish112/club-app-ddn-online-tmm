@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Ballot, MeetingWithClaims, Member, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
+import type { Ballot, EvaluatorRequest, MeetingWithClaims, Member, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
 import { getMeetingRoles, isRoleEnabled } from '@/lib/types';
 import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
@@ -33,6 +33,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [slotRequest, setSlotRequest] = useState<SpeakerSlotRequest | null>(null);
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [requestNote, setRequestNote] = useState('');
+  const [requestEvaluatorId, setRequestEvaluatorId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const locked = isMeetingLocked(meeting, lockBeforeMins);
@@ -61,12 +62,45 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     if (!memberId || memberId === 'guest') return;
     setSubmitting(true);
     const { data } = await supabase.from('speaker_slot_requests')
-      .insert({ meeting_id: meeting.id, member_id: memberId, request_note: requestNote.trim() || null })
+      .insert({
+        meeting_id: meeting.id,
+        member_id: memberId,
+        request_note: requestNote.trim() || null,
+        preferred_evaluator_id: requestEvaluatorId || null,
+      })
       .select().single();
+    // Record the evaluator nomination right away (with an unbound slot) so it's
+    // visible on the requester's dashboard and can be approved/denied on its own.
+    // The slot is bound when the extra speaker slot is approved.
+    if (data && requestEvaluatorId) {
+      // One pending nomination per speaker: retire any earlier one first.
+      await supabase.from('evaluator_requests')
+        .update({ status: 'cancelled' })
+        .eq('meeting_id', meeting.id).eq('speaker_id', memberId).eq('status', 'pending');
+      await supabase.from('evaluator_requests').insert({
+        meeting_id: meeting.id,
+        speaker_slot_index: null,
+        speaker_id: memberId,
+        preferred_evaluator_id: requestEvaluatorId,
+        status: 'pending',
+        speaker_slot_request_id: data.id,
+      });
+      fetch('/api/notify-evaluator-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingNumber: meeting.number,
+          meetingDate: meeting.date,
+          speakerId: memberId,
+          preferredEvaluatorId: requestEvaluatorId,
+        }),
+      }).catch(() => {});
+    }
     setSlotRequest(data ?? null);
     setSubmitting(false);
     setShowRequestForm(false);
     setRequestNote('');
+    setRequestEvaluatorId('');
   }
   const isTMoD = !!memberId &&
     meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
@@ -86,6 +120,33 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     meeting.role_claims.map((c) => [`${c.role_key}:${c.slot_index}`, c])
   );
 
+  // Pending speaker-nominated evaluators, keyed by the paired evaluator slot
+  // (evaluator slot i ↔ speaker slot i). A pending request holds that slot.
+  const memberNameById = new Map(allMembers.map((m) => [m.id, m.display_name]));
+  const pendingEvalBySlot = new Map<number, EvaluatorRequest>();
+  for (const r of meeting.evaluator_requests ?? []) {
+    if (r.status === 'pending' && r.speaker_slot_index != null) pendingEvalBySlot.set(r.speaker_slot_index, r);
+  }
+  const pendingEvalName = (slot: number): string | null => {
+    const r = pendingEvalBySlot.get(slot);
+    if (!r) return null;
+    return memberNameById.get(r.preferred_evaluator_id) ?? 'Member';
+  };
+
+  // An evaluator slot is gated until its paired speaker slot (same index) is
+  // claimed — but only when there's actually a paired speaker slot to wait for.
+  const speakerEnabled = isRoleEnabled(meeting, 'speaker');
+  const awaitingSpeakerForEval = (slot: number): boolean =>
+    speakerEnabled && slot <= meeting.speaker_slots && !claimsMap.has(`speaker:${slot}`);
+
+  // Members already spoken for as evaluators this meeting: those holding an
+  // evaluator claim, plus anyone pending as a nominee. They're hidden from the
+  // speaker's evaluator picker so the same person can't be nominated twice.
+  const unavailableEvaluatorIds: string[] = [
+    ...meeting.role_claims.filter((c) => c.role_key === 'evaluator').map((c) => c.member_id),
+    ...(meeting.evaluator_requests ?? []).filter((r) => r.status === 'pending').map((r) => r.preferred_evaluator_id),
+  ];
+
   const memberExistingRoles: RoleKey[] = memberId
     ? meeting.role_claims.filter((c) => c.member_id === memberId).map((c) => c.role_key)
     : [];
@@ -104,6 +165,11 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
   const evaluatorEnabled = isRoleEnabled(meeting, 'evaluator');
+  // Evaluator slots shown inline with a speaker are slots 1..speaker_slots; any
+  // beyond that (or all of them, if speakers are disabled) are "extra" and get
+  // their own section so they aren't dropped.
+  const pairedEvalMax = isRoleEnabled(meeting, 'speaker') ? meeting.speaker_slots : 0;
+  const extraEvaluatorRoles = evaluatorRoles.filter(({ slot }) => slot > pairedEvalMax);
 
   // Speaker groups (heats): when defined, speakers + their paired evaluators are
   // rendered grouped (in speaking order) instead of as two flat grids. Group
@@ -155,6 +221,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     isPast: past,
     isAdmin,
     allMembers,
+    pendingEvaluatorName: roleKey === 'evaluator' ? pendingEvalName(slot) : null,
+    awaitingSpeaker: roleKey === 'evaluator' ? awaitingSpeakerForEval(slot) : false,
+    unavailableEvaluatorIds,
     onChanged,
   });
 
@@ -399,14 +468,22 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           ))
         ) : speakerRoles.length > 0 && (
         <section>
-          <SectionLabel icon="🎙️" text="Prepared Speakers" />
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            {speakerRoles.map(({ roleKey, slot }) => (
-              <RoleSlot
-                key={`${roleKey}:${slot}`}
-                {...slotProps(roleKey as RoleKey, slot)}
-                variant="chip"
-              />
+          <SectionLabel icon="🎙️" text="Prepared Speakers & Evaluators" />
+          <div className="space-y-2 mt-2">
+            {speakerRoles.map(({ slot }) => (
+              <div key={slot} className="rounded-xl bg-slate-50/60 dark:bg-slate-800/30 p-2 space-y-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-maroon-600 dark:text-maroon-400">
+                  Speaker {slot}
+                </span>
+                {evaluatorEnabled && slot <= meeting.evaluator_slots ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <RoleSlot {...slotProps('speaker', slot)} variant="chip" />
+                    <RoleSlot {...slotProps('evaluator', slot)} variant="chip" />
+                  </div>
+                ) : (
+                  <RoleSlot {...slotProps('speaker', slot)} variant="chip" />
+                )}
+              </div>
             ))}
           </div>
         </section>
@@ -443,6 +520,21 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   maxLength={200}
                   className="w-full text-xs border border-maroon-200 dark:border-maroon-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 resize-none focus:outline-none focus:ring-1 focus:ring-maroon-600 placeholder:text-slate-300 dark:placeholder:text-slate-600"
                 />
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-maroon-600 dark:text-maroon-400 mb-1">
+                    Preferred evaluator (optional)
+                  </label>
+                  <select
+                    value={requestEvaluatorId}
+                    onChange={e => setRequestEvaluatorId(e.target.value)}
+                    className="w-full text-xs border border-maroon-200 dark:border-maroon-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-maroon-600"
+                  >
+                    <option value="">No preference — open to anyone</option>
+                    {allMembers.filter(m => m.id !== memberId && !unavailableEvaluatorIds.includes(m.id)).map(m => (
+                      <option key={m.id} value={m.id}>TM {m.display_name}</option>
+                    ))}
+                  </select>
+                </div>
                 <div className="flex gap-2">
                   <button onClick={submitRequest} disabled={submitting}
                     className="flex-1 bg-maroon-700 hover:bg-maroon-800 text-white text-xs font-semibold rounded-lg py-2 disabled:opacity-40 active:scale-95 transition-all">
@@ -468,12 +560,13 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           </div>
         )}
 
-        {/* Evaluators — 2-column chip grid (grouped mode pairs them with speakers above) */}
-        {!hasGroups && evaluatorRoles.length > 0 && (
+        {/* Evaluators without a paired speaker (extra eval slots, or speakers
+            disabled) — normal pairs are shown inline with the speaker above. */}
+        {!hasGroups && extraEvaluatorRoles.length > 0 && (
         <section>
           <SectionLabel icon="⚖️" text="Evaluators" />
           <div className="grid grid-cols-2 gap-2 mt-2">
-            {evaluatorRoles.map(({ roleKey, slot }) => (
+            {extraEvaluatorRoles.map(({ roleKey, slot }) => (
               <RoleSlot
                 key={`${roleKey}:${slot}`}
                 {...slotProps(roleKey as RoleKey, slot)}

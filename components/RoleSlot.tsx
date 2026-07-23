@@ -19,6 +19,18 @@ interface Props {
   isPast: boolean;
   isAdmin: boolean;
   allMembers?: Member[];
+  // For an unclaimed evaluator slot: the display name of a speaker-nominated
+  // evaluator awaiting officer approval. When set, the slot is held (blocked)
+  // and shows "Assignment in progress" instead of a claim affordance.
+  pendingEvaluatorName?: string | null;
+  // For an evaluator slot whose paired speaker slot is still empty: the slot is
+  // locked ("Opens when speaker claims") for members so no one grabs it before
+  // the speaker names their preference. Admins can still assign.
+  awaitingSpeaker?: boolean;
+  // Members already spoken for as evaluators in this meeting (assigned to an
+  // evaluator slot, or pending as another speaker's nominee) — hidden from the
+  // evaluator picker so a speaker can't nominate someone already taken.
+  unavailableEvaluatorIds?: string[];
   variant?: 'row' | 'chip' | 'mini';
   onChanged: () => void;
 }
@@ -34,12 +46,14 @@ function notifyRole(targetMemberId: string, meetingNumber: number, meetingDate: 
 export function RoleSlot({
   meetingId, meetingNumber, meetingDate, roleKey, slotIndex, claim, memberId, memberExistingRoles,
   memberAdjacentRoles = [], isLocked, isPast, isAdmin, allMembers = [],
+  pendingEvaluatorName = null, awaitingSpeaker = false, unavailableEvaluatorIds = [],
   variant = 'row', onChanged,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [justClaimed, setJustClaimed] = useState(false);
   const [editingDetails, setEditingDetails] = useState(false);
+  const [choosingEvaluator, setChoosingEvaluator] = useState(false);
   const supabase = createClient();
   const meta = ROLE_META[roleKey];
 
@@ -62,6 +76,9 @@ export function RoleSlot({
 
   async function handleClaim() {
     if (!memberId || !canClaim || busy) return;
+    // Claiming a Prepared Speaker slot first asks who the speaker would like as
+    // their evaluator; the claim is finalized from the modal.
+    if (isSpeaker) { setChoosingEvaluator(true); return; }
     setBusy(true);
     await supabase.from('role_claims').insert({
       meeting_id: meetingId,
@@ -77,10 +94,65 @@ export function RoleSlot({
     onChanged();
   }
 
+  // Finalize a speaker claim from the evaluator-preference modal. When a
+  // preferred evaluator is chosen, a pending request is created (holding the
+  // paired evaluator slot) and the officers are notified; "no preference"
+  // leaves that slot open for anyone to claim.
+  async function finalizeSpeakerClaim(preferredEvaluatorId: string | null) {
+    if (!memberId || busy) return;
+    setBusy(true);
+    await supabase.from('role_claims').insert({
+      meeting_id: meetingId,
+      role_key: 'speaker',
+      slot_index: slotIndex,
+      member_id: memberId,
+      admin_override: isMultiRole,
+    });
+    if (preferredEvaluatorId) {
+      // One pending nomination per speaker: retire any earlier one first.
+      await supabase.from('evaluator_requests')
+        .update({ status: 'cancelled' })
+        .eq('meeting_id', meetingId).eq('speaker_id', memberId).eq('status', 'pending');
+      await supabase.from('evaluator_requests').insert({
+        meeting_id: meetingId,
+        speaker_slot_index: slotIndex,
+        speaker_id: memberId,
+        preferred_evaluator_id: preferredEvaluatorId,
+        status: 'pending',
+      });
+      fetch('/api/notify-evaluator-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meetingNumber, meetingDate, speakerId: memberId, preferredEvaluatorId }),
+      }).catch(() => {});
+    }
+    setBusy(false);
+    setChoosingEvaluator(false);
+    setJustClaimed(true);
+    setTimeout(() => setJustClaimed(false), 400);
+    notifyRole(memberId, meetingNumber, meetingDate, 'speaker', 'claimed');
+    onChanged();
+  }
+
   async function handleRelease() {
     if (!claim || !canRelease || busy) return;
     setBusy(true);
     await supabase.from('role_claims').delete().eq('id', claim.id);
+    // Releasing a speaker vacates the whole pair: drop the paired evaluator (there's
+    // no one to evaluate) and cancel any pending evaluator request, then trim any
+    // now-empty extra slots back toward the meeting's configured base count.
+    if (roleKey === 'speaker') {
+      await supabase.from('role_claims').delete()
+        .eq('meeting_id', meetingId)
+        .eq('role_key', 'evaluator')
+        .eq('slot_index', slotIndex);
+      await supabase.from('evaluator_requests')
+        .update({ status: 'cancelled' })
+        .eq('meeting_id', meetingId)
+        .eq('speaker_slot_index', slotIndex)
+        .eq('status', 'pending');
+      await trimTrailingSpeakerSlots();
+    }
     // The theme belongs to the Toastmaster of the Day — when that role is given
     // up (or removed by an admin), reset the theme to TBD so it isn't left
     // pointing at a TMoD who's no longer on the meeting.
@@ -90,6 +162,43 @@ export function RoleSlot({
     setBusy(false);
     notifyRole(claim.member_id, meetingNumber, meetingDate, roleKey, 'released');
     onChanged();
+  }
+
+  // Remove trailing empty speaker/evaluator slots created by extra-slot requests,
+  // shrinking the meeting back toward its configured base — never below the base,
+  // and never past an occupied slot (positional slots can't be reindexed safely).
+  async function trimTrailingSpeakerSlots() {
+    const { data: mtg } = await supabase.from('meetings')
+      .select('speaker_slots, base_speaker_slots, pair_order, pair_groups')
+      .eq('id', meetingId).single();
+    if (!mtg) return;
+    const base = mtg.base_speaker_slots ?? mtg.speaker_slots;
+
+    const { data: claims } = await supabase.from('role_claims')
+      .select('role_key, slot_index').eq('meeting_id', meetingId).in('role_key', ['speaker', 'evaluator']);
+    const maxOccupied = (rk: string) =>
+      (claims ?? []).filter((c) => c.role_key === rk).reduce((m, c) => Math.max(m, c.slot_index), 0);
+
+    const target = Math.max(base, maxOccupied('speaker'), maxOccupied('evaluator'));
+    if (target >= mtg.speaker_slots) return; // nothing trimmable
+
+    // Clean up anything sitting on the slots being removed.
+    await supabase.from('role_claims').delete()
+      .eq('meeting_id', meetingId).eq('role_key', 'evaluator').gt('slot_index', target);
+    await supabase.from('evaluator_requests').update({ status: 'cancelled' })
+      .eq('meeting_id', meetingId).gt('speaker_slot_index', target).eq('status', 'pending');
+
+    const pairOrder = Array.isArray(mtg.pair_order)
+      ? (mtg.pair_order as number[]).filter((s) => s <= target) : [];
+    const pairGroups: Record<string, string> = { ...(mtg.pair_groups ?? {}) };
+    for (const k of Object.keys(pairGroups)) if (Number(k) > target) delete pairGroups[k];
+
+    await supabase.from('meetings').update({
+      speaker_slots: target,
+      evaluator_slots: target,
+      pair_order: pairOrder,
+      pair_groups: pairGroups,
+    }).eq('id', meetingId);
   }
 
   async function handleAdminAssign(selectedId: string) {
@@ -187,6 +296,39 @@ export function RoleSlot({
       );
     }
 
+    // Evaluator slot stays locked until the paired speaker claims their slot, so
+    // it can't be grabbed before the speaker names their preference. (Admins can
+    // still assign directly.)
+    if (roleKey === 'evaluator' && awaitingSpeaker && !isAdmin && !readOnly) {
+      return (
+        <div className={`${base} border-dashed border-slate-100 dark:border-slate-800 opacity-60`}>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            {meta.emoji} {meta.label}
+          </span>
+          <p className="text-[11px] italic text-slate-400 dark:text-slate-500 leading-tight mt-auto">
+            🔒 Opens when speaker claims
+          </p>
+        </div>
+      );
+    }
+
+    // Evaluator slot held for a speaker-nominated evaluator awaiting approval.
+    if (roleKey === 'evaluator' && pendingEvaluatorName) {
+      return (
+        <div className={`${base} border-dashed border-amber-300/60 dark:border-amber-700/50 bg-amber-50/70 dark:bg-amber-950/20`}>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            {meta.emoji} {meta.label}
+          </span>
+          <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 leading-tight mt-auto">
+            ⏳ Assignment in progress
+          </p>
+          <p className="text-[10px] text-amber-600/80 dark:text-amber-500/90 leading-tight">
+            Awaiting approval
+          </p>
+        </div>
+      );
+    }
+
     // Admin assign
     if (isAdmin && assigning) {
       return (
@@ -225,21 +367,33 @@ export function RoleSlot({
     const handleEmptyClick = isAdmin ? () => setAssigning(true) : canClaim ? handleClaim : undefined;
 
     return (
-      <div className={emptyChipCls} onClick={handleEmptyClick} role={handleEmptyClick ? 'button' : undefined}>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-          {meta.emoji} {meta.label}
-        </span>
-        <p className="text-xs text-slate-300 dark:text-slate-600 mt-auto">
-          {blockReason
-            ? <span className="italic text-[10px]">{blockReason}</span>
-            : busy ? 'Claiming…'
-            : isAdmin ? '+ Assign'
-            : canClaim ? '+ Claim'
-            : assignOnly ? <span className="italic text-[10px]">Admin assigns</span>
-            : !memberId || isGuest ? 'Sign in to claim'
-            : '—'}
-        </p>
-      </div>
+      <>
+        <div className={emptyChipCls} onClick={handleEmptyClick} role={handleEmptyClick ? 'button' : undefined}>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            {meta.emoji} {meta.label}
+          </span>
+          <p className="text-xs text-slate-300 dark:text-slate-600 mt-auto">
+            {blockReason
+              ? <span className="italic text-[10px]">{blockReason}</span>
+              : busy ? 'Claiming…'
+              : isAdmin ? '+ Assign'
+              : canClaim ? '+ Claim'
+              : assignOnly ? <span className="italic text-[10px]">Admin assigns</span>
+              : !memberId || isGuest ? 'Sign in to claim'
+              : '—'}
+          </p>
+        </div>
+        {choosingEvaluator && (
+          <EvaluatorPreferenceModal
+            members={allMembers}
+            excludeId={memberId}
+            unavailableIds={unavailableEvaluatorIds}
+            busy={busy}
+            onConfirm={finalizeSpeakerClaim}
+            onCancel={() => setChoosingEvaluator(false)}
+          />
+        )}
+      </>
     );
   }
 
@@ -442,25 +596,36 @@ export function RoleSlot({
 
   // Empty claimable slot
   return (
-    <button
-      onClick={handleClaim}
-      disabled={busy || !memberId || isGuest}
-      className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border border-dashed
-                 border-slate-200 dark:border-slate-700 hover:border-maroon-300 dark:hover:border-maroon-700
-                 hover:bg-maroon-50 dark:hover:bg-maroon-950/20
-                 active:scale-[0.98] transition-all min-h-[44px]
-                 disabled:opacity-40 disabled:cursor-not-allowed text-left group"
-    >
-      <span className="text-base shrink-0 opacity-50 group-hover:opacity-100">{meta.emoji}</span>
-      <span className="text-sm text-slate-400 dark:text-slate-500 font-medium shrink-0 group-hover:text-maroon-700 dark:group-hover:text-maroon-400">{meta.label}</span>
-      {memberId && !isGuest ? (
-        <span className="ml-auto text-xs text-maroon-600 dark:text-maroon-400 opacity-0 group-hover:opacity-100 transition-opacity font-medium">
-          {busy ? 'Claiming…' : 'Tap to claim'}
-        </span>
-      ) : (
-        <span className="ml-auto text-xs text-slate-300 dark:text-slate-600">Sign in to claim</span>
+    <>
+      <button
+        onClick={handleClaim}
+        disabled={busy || !memberId || isGuest}
+        className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border border-dashed
+                   border-slate-200 dark:border-slate-700 hover:border-maroon-300 dark:hover:border-maroon-700
+                   hover:bg-maroon-50 dark:hover:bg-maroon-950/20
+                   active:scale-[0.98] transition-all min-h-[44px]
+                   disabled:opacity-40 disabled:cursor-not-allowed text-left group"
+      >
+        <span className="text-base shrink-0 opacity-50 group-hover:opacity-100">{meta.emoji}</span>
+        <span className="text-sm text-slate-400 dark:text-slate-500 font-medium shrink-0 group-hover:text-maroon-700 dark:group-hover:text-maroon-400">{meta.label}</span>
+        {memberId && !isGuest ? (
+          <span className="ml-auto text-xs text-maroon-600 dark:text-maroon-400 opacity-0 group-hover:opacity-100 transition-opacity font-medium">
+            {busy ? 'Claiming…' : 'Tap to claim'}
+          </span>
+        ) : (
+          <span className="ml-auto text-xs text-slate-300 dark:text-slate-600">Sign in to claim</span>
+        )}
+      </button>
+      {choosingEvaluator && (
+        <EvaluatorPreferenceModal
+          members={allMembers}
+          excludeId={memberId}
+          busy={busy}
+          onConfirm={finalizeSpeakerClaim}
+          onCancel={() => setChoosingEvaluator(false)}
+        />
       )}
-    </button>
+    </>
   );
 }
 
@@ -591,6 +756,71 @@ function SpeechEditorInline({
         </button>
         <button onClick={onClose} disabled={busy}
           className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 px-2 py-1.5 min-h-[36px]">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Shown when a member claims a Prepared Speaker slot: nominate a preferred
+// evaluator (→ officer approval) or opt out ("no preference" → slot stays open).
+function EvaluatorPreferenceModal({
+  members, excludeId, unavailableIds = [], busy, onConfirm, onCancel,
+}: {
+  members: Member[];
+  excludeId: string | null;
+  unavailableIds?: string[];
+  busy: boolean;
+  onConfirm: (preferredEvaluatorId: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [selected, setSelected] = useState('');
+  const unavailable = new Set(unavailableIds);
+  const options = members.filter((m) => m.id !== excludeId && !unavailable.has(m.id));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark p-6">
+        <div className="w-10 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto mb-6 sm:hidden" />
+        <p className="text-[10px] font-black uppercase tracking-widest text-maroon-600 dark:text-maroon-400 mb-1">Prepared Speech</p>
+        <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-1">Choose your evaluator</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+          Pick who you&apos;d like to evaluate your speech. Your request goes to the President &amp; VP
+          Education for approval, and the evaluator slot is held until they approve.
+        </p>
+
+        <select
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          disabled={busy}
+          className="w-full border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-800 dark:text-slate-100 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500 mb-4"
+        >
+          <option value="">Select a member…</option>
+          {options.map((m) => (
+            <option key={m.id} value={m.id}>TM {m.display_name}</option>
+          ))}
+        </select>
+
+        <button
+          onClick={() => selected && onConfirm(selected)}
+          disabled={busy || !selected}
+          className="w-full bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700 text-white rounded-xl py-3 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all shadow-sm mb-2"
+        >
+          {busy ? 'Claiming…' : 'Request this evaluator'}
+        </button>
+        <button
+          onClick={() => onConfirm(null)}
+          disabled={busy}
+          className="w-full border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl py-3 text-sm font-medium min-h-[44px] hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors mb-3"
+        >
+          I don&apos;t have a preference
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          className="block w-full text-center text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[36px] disabled:opacity-40"
+        >
           Cancel
         </button>
       </div>

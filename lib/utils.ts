@@ -329,6 +329,18 @@ export function buildWhatsAppAgenda(
     return details.join(' | ');
   };
 
+  // Evaluator for a speaker slot: the assigned member, or "Assignment in
+  // progress" while a speaker-nominated evaluator awaits officer approval,
+  // otherwise blank (open).
+  const evaluatorForSpeaker = (slot: number): string => {
+    const name = getClaimName('evaluator', slot);
+    if (name) return name;
+    const pending = (meeting.evaluator_requests ?? []).some(
+      (r) => r.status === 'pending' && r.speaker_slot_index === slot,
+    );
+    return pending ? '⏳ Assignment in progress' : '';
+  };
+
   const grouped = hasSpeakerGroups(meeting);
 
   // Prepared Speakers — grouped by heat (in speaking order) for a speakathon,
@@ -345,28 +357,36 @@ export function buildWhatsAppAgenda(
           lines.push(` ${n}. ${getClaimName('speaker', slot)}`);
           const detail = speakerDetail(slot);
           if (detail) lines.push(`    ${detail}`);
-          if (isRoleEnabled(meeting, 'evaluator')) lines.push(`    ⚖️ Evaluator: ${getClaimName('evaluator', slot)}`);
+          if (isRoleEnabled(meeting, 'evaluator')) lines.push(`    ⚖️ Evaluator: ${evaluatorForSpeaker(slot)}`);
         }
       }
       lines.push('');
     } else {
+      // Each speaker with their evaluator paired directly underneath.
       lines.push('🎙️ Prepared Speakers:');
       for (let i = 1; i <= meeting.speaker_slots; i++) {
         lines.push(` ${i}. ${getClaimName('speaker', i)}`);
         const detail = speakerDetail(i);
         if (detail) lines.push(`    ${detail}`);
+        if (isRoleEnabled(meeting, 'evaluator') && i <= meeting.evaluator_slots) {
+          lines.push(`    ⚖️ Evaluator: ${evaluatorForSpeaker(i)}`);
+        }
       }
       lines.push('');
     }
   }
 
-  // Evaluators — grouped meetings already show them paired above.
+  // Evaluators without a paired speaker (extra eval slots, or speakers disabled)
+  // — normal pairs are already listed inline with the speaker above.
   if (!grouped && isRoleEnabled(meeting, 'evaluator')) {
-    lines.push('⚖️ Evaluators:');
-    for (let i = 1; i <= meeting.evaluator_slots; i++) {
-      lines.push(` ${i}. ${getClaimName('evaluator', i)}`);
+    const pairedMax = isRoleEnabled(meeting, 'speaker') ? meeting.speaker_slots : 0;
+    if (meeting.evaluator_slots > pairedMax) {
+      lines.push('⚖️ Evaluators:');
+      for (let i = pairedMax + 1; i <= meeting.evaluator_slots; i++) {
+        lines.push(` ${i}. ${getClaimName('evaluator', i)}`);
+      }
+      lines.push('');
     }
-    lines.push('');
   }
 
   // Jury (speakathon judges)

@@ -7,7 +7,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
-  DeviceCapture, RoleKey, SpeakerGroup,
+  EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES } from '@/lib/types';
 import {
@@ -235,15 +235,25 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
       Object.entries(form.pair_groups).filter(([slot, gid]) =>
         validGroupIds.has(gid) && Number(slot) >= 1 && Number(slot) <= speakerSlots)
     );
-    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
+    // The form's slot count is the *base* (admin minimum). Extra slots granted via
+    // member requests sit on top and must not be baked into the base here.
+    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), base_speaker_slots: speakerSlots, disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
     if (initial?.id) {
-      await supabase.from('meetings').update(payload).eq('id', initial.id);
-      // Reducing the pair count leaves speaker/evaluator claims stranded beyond the
-      // new range; delete them so they don't linger (e.g. on the judging page).
+      // Preserve occupied extra slots (from approved requests) that sit above the
+      // base — they trim away on their own when the speaker drops. Only truly-empty
+      // slots beyond both the base and the occupied range are cleaned up.
+      const { data: claims } = await supabase.from('role_claims')
+        .select('role_key, slot_index').eq('meeting_id', initial.id).in('role_key', ['speaker', 'evaluator']);
+      const maxOcc = (rk: string) => (claims ?? []).filter(c => c.role_key === rk).reduce((m, c) => Math.max(m, c.slot_index), 0);
+      const liveSpeaker = Math.max(speakerSlots, maxOcc('speaker'));
+      const liveEval = Math.max(parseInt(form.evaluator_slots), maxOcc('evaluator'));
+      await supabase.from('meetings')
+        .update({ ...payload, speaker_slots: liveSpeaker, evaluator_slots: liveEval })
+        .eq('id', initial.id);
       await supabase.from('role_claims').delete()
         .eq('meeting_id', initial.id)
         .in('role_key', ['speaker', 'evaluator'])
-        .gt('slot_index', speakerSlots);
+        .gt('slot_index', Math.max(liveSpeaker, liveEval));
     } else {
       await supabase.from('meetings').insert(payload);
     }
@@ -297,7 +307,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
       </div>
       <label>
         <span className={labelCls}>Speaker / Evaluator pairs</span>
-        <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Each speaker is paired with one evaluator</p>
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">Base count — each speaker is paired with one evaluator. Extra slots from member requests are added on top and trim back to this when dropped.</p>
         <input type="number" min={1} max={20} value={form.speaker_slots} onChange={e => set('speaker_slots', e.target.value)} className={`${inputCls} w-24`} />
       </label>
       {!form.disabled_roles.includes('speaker') && (
@@ -576,6 +586,7 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
 }) {
   const supabase = createClient();
   const [requests, setRequests] = useState<SpeakerSlotRequest[]>([]);
+  const [evalRequests, setEvalRequests] = useState<EvaluatorRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [acting, setActing] = useState<string | null>(null);
@@ -585,9 +596,12 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
   const memberMap  = new Map(allMembers.map(m => [m.id, m]));
 
   async function fetchRequests() {
-    const { data } = await supabase.from('speaker_slot_requests')
-      .select('*').order('created_at', { ascending: false });
+    const [{ data }, { data: evalData }] = await Promise.all([
+      supabase.from('speaker_slot_requests').select('*').order('created_at', { ascending: false }),
+      supabase.from('evaluator_requests').select('*').order('created_at', { ascending: false }),
+    ]);
     setRequests((data ?? []) as SpeakerSlotRequest[]);
+    setEvalRequests((evalData ?? []) as EvaluatorRequest[]);
     setLoading(false);
   }
 
@@ -623,6 +637,42 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       admin_override: true,
     });
 
+    // The evaluator request (created when the extra slot was requested) is still
+    // unbound — bind it to the new speaker slot so it can be approved/denied on
+    // its own. If none exists (legacy request), create one now.
+    if (req.preferred_evaluator_id) {
+      const { data: bound } = await supabase.from('evaluator_requests')
+        .update({ speaker_slot_index: newSpeakerSlots })
+        .eq('speaker_slot_request_id', req.id)
+        .eq('status', 'pending')
+        .select('id');
+      if (!bound || bound.length === 0) {
+        // Legacy request with no tied row — retire any earlier pending nomination
+        // by this speaker, then create the bound one.
+        await supabase.from('evaluator_requests')
+          .update({ status: 'cancelled' })
+          .eq('meeting_id', req.meeting_id).eq('speaker_id', req.member_id).eq('status', 'pending');
+        await supabase.from('evaluator_requests').insert({
+          meeting_id: req.meeting_id,
+          speaker_slot_index: newSpeakerSlots,
+          speaker_id: req.member_id,
+          preferred_evaluator_id: req.preferred_evaluator_id,
+          status: 'pending',
+          speaker_slot_request_id: req.id,
+        });
+        fetch('/api/notify-evaluator-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            meetingNumber: meeting.number,
+            meetingDate: meeting.date,
+            speakerId: req.member_id,
+            preferredEvaluatorId: req.preferred_evaluator_id,
+          }),
+        }).catch(() => {});
+      }
+    }
+
     await supabase.from('speaker_slot_requests').update({
       status: 'approved',
       reviewer_id: currentAdminId,
@@ -647,12 +697,104 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       review_comment: commentInputs[req.id].trim(),
       reviewed_at: new Date().toISOString(),
     }).eq('id', req.id);
+    // No extra slot → decline the evaluator nomination that rode along with it.
+    await supabase.from('evaluator_requests')
+      .update({
+        status: 'denied',
+        reviewer_id: currentAdminId,
+        review_comment: 'Extra speaker slot was not approved.',
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('speaker_slot_request_id', req.id)
+      .eq('status', 'pending');
+    setActing(null);
+    fetchRequests();
+  }
+
+  // ── Evaluator (speaker-nominated) requests ──────────────────────────────────
+  async function approveEval(req: EvaluatorRequest) {
+    const meeting = meetings.find(m => m.id === req.meeting_id);
+    if (!meeting) return;
+
+    // Unbound: this evaluator came from an extra-slot request whose speaker slot
+    // isn't approved yet, so there's no slot to assign into.
+    if (req.speaker_slot_index == null) {
+      alert('This evaluator is tied to an extra speaker-slot request. Approve that speaker slot first, then approve the evaluator.');
+      return;
+    }
+
+    // The paired evaluator slot must be free (a pending request holds it, but an
+    // admin may have filled it directly in the meantime).
+    const taken = meeting.role_claims.some(
+      c => c.role_key === 'evaluator' && c.slot_index === req.speaker_slot_index,
+    );
+    if (taken) {
+      alert('That evaluator slot is already filled. Remove the current evaluator first, or deny this request.');
+      return;
+    }
+    // The nominee must not already be evaluating another speaker in this meeting.
+    const nomineeAlreadyEvaluator = meeting.role_claims.some(
+      c => c.role_key === 'evaluator' && c.member_id === req.preferred_evaluator_id,
+    );
+    if (nomineeAlreadyEvaluator) {
+      const who = memberMap.get(req.preferred_evaluator_id)?.display_name ?? 'This member';
+      alert(`TM ${who} is already assigned as an evaluator for this meeting. Deny this request, or free up their other slot first.`);
+      return;
+    }
+    setActing(req.id);
+
+    await supabase.from('role_claims').insert({
+      meeting_id: req.meeting_id,
+      role_key: 'evaluator',
+      slot_index: req.speaker_slot_index,
+      member_id: req.preferred_evaluator_id,
+      admin_override: true,
+    });
+
+    await supabase.from('evaluator_requests').update({
+      status: 'approved',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id]?.trim() || null,
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
+
+    fetch('/api/notify-role', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetMemberId: req.preferred_evaluator_id,
+        meetingNumber: meeting.number,
+        meetingDate: meeting.date,
+        roleKey: 'evaluator',
+        action: 'assigned',
+      }),
+    }).catch(() => {});
+
+    setActing(null);
+    fetchRequests();
+    onChanged();
+  }
+
+  async function denyEval(req: EvaluatorRequest) {
+    if (!commentInputs[req.id]?.trim()) {
+      alert('Please add a comment explaining why the request is denied.');
+      return;
+    }
+    setActing(req.id);
+    await supabase.from('evaluator_requests').update({
+      status: 'denied',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id].trim(),
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
     setActing(null);
     fetchRequests();
   }
 
   const pending  = requests.filter(r => r.status === 'pending');
   const resolved = requests.filter(r => r.status !== 'pending');
+  const evalPending  = evalRequests.filter(r => r.status === 'pending');
+  const evalResolved = evalRequests.filter(r => r.status !== 'pending');
 
   if (loading) return <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-20 bg-slate-200 dark:bg-slate-800 rounded-2xl animate-pulse" />)}</div>;
 
@@ -708,6 +850,114 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
                       className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
                       {acting === req.id ? '…' : '✗ Deny'}
                     </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Evaluator requests (speaker-nominated) */}
+      <div>
+        <p className={labelCls}>Evaluator Requests ({evalPending.length})</p>
+        {evalPending.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No pending evaluator requests.</p>
+        ) : (
+          <div className="space-y-3">
+            {evalPending.map(req => {
+              const speaker   = memberMap.get(req.speaker_id);
+              const evaluator = memberMap.get(req.preferred_evaluator_id);
+              const meeting   = meetingMap.get(req.meeting_id);
+              // Other speakers in the same meeting who nominated the same person —
+              // only one can be approved, so surface the competing requests.
+              const coRequesters = evalPending.filter(
+                r => r.id !== req.id && r.speaker_id !== req.speaker_id && r.meeting_id === req.meeting_id && r.preferred_evaluator_id === req.preferred_evaluator_id,
+              );
+              return (
+                <div key={req.id} className={`${cardCls} p-4 space-y-3 border-l-4 border-amber-400 dark:border-amber-600`}>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      🎙️ TM {speaker?.display_name ?? 'Unknown'} <span className="font-normal text-slate-400">wants</span> ⚖️ TM {evaluator?.display_name ?? 'Unknown'}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      {meeting ? `Meeting #${meeting.number} · ${new Date(meeting.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'Unknown meeting'} · {req.speaker_slot_index != null ? `Evaluator slot ${req.speaker_slot_index}` : 'Awaiting extra-slot approval'}
+                    </p>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                      Requested {new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  {coRequesters.length > 0 && (
+                    <div className="rounded-lg bg-amber-100/70 dark:bg-amber-900/30 border border-amber-300/60 dark:border-amber-700/50 px-2.5 py-2">
+                      <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                        ⚠️ TM {evaluator?.display_name ?? 'This evaluator'} is also requested by {coRequesters.length} other speaker{coRequesters.length > 1 ? 's' : ''}:
+                      </p>
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                        {coRequesters.map(r => `TM ${memberMap.get(r.speaker_id)?.display_name ?? 'Unknown'}${r.speaker_slot_index != null ? ` (slot ${r.speaker_slot_index})` : ''}`).join(', ')}
+                      </p>
+                      <p className="text-[10px] text-amber-600/80 dark:text-amber-500/80 mt-0.5">Only one can be approved — approving this one leaves the others to deny.</p>
+                    </div>
+                  )}
+                  <textarea
+                    value={commentInputs[req.id] ?? ''}
+                    onChange={e => setCommentInputs(prev => ({ ...prev, [req.id]: e.target.value }))}
+                    placeholder="Add a comment (required for deny, optional for approve)…"
+                    rows={2}
+                    className={`${inputCls} text-xs resize-none`}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => approveEval(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✓ Approve & assign'}
+                    </button>
+                    <button
+                      onClick={() => denyEval(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✗ Deny'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {evalResolved.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {evalResolved.map(req => {
+              const speaker   = memberMap.get(req.speaker_id);
+              const evaluator = memberMap.get(req.preferred_evaluator_id);
+              const meeting   = meetingMap.get(req.meeting_id);
+              const reviewer  = req.reviewer_id ? memberMap.get(req.reviewer_id) : null;
+              const tone = req.status === 'approved'
+                ? 'border-emerald-400 dark:border-emerald-600'
+                : req.status === 'denied'
+                ? 'border-red-400 dark:border-red-700'
+                : 'border-slate-300 dark:border-slate-600';
+              return (
+                <div key={req.id} className={`${cardCls} p-3 border-l-4 ${tone}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                        🎙️ TM {speaker?.display_name ?? '?'} → ⚖️ TM {evaluator?.display_name ?? '?'}
+                        {meeting ? ` · Meeting #${meeting.number}` : ''}
+                      </p>
+                      {req.review_comment && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 italic">&ldquo;{req.review_comment}&rdquo;</p>
+                      )}
+                      {reviewer && <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">by TM {reviewer.display_name}</p>}
+                    </div>
+                    <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      req.status === 'approved'
+                        ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
+                        : req.status === 'denied'
+                        ? 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                    }`}>
+                      {req.status}
+                    </span>
                   </div>
                 </div>
               );
@@ -1326,7 +1576,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
   const fetchAll = useCallback(async () => {
     const [{ data: m }, { data: mb }, { data: bl }, { data: gr }, { data: ann }, { data: cfg }] = await Promise.all([
-      supabase.from('meetings').select('*, role_claims(*, member:members(*))').order('number', { ascending: false }).limit(20),
+      supabase.from('meetings').select('*, role_claims(*, member:members(*)), evaluator_requests(*)').order('number', { ascending: false }).limit(20),
       supabase.from('members').select('*').order('name'),
       supabase.from('ballots').select('*'),
       supabase.from('guest_registrations').select('*').order('created_at', { ascending: false }),
@@ -1376,6 +1626,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         meeting_type: 'regular' as const,
         speaker_slots: 1,
         evaluator_slots: 1,
+        base_speaker_slots: 1,
       });
     }
     await supabase.from('meetings').insert(rows);
@@ -1524,7 +1775,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                     {i > 0 && <hr className="border-slate-200 dark:border-slate-800 mb-4" />}
                     {editingMeeting?.id === m.id ? (
                       <MeetingForm
-                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.speaker_slots), evaluator_slots: String(m.evaluator_slots), disabled_roles: m.disabled_roles ?? [], jury_slots: String(m.jury_slots ?? 0), speaker_groups: m.speaker_groups ?? [], pair_groups: m.pair_groups ?? {} }}
+                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.base_speaker_slots ?? m.speaker_slots), evaluator_slots: String(m.base_speaker_slots ?? m.evaluator_slots), disabled_roles: m.disabled_roles ?? [], jury_slots: String(m.jury_slots ?? 0), speaker_groups: m.speaker_groups ?? [], pair_groups: m.pair_groups ?? {} }}
                         onSave={() => { setEditingMeeting(null); fetchAll(); }}
                         onCancel={() => setEditingMeeting(null)}
                       />

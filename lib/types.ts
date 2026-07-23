@@ -91,6 +91,7 @@ export interface Meeting {
   meeting_type: MeetingType;
   speaker_slots: number;
   evaluator_slots: number;
+  base_speaker_slots: number;   // admin-configured minimum; extra slots trim back to this
   disabled_roles: RoleKey[];   // role categories turned off for this meeting
   // Speakathon extras (0 / empty for regular meetings)
   jury_slots: number;                    // admin-assigned judges; jury shown when > 0
@@ -142,6 +143,7 @@ export const LEVELS = [1, 2, 3, 4, 5] as const;
 
 export interface MeetingWithClaims extends Meeting {
   role_claims: RoleClaim[];
+  evaluator_requests: EvaluatorRequest[];
 }
 
 export const ROLE_META: Record<
@@ -178,6 +180,27 @@ export interface SpeakerSlotRequest {
   member_id: string;
   status: 'pending' | 'approved' | 'denied';
   request_note: string | null;
+  // Optional evaluator the requester would like once the extra slot is granted.
+  preferred_evaluator_id: string | null;
+  reviewer_id: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+// A speaker's nomination of who should evaluate them, pending officer approval.
+// The paired evaluator slot is `speaker_slot_index` (evaluator i ↔ speaker i).
+export interface EvaluatorRequest {
+  id: string;
+  meeting_id: string;
+  // Null until bound: an extra-slot request's evaluator has no paired speaker
+  // slot until the extra speaker slot is approved.
+  speaker_slot_index: number | null;
+  speaker_id: string;
+  preferred_evaluator_id: string;
+  status: 'pending' | 'approved' | 'denied' | 'cancelled';
+  // Set when this evaluator request came from an extra-speaker-slot request.
+  speaker_slot_request_id: string | null;
   reviewer_id: string | null;
   review_comment: string | null;
   reviewed_at: string | null;

@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
-import type { ContestResult, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
+import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
@@ -407,6 +407,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
 
   const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
+  const [myEvalRequests, setMyEvalRequests] = useState<(EvaluatorRequest & { meeting_number?: number; meeting_date?: string; evaluator_name?: string; reviewer_name?: string; _past?: boolean })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number; group_name?: string | null; show_ranking?: boolean })[]>([]);
 
@@ -430,11 +431,28 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           .filter(r => !r._past);
         setMyRequests(enriched);
       });
-    // Pending count for officers
+    // My evaluator nominations (as the speaker). Keep upcoming ones plus any that
+    // stayed pending past the meeting (shown as "no action taken").
+    supabase.from('evaluator_requests').select('*')
+      .eq('speaker_id', member.id).order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (!data) return;
+        const enriched = (data as EvaluatorRequest[])
+          .map(r => {
+            const m = meetings.find(mt => mt.id === r.meeting_id);
+            const evaluator = allMembers.find(mb => mb.id === r.preferred_evaluator_id);
+            const reviewer = r.reviewer_id ? allMembers.find(mb => mb.id === r.reviewer_id) : null;
+            return { ...r, meeting_number: m?.number, meeting_date: m?.date, evaluator_name: evaluator?.display_name, reviewer_name: reviewer?.display_name, _past: m ? isMeetingPast(m) : true };
+          })
+          .filter(r => r.status !== 'cancelled' && (!r._past || r.status === 'pending'));
+        setMyEvalRequests(enriched);
+      });
+    // Pending count for officers (speaker-slot + evaluator requests)
     if (isOfficer) {
-      supabase.from('speaker_slot_requests').select('id', { count: 'exact', head: true })
-        .eq('status', 'pending')
-        .then(({ count }) => setPendingCount(count ?? 0));
+      Promise.all([
+        supabase.from('speaker_slot_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('evaluator_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      ]).then(([a, b]) => setPendingCount((a.count ?? 0) + (b.count ?? 0)));
     }
     // Contest results revealed to this member
     supabase.from('contest_results').select('*')
@@ -625,6 +643,58 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* My evaluator requests (who I asked to evaluate me) */}
+      {myEvalRequests.length > 0 && (
+        <div className={cardCls}>
+          {sectionLabel('⚖️ Your Evaluator Requests')}
+          <div className="space-y-2">
+            {myEvalRequests.map(r => {
+              // A request left pending once the meeting is over is treated as
+              // "no action taken" rather than an open pending state.
+              const noAction = r.status === 'pending' && r._past;
+              const tone = noAction
+                ? 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50'
+                : r.status === 'pending'
+                ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40'
+                : r.status === 'approved'
+                ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40'
+                : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/40';
+              const textTone = noAction
+                ? 'text-slate-500 dark:text-slate-400'
+                : r.status === 'pending' ? 'text-amber-700 dark:text-amber-400'
+                : r.status === 'approved' ? 'text-emerald-700 dark:text-emerald-400'
+                : 'text-red-600 dark:text-red-400';
+              return (
+                <div key={r.id} className={`rounded-xl px-3 py-2.5 border text-xs ${tone}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className={`font-bold ${textTone}`}>
+                        {noAction && '🚫 No action taken'}
+                        {!noAction && r.status === 'pending' && '⏳ Pending approval'}
+                        {!noAction && r.status === 'approved' && '✓ Approved'}
+                        {!noAction && r.status === 'denied' && '✗ Denied'}
+                        {r.meeting_number ? ` · Meeting #${r.meeting_number}` : ''}
+                      </p>
+                      <p className="mt-0.5 text-slate-500 dark:text-slate-400">
+                        You requested <span className="font-medium text-slate-700 dark:text-slate-300">TM {r.evaluator_name ?? '—'}</span> as your evaluator
+                      </p>
+                      {r.review_comment && (
+                        <p className="mt-1 font-medium text-slate-700 dark:text-slate-300">
+                          <span className="text-slate-500 dark:text-slate-400">Club Officer notes{r.reviewer_name ? ` (TM ${r.reviewer_name})` : ''}:</span>{' '}{r.review_comment}
+                        </p>
+                      )}
+                    </div>
+                    <p className="shrink-0 text-slate-400 dark:text-slate-600">
+                      {r.meeting_date ? new Date(r.meeting_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
