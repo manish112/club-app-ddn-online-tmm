@@ -16,7 +16,7 @@ export function useMeetings() {
     const [{ data: meetingsData }, { data: membersData }, { data: ballotsData }, { data: annData }] = await Promise.all([
       supabase
         .from('meetings')
-        .select('*, role_claims(*, member:members(*))')
+        .select('*, role_claims(*, member:members(*)), evaluator_requests(*)')
         .order('number', { ascending: false })
         .limit(20),
       supabase.from('members')
@@ -48,6 +48,7 @@ export function useMeetings() {
       .channel('tm_public_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meetings' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'role_claims' }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'evaluator_requests' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ballots' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'announcements' }, () => fetchAll())
       .subscribe();

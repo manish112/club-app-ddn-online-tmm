@@ -88,6 +88,7 @@ export async function GET(req: NextRequest) {
       meeting_type: meetingType,
       speaker_slots: 1,
       evaluator_slots: 1,
+      base_speaker_slots: 1,
       disabled_roles: disabledRoles,
     });
   }
