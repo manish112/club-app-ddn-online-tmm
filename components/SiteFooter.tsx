@@ -1,6 +1,6 @@
 import Image from 'next/image';
 import type { Member, LeadershipRole } from '@/lib/types';
-import { LEADERSHIP_ROLES } from '@/lib/types';
+import { LEADERSHIP_ROLES, hasLeadershipRole } from '@/lib/types';
 
 function WhatsAppIcon() {
   return (
@@ -22,9 +22,14 @@ interface Props {
 }
 
 export function SiteFooter({ members }: Props) {
+  // Pair each contact role with the member who holds it, keeping the role so the
+  // label reflects the searched role (a member may hold several roles).
   const contacts = CONTACT_ROLE_ORDER
-    .map((role) => members.find((m) => m.active && m.leadership_role === role))
-    .filter((m): m is Member => !!m);
+    .map((role) => {
+      const m = members.find((mm) => mm.active && hasLeadershipRole(mm, role));
+      return m ? { m, role } : null;
+    })
+    .filter((c): c is { m: Member; role: LeadershipRole } => !!c);
 
   const roleLabel = (role: LeadershipRole) =>
     LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
@@ -47,15 +52,15 @@ export function SiteFooter({ members }: Props) {
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Contact us</p>
             <div className="space-y-3">
-              {contacts.map((m) => {
+              {contacts.map(({ m, role }) => {
                 const showPhone = m.show_phone_in_contact && !!m.phone;
-                const label = roleLabel(m.leadership_role!);
+                const label = roleLabel(role);
                 const subtitle = showPhone ? `${label} · ${m.phone}` : label;
 
                 if (showPhone) {
                   return (
                     <a
-                      key={m.id}
+                      key={`${m.id}-${role}`}
                       href={waLink(m.phone!)}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -73,7 +78,7 @@ export function SiteFooter({ members }: Props) {
                 }
 
                 return (
-                  <div key={m.id} className="flex items-center gap-3">
+                  <div key={`${m.id}-${role}`} className="flex items-center gap-3">
                     <WhatsAppIcon />
                     <div>
                       <p className="text-sm font-medium text-white/80">TM {m.display_name}</p>

@@ -18,7 +18,7 @@ const sourceSans = Source_Sans_3({
 
 export const metadata: Metadata = {
   title: 'Dehradun Online Toastmasters — Meeting Roles',
-  description: 'Claim and view meeting roles for Dehradun Online Toastmasters Club · Club No. 03295206 · District 41',
+  description: 'Claim and view meeting roles for Dehradun Online Toastmasters Club · Club number: 28680307 · District 224',
 };
 
 export const viewport: Viewport = {

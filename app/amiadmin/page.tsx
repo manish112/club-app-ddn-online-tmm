@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
+import { EmailSettingsPanel } from '@/components/EmailSettingsPanel';
 import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
@@ -9,7 +10,7 @@ import type {
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
   EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup,
 } from '@/lib/types';
-import { LEADERSHIP_ROLES } from '@/lib/types';
+import { LEADERSHIP_ROLES, memberLeadershipRoles, hasLeadershipRole, isClubOfficer } from '@/lib/types';
 import {
   DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
   type TimerModes, type TimerModeKey, type TimerThresholds,
@@ -34,7 +35,7 @@ import Image from 'next/image';
 const MEMBER_KEY = 'tm_member_id';
 
 function isAdminMember(m: Member): boolean {
-  return m.is_admin || m.leadership_role === 'president' || m.leadership_role === 'vp_education';
+  return m.is_admin || isClubOfficer(m);
 }
 
 // ─── Shared styles ─────────────────────────────────────────────────────────────
@@ -139,13 +140,13 @@ interface ScheduleConfig { weekday: number; startTime: string; endTime: string }
 
 interface MeetingFormData {
   number: string; date: string; start_time: string; end_time: string;
-  theme: string; meeting_type: MeetingType; speaker_slots: string; evaluator_slots: string;
+  theme: string; meeting_link: string; meeting_type: MeetingType; speaker_slots: string; evaluator_slots: string;
   disabled_roles: RoleKey[];
   jury_slots: string;
   speaker_groups: SpeakerGroup[];
   pair_groups: Record<string, string>;
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {} };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_link: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {} };
 
 const newGroupId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -162,6 +163,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     jury_slots: String(initial?.jury_slots ?? 0),
     speaker_groups: initial?.speaker_groups ?? [],
     pair_groups: initial?.pair_groups ?? {},
+    meeting_link: initial?.meeting_link ?? '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -237,7 +239,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     );
     // The form's slot count is the *base* (admin minimum). Extra slots granted via
     // member requests sit on top and must not be baked into the base here.
-    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), base_speaker_slots: speakerSlots, disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
+    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_link: form.meeting_link.trim() || null, meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), base_speaker_slots: speakerSlots, disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
     if (initial?.id) {
       // Preserve occupied extra slots (from approved requests) that sit above the
       // base — they trim away on their own when the speaker drops. Only truly-empty
@@ -255,7 +257,15 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
         .in('role_key', ['speaker', 'evaluator'])
         .gt('slot_index', Math.max(liveSpeaker, liveEval));
     } else {
-      await supabase.from('meetings').insert(payload);
+      const { data: created } = await supabase.from('meetings').insert(payload).select('id').single();
+      // Announce the new meeting to all members (best-effort).
+      if (created?.id) {
+        fetch('/api/notify-meeting-created', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meetingId: created.id }),
+        }).catch(() => {});
+      }
     }
     setSaving(false); onSave();
   }
@@ -270,6 +280,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
         <div><span className={labelCls}>End time</span><TimePicker value={form.end_time} onChange={v => set('end_time', v)} /></div>
       </div>
       <label><span className={labelCls}>Theme</span><input type="text" value={form.theme} onChange={e => set('theme', e.target.value)} placeholder="e.g. Mental Wellness" className={inputCls} /></label>
+      <label><span className={labelCls}>Meeting link</span><input type="url" value={form.meeting_link} onChange={e => set('meeting_link', e.target.value)} placeholder="Zoom / Google Meet URL" className={inputCls} /></label>
       <div>
         <span className={labelCls}>Meeting format</span>
         <div className="flex flex-wrap gap-1.5 mt-1 mb-2">
@@ -362,9 +373,9 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
 
-  const autoAdmin = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
+  const autoAdmin = isClubOfficer(member);
   const hasAdmin = member.is_admin || autoAdmin;
-  const autoGuestMgr = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
+  const autoGuestMgr = isClubOfficer(member);
   const hasGuestMgr = member.can_manage_guests || autoGuestMgr;
 
   async function save() {
@@ -382,6 +393,14 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   async function changeMentor(mentorId: string) {
     setSavingMentor(true);
     await supabase.from('members').update({ mentor_id: mentorId || null }).eq('id', member.id);
+    // Notify the mentee and the mentor when a mentor is assigned (best-effort).
+    if (mentorId) {
+      fetch('/api/notify-mentor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ menteeId: member.id, mentorId }),
+      }).catch(() => {});
+    }
     setSavingMentor(false); onUpdated();
   }
 
@@ -392,14 +411,19 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setResettingPw(false); onUpdated();
   }
 
-  async function changeLeadershipRole(role: string) {
-    const { error } = await supabase.from('members').update({ leadership_role: role || null }).eq('id', member.id);
-    if (error) {
-      const taken = allMembers.find(m => m.id !== member.id && m.leadership_role === role);
-      alert(taken
-        ? `"${LEADERSHIP_ROLES.find(r => r.value === role)?.label}" is already assigned to TM ${taken.display_name}. Remove it there first.`
-        : `Failed: ${error.message}`);
-      return;
+  async function toggleLeadershipRole(role: LeadershipRole) {
+    const current = memberLeadershipRoles(member);
+    const has = current.includes(role);
+    const next = has ? current.filter(r => r !== role) : [...current, role];
+    const { error } = await supabase.from('members').update({ leadership_roles: next }).eq('id', member.id);
+    if (error) { alert(`Failed: ${error.message}`); return; }
+    // Email the member when a NEW leadership role is granted (best-effort).
+    if (!has) {
+      fetch('/api/notify-leadership', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actorId: currentAdminId, targetMemberId: member.id, role }),
+      }).catch(() => {});
     }
     onUpdated();
   }
@@ -512,22 +536,34 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
         </select>
       </div>
 
-      {/* Leadership role selector */}
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Role</span>
-        <select value={member.leadership_role ?? ''} onChange={e => changeLeadershipRole(e.target.value)}
-          className="flex-1 text-xs border border-slate-200 dark:border-slate-700/60 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800/60 text-slate-700 dark:text-slate-300
-                     focus:outline-none focus:ring-1 focus:ring-maroon-600">
-          <option value="">— None —</option>
+      {/* Leadership roles (multi-select) */}
+      <div className="flex items-start gap-2">
+        <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12 mt-1.5">Roles</span>
+        <div className="flex flex-wrap gap-1.5 flex-1">
           {LEADERSHIP_ROLES.map(r => {
-            const takenBy = allMembers.find(m => m.id !== member.id && m.leadership_role === r.value);
+            const selected = hasLeadershipRole(member, r.value);
+            const takenBy = allMembers.find(m => m.id !== member.id && hasLeadershipRole(m, r.value));
+            const blocked = r.exclusive && !!takenBy && !selected;
             return (
-              <option key={r.value} value={r.value} disabled={r.exclusive && !!takenBy}>
-                {r.label}{takenBy ? ` (${takenBy.display_name})` : ''}
-              </option>
+              <button
+                key={r.value}
+                type="button"
+                disabled={blocked}
+                onClick={() => toggleLeadershipRole(r.value)}
+                title={blocked ? 'Already assigned to another member' : ''}
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 ${
+                  selected
+                    ? 'bg-maroon-600 border-maroon-600 text-white'
+                    : blocked
+                      ? 'border-slate-200 dark:border-slate-700/60 text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                      : 'border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-300 hover:border-maroon-400 dark:hover:border-maroon-700 hover:text-maroon-700 dark:hover:text-maroon-400'
+                }`}
+              >
+                {r.label}
+              </button>
             );
           })}
-        </select>
+        </div>
       </div>
     </div>
   );
@@ -535,13 +571,22 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
 
 // ─── Add member form ──────────────────────────────────────────────────────────
 
-function AddMemberForm({ onAdd }: { onAdd: (name: string) => void }) {
+function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string) => void }) {
   const [name, setName] = useState('');
-  function submit(e: React.FormEvent) { e.preventDefault(); if (!name.trim()) return; onAdd(name.trim()); setName(''); }
+  const [email, setEmail] = useState('');
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onAdd(name.trim(), email.trim());
+    setName(''); setEmail('');
+  }
   return (
-    <form onSubmit={submit} className="flex gap-2">
+    <form onSubmit={submit} className="space-y-2">
       <input value={name} onChange={e => setName(e.target.value)} placeholder="New member full name" className={inputCls} />
-      <button type="submit" disabled={!name.trim()} className={`shrink-0 ${primaryBtn}`}>Add</button>
+      <div className="flex gap-2">
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (sends a welcome email)" className={inputCls} />
+        <button type="submit" disabled={!name.trim()} className={`shrink-0 ${primaryBtn}`}>Add</button>
+      </div>
     </form>
   );
 }
@@ -680,6 +725,11 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       reviewed_at: new Date().toISOString(),
     }).eq('id', req.id);
 
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'speaker_slot', event: 'approved', requestId: req.id }),
+    }).catch(() => {});
+
     setActing(null);
     fetchRequests();
     onChanged();
@@ -707,6 +757,12 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       })
       .eq('speaker_slot_request_id', req.id)
       .eq('status', 'pending');
+
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'speaker_slot', event: 'denied', requestId: req.id }),
+    }).catch(() => {});
+
     setActing(null);
     fetchRequests();
   }
@@ -762,12 +818,19 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        meetingId: req.meeting_id,
         targetMemberId: req.preferred_evaluator_id,
-        meetingNumber: meeting.number,
-        meetingDate: meeting.date,
         roleKey: 'evaluator',
         action: 'assigned',
+        actorId: currentAdminId,
+        actorIsAdmin: true,
       }),
+    }).catch(() => {});
+
+    // Let the requesting speaker know their evaluator was approved.
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'evaluator', event: 'approved', requestId: req.id }),
     }).catch(() => {});
 
     setActing(null);
@@ -787,6 +850,12 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
       review_comment: commentInputs[req.id].trim(),
       reviewed_at: new Date().toISOString(),
     }).eq('id', req.id);
+
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'evaluator', event: 'denied', requestId: req.id }),
+    }).catch(() => {});
+
     setActing(null);
     fetchRequests();
   }
@@ -1564,7 +1633,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage' | 'email'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -1646,13 +1715,36 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
   async function deleteMeeting(id: string) {
     if (!confirm('Delete this meeting and all its role claims? This cannot be undone.')) return;
+    // Capture details BEFORE deletion so we can tell members it was cancelled.
+    const m = meetings.find(mt => mt.id === id);
+    const notifyCancel = m && confirm(`Email all members that Meeting #${m.number} has been cancelled?`);
     await supabase.from('meetings').delete().eq('id', id);
+    if (m && notifyCancel) {
+      fetch('/api/notify-meeting-cancelled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingNumber: m.number, meetingDate: m.date,
+          startTime: m.start_time, endTime: m.end_time, meetingTheme: m.theme,
+        }),
+      }).catch(() => {});
+    }
     fetchAll();
   }
 
-  async function addMember(name: string) {
-    const { error } = await supabase.from('members').insert({ membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true });
+  async function addMember(name: string, email: string) {
+    const { data: created, error } = await supabase.from('members')
+      .insert({ membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true, email: email || null })
+      .select('id').single();
     if (error) { alert(`Failed: ${error.message}`); return; }
+    // Welcome the new member if they have an email (best-effort).
+    if (created?.id && email) {
+      fetch('/api/notify-welcome', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetMemberId: created.id }),
+      }).catch(() => {});
+    }
     fetchAll();
   }
 
@@ -1667,6 +1759,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     { id: 'requests'  as const, label: 'Requests' },
     { id: 'announce'  as const, label: 'Announce' },
     { id: 'usage'     as const, label: 'Usage' },
+    { id: 'email'     as const, label: 'Email' },
     { id: 'settings'  as const, label: 'Settings' },
   ];
 
@@ -1725,6 +1818,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-slate-200 dark:bg-slate-900/60 rounded-2xl h-32 animate-pulse" />)}</div>
         ) : tab === 'settings' ? (
           <AgendaSettingsPanel />
+        ) : tab === 'email' ? (
+          <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
         ) : tab === 'usage' ? (
           <UsagePanel currentMemberId={currentMember.id} />
         ) : tab === 'guests' ? (
@@ -1775,7 +1870,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                     {i > 0 && <hr className="border-slate-200 dark:border-slate-800 mb-4" />}
                     {editingMeeting?.id === m.id ? (
                       <MeetingForm
-                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.base_speaker_slots ?? m.speaker_slots), evaluator_slots: String(m.base_speaker_slots ?? m.evaluator_slots), disabled_roles: m.disabled_roles ?? [], jury_slots: String(m.jury_slots ?? 0), speaker_groups: m.speaker_groups ?? [], pair_groups: m.pair_groups ?? {} }}
+                        initial={{ id: m.id, number: String(m.number), date: m.date, start_time: m.start_time, end_time: m.end_time, theme: m.theme ?? '', meeting_link: m.meeting_link ?? '', meeting_type: m.meeting_type, speaker_slots: String(m.base_speaker_slots ?? m.speaker_slots), evaluator_slots: String(m.base_speaker_slots ?? m.evaluator_slots), disabled_roles: m.disabled_roles ?? [], jury_slots: String(m.jury_slots ?? 0), speaker_groups: m.speaker_groups ?? [], pair_groups: m.pair_groups ?? {} }}
                         onSave={() => { setEditingMeeting(null); fetchAll(); }}
                         onCancel={() => setEditingMeeting(null)}
                       />

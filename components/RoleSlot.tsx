@@ -35,11 +35,18 @@ interface Props {
   onChanged: () => void;
 }
 
-function notifyRole(targetMemberId: string, meetingNumber: number, meetingDate: string, roleKey: RoleKey, action: 'claimed' | 'released' | 'assigned' | 'removed') {
+function notifyRole(payload: {
+  meetingId: string;
+  targetMemberId: string;
+  roleKey: RoleKey;
+  action: 'claimed' | 'released' | 'assigned' | 'removed';
+  actorId: string | null;
+  actorIsAdmin: boolean;
+}) {
   fetch('/api/notify-role', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ targetMemberId, meetingNumber, meetingDate, roleKey, action }),
+    body: JSON.stringify(payload),
   }).catch(() => {});
 }
 
@@ -90,7 +97,7 @@ export function RoleSlot({
     setBusy(false);
     setJustClaimed(true);
     setTimeout(() => setJustClaimed(false), 400);
-    notifyRole(memberId, meetingNumber, meetingDate, roleKey, 'claimed');
+    notifyRole({ meetingId, targetMemberId: memberId, roleKey, action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 
@@ -113,24 +120,32 @@ export function RoleSlot({
       await supabase.from('evaluator_requests')
         .update({ status: 'cancelled' })
         .eq('meeting_id', meetingId).eq('speaker_id', memberId).eq('status', 'pending');
-      await supabase.from('evaluator_requests').insert({
+      const { data: evalReq } = await supabase.from('evaluator_requests').insert({
         meeting_id: meetingId,
         speaker_slot_index: slotIndex,
         speaker_id: memberId,
         preferred_evaluator_id: preferredEvaluatorId,
         status: 'pending',
-      });
+      }).select('id').single();
       fetch('/api/notify-evaluator-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ meetingNumber, meetingDate, speakerId: memberId, preferredEvaluatorId }),
       }).catch(() => {});
+      // Confirm to the speaker and notify the nominated evaluator.
+      if (evalReq?.id) {
+        fetch('/api/notify-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'evaluator', event: 'submitted', requestId: evalReq.id }),
+        }).catch(() => {});
+      }
     }
     setBusy(false);
     setChoosingEvaluator(false);
     setJustClaimed(true);
     setTimeout(() => setJustClaimed(false), 400);
-    notifyRole(memberId, meetingNumber, meetingDate, 'speaker', 'claimed');
+    notifyRole({ meetingId, targetMemberId: memberId, roleKey: 'speaker', action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 
@@ -160,7 +175,7 @@ export function RoleSlot({
       await supabase.from('meetings').update({ theme: 'TBD' }).eq('id', meetingId);
     }
     setBusy(false);
-    notifyRole(claim.member_id, meetingNumber, meetingDate, roleKey, 'released');
+    notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 
@@ -213,7 +228,7 @@ export function RoleSlot({
     });
     setBusy(false);
     setAssigning(false);
-    notifyRole(selectedId, meetingNumber, meetingDate, roleKey, 'assigned');
+    notifyRole({ meetingId, targetMemberId: selectedId, roleKey, action: 'assigned', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 

@@ -20,7 +20,7 @@ export function useMeetings() {
         .order('number', { ascending: false })
         .limit(20),
       supabase.from('members')
-        .select('id, membership_no, name, display_name, active, is_admin, can_manage_guests, introduction, mentor_id, leadership_role, phone, email, city, gender, avatar_url, show_phone_in_contact, theme_preference, created_at')
+        .select('id, membership_no, name, display_name, active, is_admin, can_manage_guests, introduction, mentor_id, leadership_roles, phone, email, city, gender, avatar_url, show_phone_in_contact, theme_preference, created_at')
         .eq('active', true).order('name'),
       supabase.from('ballots').select('*'),
       supabase

@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
 import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
-import { ROLE_META, LEADERSHIP_ROLES } from '@/lib/types';
+import { ROLE_META, LEADERSHIP_ROLES, memberLeadershipRoles, isClubOfficer } from '@/lib/types';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
 import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot } from '@/lib/utils';
@@ -144,13 +144,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
             <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Phone</label>
             <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
               placeholder="+91 98765 43210" className={inputCls} />
-            {member.leadership_role && phone.trim() && (
+            {memberLeadershipRoles(member).length > 0 && phone.trim() && (
               <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
                 <input type="checkbox" checked={showPhone} onChange={(e) => setShowPhone(e.target.checked)}
                   className="w-4 h-4 accent-maroon-700 rounded" />
                 <span className="text-xs text-slate-500 dark:text-slate-400">
                   Show my phone number on Contact Us against{' '}
-                  <strong className="text-slate-700 dark:text-slate-300">{leadershipLabel(member.leadership_role)}</strong>
+                  <strong className="text-slate-700 dark:text-slate-300">{memberLeadershipRoles(member).map(leadershipLabel).filter(Boolean).join(' · ')}</strong>
                 </span>
               </label>
             )}
@@ -190,13 +190,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           <div>
             <p className="text-lg font-bold text-slate-900 dark:text-white font-serif">TM {member.display_name}</p>
             <p className="text-xs text-slate-400 dark:text-slate-500">{member.name}</p>
-            {member.leadership_role && (
-              <span className="inline-block mt-1.5 text-[10px] font-semibold
+            {memberLeadershipRoles(member).map((role) => (
+              <span key={role} className="inline-block mt-1.5 mr-1 text-[10px] font-semibold
                                bg-gradient-to-r from-maroon-700 to-maroon-600 text-white
                                px-2.5 py-0.5 rounded-full uppercase tracking-wide">
-                {leadershipLabel(member.leadership_role)}
+                {leadershipLabel(role)}
               </span>
-            )}
+            ))}
           </div>
         </div>
         <button onClick={() => setEditing(true)}
@@ -405,7 +405,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const mentor  = member.mentor_id ? allMembers.find((m) => m.id === member.mentor_id) : null;
   const mentees = allMembers.filter((m) => m.mentor_id === member.id && m.active);
 
-  const isOfficer = member.leadership_role === 'president' || member.leadership_role === 'vp_education';
+  const isOfficer = isClubOfficer(member);
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [myEvalRequests, setMyEvalRequests] = useState<(EvaluatorRequest & { meeting_number?: number; meeting_date?: string; evaluator_name?: string; reviewer_name?: string; _past?: boolean })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -817,12 +817,12 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">TM {m.display_name}</p>
-                      {m.leadership_role && (
-                        <span className="text-[9px] font-semibold bg-gradient-to-r from-maroon-700 to-maroon-600
+                      {memberLeadershipRoles(m).map((role) => (
+                        <span key={role} className="text-[9px] font-semibold bg-gradient-to-r from-maroon-700 to-maroon-600
                                          text-white px-2 py-0.5 rounded-full uppercase tracking-wide">
-                          {leadershipLabel(m.leadership_role)}
+                          {leadershipLabel(role)}
                         </span>
-                      )}
+                      ))}
                     </div>
                     {m.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {m.city}</p>}
                     {m.introduction ? (

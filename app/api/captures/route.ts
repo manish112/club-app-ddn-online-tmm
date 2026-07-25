@@ -14,11 +14,12 @@ export async function GET(req: NextRequest) {
 
   const { data: member } = await supabase
     .from('members')
-    .select('is_admin, leadership_role')
+    .select('is_admin, leadership_roles')
     .eq('id', memberId)
     .single();
 
-  const isAdmin = !!member && (member.is_admin || member.leadership_role === 'president' || member.leadership_role === 'vp_education');
+  const memberRoles: string[] = member?.leadership_roles ?? [];
+  const isAdmin = !!member && (member.is_admin || memberRoles.includes('president') || memberRoles.includes('vp_education'));
   if (!isAdmin) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
