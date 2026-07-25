@@ -1,0 +1,324 @@
+// High-level, server-only notification helpers. Callers (API routes + the
+// reminder cron) stay thin; these do the DB reads and build template vars.
+import { createServiceClient } from '@/utils/supabase/server';
+import { ROLE_META, leadershipRoleLabel, type RoleKey, type LeadershipRole } from '@/lib/types';
+import { formatDate, formatTime, escapeHtml, bioBlock } from './format';
+import { sendOne, sendMass, sendOneDeduped, getAppUrl } from './mailer';
+import type { TemplateVars } from './render';
+
+const CLUB_NAME = 'Dehradun Online Toastmasters';
+
+export interface MeetingRow {
+  id: string;
+  number: number;
+  date: string;
+  start_time: string;
+  end_time: string;
+  theme: string | null;
+  meeting_link?: string | null;
+}
+
+const KICKER = 'margin:0 0 4px;color:#9d1530;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;';
+
+function meetingLinkBlock(link: string | null | undefined): string {
+  if (!link) return '';
+  const safe = escapeHtml(link);
+  return `<p style="${KICKER}">Meeting Link</p>
+    <a href="${safe}" style="display:inline-block;color:#0E2D6A;font-weight:700;font-size:14px;word-break:break-all;">🔗 Join the meeting</a>`;
+}
+
+function baseMeetingVars(meeting: MeetingRow, appUrl: string): Record<string, string> {
+  return {
+    club_name: CLUB_NAME,
+    app_url: appUrl,
+    meeting_number: String(meeting.number),
+    meeting_date: formatDate(meeting.date),
+    meeting_time: `${formatTime(meeting.start_time)}–${formatTime(meeting.end_time)}`,
+    meeting_theme: meeting.theme && meeting.theme !== 'TBD' ? meeting.theme : 'To be decided',
+    meeting_link_block: meetingLinkBlock(meeting.meeting_link),
+  };
+}
+
+interface ClaimLite { role_key: RoleKey; slot_index: number; member_id: string }
+interface MemberLite { id: string; name: string; display_name: string; email: string | null; active: boolean }
+
+function rolesSummaryHtml(claims: ClaimLite[], byId: Map<string, MemberLite>): string {
+  if (claims.length === 0) return '';
+  const rows = claims
+    .map((c) => {
+      const meta = ROLE_META[c.role_key];
+      if (!meta) return null;
+      const m = byId.get(c.member_id);
+      const name = m ? `TM ${escapeHtml(m.display_name)}` : '—';
+      const label = meta.label + (['speaker', 'evaluator', 'jury'].includes(c.role_key) ? ` ${c.slot_index}` : '');
+      return `<tr><td style="padding:5px 0;color:#64748b;font-size:13px;">${meta.emoji} ${label}</td>
+        <td style="padding:5px 0;color:#1e293b;font-size:13px;font-weight:600;text-align:right;">${name}</td></tr>`;
+    })
+    .filter(Boolean)
+    .join('');
+  if (!rows) return '';
+  return `<p style="${KICKER}">Roles filled so far</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-top:1px solid #f1f5f9;">${rows}</table>`;
+}
+
+// ── Role assigned / removed (1:1) ───────────────────────────────────────────
+export async function notifyRoleChange(params: {
+  target: MemberLite;
+  actor: { id: string; display_name: string } | null;
+  actorIsAdmin: boolean;
+  meeting: MeetingRow;
+  roleKey: RoleKey;
+  action: 'claimed' | 'released' | 'assigned' | 'removed';
+}) {
+  const { target, actor, actorIsAdmin, meeting, roleKey, action } = params;
+  if (!target.email) return { skipped: 'no email' };
+
+  const meta = ROLE_META[roleKey];
+  const isAssign = action === 'claimed' || action === 'assigned';
+
+  let actorLine = '';
+  if (actor && actor.id !== target.id) {
+    actorLine = ` This was done by ${actorIsAdmin ? 'Admin ' : ''}TM ${escapeHtml(actor.display_name)}.`;
+  }
+
+  const vars = {
+    ...baseMeetingVars(meeting, await getAppUrl()),
+    full_name: target.name || target.display_name,
+    role_label: meta?.label ?? roleKey,
+    role_emoji: meta?.emoji ?? '',
+    actor_line: actorLine,
+  };
+
+  return sendOne(isAssign ? 'role_assigned' : 'role_removed', target.email, vars, meeting.id);
+}
+
+// ── New meeting announced (mass, BCC) ───────────────────────────────────────
+export async function notifyMeetingCreated(meeting: MeetingRow) {
+  const supabase = createServiceClient();
+  const { data: members } = await supabase
+    .from('members').select('id, name, display_name, email, active');
+  const recipients = (members ?? [])
+    .filter((m) => m.active && m.email)
+    .map((m) => m.email as string);
+  if (recipients.length === 0) return { skipped: 'no recipients' };
+
+  const { data: claims } = await supabase
+    .from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id);
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+
+  const vars = {
+    ...baseMeetingVars(meeting, await getAppUrl()),
+    roles_summary: rolesSummaryHtml((claims ?? []) as ClaimLite[], byId),
+  };
+  return sendMass('meeting_created', recipients, vars, { meetingId: meeting.id });
+}
+
+// ── 1-hour-before meeting reminder (mass, BCC, deduped) ─────────────────────
+export async function sendMeetingReminder(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
+  const supabase = createServiceClient();
+  const [{ data: members }, { data: claims }] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, email, active'),
+    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+  ]);
+  const recipients = (members ?? []).filter((m) => m.active && m.email).map((m) => m.email as string);
+  if (recipients.length === 0) return { skipped: 'no recipients' };
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+
+  const vars = {
+    ...baseMeetingVars(meeting, await getAppUrl()),
+    roles_summary: rolesSummaryHtml((claims ?? []) as ClaimLite[], byId),
+  };
+  return sendMass('meeting_reminder', recipients, vars, {
+    // Manual broadcasts (dedupe:false) may re-send; the cron keeps its once-only guard.
+    dedupeKey: opts?.dedupe === false ? undefined : `meeting_reminder:${meeting.id}`,
+    meetingId: meeting.id,
+  });
+}
+
+// ── 1-day-before per-role reminders (1:1, deduped per member) ───────────────
+export async function sendRoleReminders(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
+  const supabase = createServiceClient();
+  const [{ data: members }, { data: claims }] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, email, active'),
+    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+  ]);
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+
+  const appUrl = await getAppUrl();
+  let sent = 0;
+  for (const c of (claims ?? []) as ClaimLite[]) {
+    const m = byId.get(c.member_id);
+    if (!m?.email) continue;
+    const meta = ROLE_META[c.role_key];
+    const vars = {
+      ...baseMeetingVars(meeting, appUrl),
+      full_name: m.name || m.display_name,
+      role_label: meta?.label ?? c.role_key,
+      role_emoji: meta?.emoji ?? '',
+    };
+    const res = opts?.dedupe === false
+      ? await sendOne('role_reminder', m.email, vars, meeting.id)
+      : await sendOneDeduped('role_reminder', m.email, vars, {
+          dedupeKey: `role_reminder:${meeting.id}:${c.member_id}:${c.role_key}:${c.slot_index}`, meetingId: meeting.id,
+        });
+    if ('ok' in res) sent++;
+  }
+  return { ok: true, sent };
+}
+
+// ── Broadcast helpers: re-send a per-member notification to everyone it fits ──
+export async function broadcastRoleAssigned(meeting: MeetingRow) {
+  const supabase = createServiceClient();
+  const [{ data: members }, { data: claims }] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, email, active'),
+    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+  ]);
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+  const appUrl = await getAppUrl();
+  let sent = 0;
+  for (const c of (claims ?? []) as ClaimLite[]) {
+    const m = byId.get(c.member_id);
+    if (!m?.email) continue;
+    const meta = ROLE_META[c.role_key];
+    const res = await sendOne('role_assigned', m.email, {
+      ...baseMeetingVars(meeting, appUrl),
+      full_name: m.name || m.display_name,
+      role_label: meta?.label ?? c.role_key,
+      role_emoji: meta?.emoji ?? '',
+      actor_line: '',
+    }, meeting.id);
+    if ('ok' in res) sent++;
+  }
+  return { sent };
+}
+
+export async function broadcastLeadershipAssigned() {
+  const supabase = createServiceClient();
+  const { data: members } = await supabase.from('members').select('id, name, display_name, email, active, leadership_roles');
+  const appUrl = await getAppUrl();
+  let sent = 0;
+  for (const m of members ?? []) {
+    const roles: LeadershipRole[] = m.leadership_roles ?? [];
+    if (!m.email || roles.length === 0) continue;
+    const res = await sendOne('leadership_assigned', m.email, {
+      club_name: CLUB_NAME, app_url: appUrl,
+      full_name: m.name || m.display_name,
+      leadership_role: leadershipRoleLabel(roles[0]),
+      roles_list: roles.map(leadershipRoleLabel).join(', '),
+      actor_line: '',
+    });
+    if ('ok' in res) sent++;
+  }
+  return { sent };
+}
+
+export async function broadcastMentorAssigned() {
+  const supabase = createServiceClient();
+  const { data: members } = await supabase.from('members').select('id, name, display_name, email, active, mentor_id, introduction');
+  const byId = new Map((members ?? []).map((m) => [m.id, m]));
+  const appUrl = await getAppUrl();
+  const base = { club_name: CLUB_NAME, app_url: appUrl };
+  let sent = 0;
+  for (const mentee of members ?? []) {
+    if (!mentee.mentor_id) continue;
+    const mentor = byId.get(mentee.mentor_id);
+    if (!mentor) continue;
+    if (mentee.email) {
+      const r = await sendOne('mentor_assigned_to_mentee', mentee.email, {
+        ...base, full_name: mentee.name || mentee.display_name,
+        mentor_name: mentor.display_name,
+        mentor_bio_block: bioBlock(mentor.display_name, mentor.introduction),
+      });
+      if ('ok' in r) sent++;
+    }
+    if (mentor.email) {
+      const r = await sendOne('mentor_assigned_to_mentor', mentor.email, {
+        ...base, full_name: mentor.name || mentor.display_name,
+        mentee_name: mentee.display_name,
+        mentee_bio_block: bioBlock(mentee.display_name, mentee.introduction),
+      });
+      if ('ok' in r) sent++;
+    }
+  }
+  return { sent };
+}
+
+export async function broadcastWelcome() {
+  const supabase = createServiceClient();
+  const { data: members } = await supabase.from('members').select('id, name, display_name, email, active');
+  const appUrl = await getAppUrl();
+  let sent = 0;
+  for (const m of members ?? []) {
+    if (!m.active || !m.email) continue;
+    const res = await sendOne('welcome', m.email, {
+      club_name: CLUB_NAME, app_url: appUrl, full_name: m.name || m.display_name,
+    });
+    if ('ok' in res) sent++;
+  }
+  return { sent };
+}
+
+// ── Preview / test vars built from REAL data ────────────────────────────────
+// Uses the next upcoming meeting (or the most recent one) and its actual roles,
+// the configured app URL, and the admin's own name — so previews and test sends
+// reflect what real emails contain, not fabricated sample data. Per-recipient
+// fields fall back to a bracketed placeholder when nothing real is available.
+export async function buildPreviewVars(adminId?: string, targetId?: string): Promise<TemplateVars> {
+  const supabase = createServiceClient();
+  const appUrl = await getAppUrl();
+  const [{ data: meetings }, { data: members }] = await Promise.all([
+    supabase.from('meetings').select('id, number, date, start_time, end_time, theme, meeting_link').order('date', { ascending: true }),
+    supabase.from('members').select('id, name, display_name, email, active, leadership_roles'),
+  ]);
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+  const admin = adminId ? byId.get(adminId) : undefined;
+  const target = targetId ? byId.get(targetId) : undefined;
+  const targetRoles: LeadershipRole[] = (members ?? []).find((m) => m.id === targetId)?.leadership_roles ?? [];
+  const rolesList = targetRoles.map(leadershipRoleLabel).join(', ');
+  const leadershipRoleSample = targetRoles[0] ? leadershipRoleLabel(targetRoles[0]) : '[Leadership role]';
+
+  const list = (meetings ?? []) as MeetingRow[];
+  const today = new Date().toISOString().slice(0, 10);
+  const meeting = list.find((m) => m.date >= today) ?? list[list.length - 1];
+
+  if (!meeting) {
+    return {
+      club_name: CLUB_NAME, app_url: appUrl,
+      meeting_number: '—', meeting_date: 'your next meeting', meeting_time: '', meeting_theme: 'To be decided',
+      meeting_link_block: '', roles_summary: '',
+      full_name: target?.name ?? admin?.name ?? '[Member name]', role_label: 'Timer', role_emoji: '⌛️',
+      roles_list: rolesList || '[Leadership roles]',
+      leadership_role: leadershipRoleSample,
+      actor_line: '', speaker_name: target?.display_name ?? '[Speaker]', evaluator_name: '[Evaluator]',
+      status_title: 'Request approved 🎉', status_body: 'This is a sample status message shown in the preview.', review_comment_block: '',
+      mentor_name: '[Mentor]', mentee_name: '[Mentee]',
+      mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
+      mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
+    };
+  }
+
+  const { data: claims } = await supabase
+    .from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id);
+  const claimList = (claims ?? []) as ClaimLite[];
+  // Prefer the target's own role in this meeting; else the first claim as a sample.
+  const relevantClaim = (target ? claimList.find((c) => c.member_id === target.id) : null) ?? claimList[0];
+  const meta = relevantClaim ? ROLE_META[relevantClaim.role_key] : null;
+  const subjectMember = target ?? (claimList[0] ? byId.get(claimList[0].member_id) : undefined);
+
+  return {
+    ...baseMeetingVars(meeting, appUrl),
+    roles_summary: rolesSummaryHtml(claimList, byId),
+    full_name: subjectMember?.name ?? admin?.name ?? '[Member name]',
+    role_label: meta?.label ?? 'Timer',
+    role_emoji: meta?.emoji ?? '⌛️',
+    roles_list: rolesList || '[Leadership roles]',
+    leadership_role: leadershipRoleSample,
+    actor_line: admin ? ` This was done by Admin TM ${escapeHtml(admin.display_name)}.` : '',
+    speaker_name: subjectMember?.display_name ?? '[Speaker]',
+    evaluator_name: admin?.display_name ?? '[Evaluator]',
+    status_title: 'Request approved 🎉', status_body: 'This is a sample status message shown in the preview.', review_comment_block: '',
+    mentor_name: subjectMember?.display_name ?? '[Mentor]', mentee_name: '[Mentee]',
+    mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
+    mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
+  };
+}

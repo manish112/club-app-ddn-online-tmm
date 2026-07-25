@@ -7,6 +7,7 @@ import { MemberPicker } from '@/components/MemberPicker';
 import { ThemeReminderModal } from '@/components/ThemeReminderModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims } from '@/lib/types';
+import { isClubOfficer } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
 import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG } from '@/lib/utils';
@@ -152,7 +153,7 @@ export default function Home() {
                 </p>
               ) : (
                 <p className="text-[9px] text-white/50 leading-tight truncate">
-                  Club 03295206 · District 41
+                  Club number: 28680307 · District 224
                 </p>
               )}
             </div>
@@ -198,13 +199,13 @@ export default function Home() {
                         className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                         <span aria-hidden>⏱️</span> Speech Timer
                       </Link>
-                      {(currentMember.can_manage_guests || currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+                      {(currentMember.can_manage_guests || currentMember.is_admin || isClubOfficer(currentMember)) && (
                         <Link href="/guestmgr" onClick={() => setMenuOpen(false)}
                           className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                           <span aria-hidden>👥</span> Manage Guests
                         </Link>
                       )}
-                      {(currentMember.is_admin || currentMember.leadership_role === 'president' || currentMember.leadership_role === 'vp_education') && (
+                      {(currentMember.is_admin || isClubOfficer(currentMember)) && (
                         <Link href="/amiadmin" onClick={() => setMenuOpen(false)}
                           className="flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                           <span aria-hidden>⚙️</span> Admin Panel

@@ -30,6 +30,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [editingTheme, setEditingTheme] = useState(false);
   const [themeInput, setThemeInput] = useState(meeting.theme ?? '');
   const [savingTheme, setSavingTheme] = useState(false);
+  const [editingLink, setEditingLink] = useState(false);
+  const [linkInput, setLinkInput] = useState(meeting.meeting_link ?? '');
+  const [savingLink, setSavingLink] = useState(false);
   const [slotRequest, setSlotRequest] = useState<SpeakerSlotRequest | null>(null);
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [requestNote, setRequestNote] = useState('');
@@ -69,6 +72,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         preferred_evaluator_id: requestEvaluatorId || null,
       })
       .select().single();
+    // Confirm the extra-slot request to the requester.
+    if (data) {
+      fetch('/api/notify-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'speaker_slot', event: 'submitted', requestId: data.id }),
+      }).catch(() => {});
+    }
     // Record the evaluator nomination right away (with an unbound slot) so it's
     // visible on the requester's dashboard and can be approved/denied on its own.
     // The slot is bound when the extra speaker slot is approved.
@@ -77,14 +88,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       await supabase.from('evaluator_requests')
         .update({ status: 'cancelled' })
         .eq('meeting_id', meeting.id).eq('speaker_id', memberId).eq('status', 'pending');
-      await supabase.from('evaluator_requests').insert({
+      const { data: evalReq } = await supabase.from('evaluator_requests').insert({
         meeting_id: meeting.id,
         speaker_slot_index: null,
         speaker_id: memberId,
         preferred_evaluator_id: requestEvaluatorId,
         status: 'pending',
         speaker_slot_request_id: data.id,
-      });
+      }).select('id').single();
       fetch('/api/notify-evaluator-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -95,6 +106,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           preferredEvaluatorId: requestEvaluatorId,
         }),
       }).catch(() => {});
+      // Tell the nominated evaluator (requester already got the slot email above).
+      if (evalReq?.id) {
+        fetch('/api/notify-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'evaluator', event: 'submitted', requestId: evalReq.id, skipRequester: true }),
+        }).catch(() => {});
+      }
     }
     setSlotRequest(data ?? null);
     setSubmitting(false);
@@ -113,6 +132,18 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     await supabase.from('meetings').update({ theme: themeInput.trim() || null }).eq('id', meeting.id);
     setSavingTheme(false);
     setEditingTheme(false);
+    onChanged();
+  }
+
+  // The meeting (video) link — settable by the TMoD or an admin.
+  const canEditLink = isTMoD || isAdmin;
+  const needsLinkPrompt = isTMoD && !meeting.meeting_link && !past;
+
+  async function saveLink() {
+    setSavingLink(true);
+    await supabase.from('meetings').update({ meeting_link: linkInput.trim() || null }).eq('id', meeting.id);
+    setSavingLink(false);
+    setEditingLink(false);
     onChanged();
   }
 
@@ -163,7 +194,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const canRequestSlot = !past && !locked && allSpeakerSlotsFull && belowSpeakerCap && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
   const juryRoles      = roles.filter((r) => r.roleKey === 'jury');
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
-  const tagRoles       = roles.filter((r) => ['grammarian', 'ah_counter', 'timer', 'harkmaster'].includes(r.roleKey));
+  const tagRoles       = roles.filter((r) => ['timer', 'ah_counter', 'grammarian', 'harkmaster'].includes(r.roleKey));
   const evaluatorEnabled = isRoleEnabled(meeting, 'evaluator');
   // Evaluator slots shown inline with a speaker are slots 1..speaker_slots; any
   // beyond that (or all of them, if speakers are disabled) are "extra" and get
@@ -240,6 +271,22 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     >
       {/* Top accent bar */}
       <div className={`h-[3px] ${past ? 'bg-slate-200 dark:bg-slate-700' : 'shimmer-bar'}`} />
+
+      {/* TMoD prompt: nag until the meeting link is set */}
+      {needsLinkPrompt && (
+        <div className="px-4 py-2.5 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800/40 flex items-center gap-2">
+          <span className="text-base leading-none shrink-0">🔗</span>
+          <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 flex-1 leading-snug">
+            You&apos;re the TMoD — please set the meeting link so members can join.
+          </p>
+          <button
+            onClick={() => setEditingLink(true)}
+            className="shrink-0 text-[11px] font-bold text-white bg-amber-600 hover:bg-amber-700 px-3 py-1.5 rounded-full active:scale-95 transition-all"
+          >
+            Set link
+          </button>
+        </div>
+      )}
 
       {/* ── Card Header ── */}
       <div className="px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -399,6 +446,59 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   <button onClick={() => setEditingTheme(true)}
                     className="text-sm min-h-[32px] min-w-[32px] shrink-0 opacity-50 hover:opacity-100 transition-opacity"
                     title="Edit theme">✏️</button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Meeting link band ── */}
+      {(meeting.meeting_link || !past) && (
+        <div className={`px-4 py-2.5 border-b flex items-center gap-3
+          ${past
+            ? 'bg-slate-50 dark:bg-slate-900 border-slate-100 dark:border-slate-800'
+            : 'bg-white dark:bg-slate-900 border-slate-100 dark:border-slate-800'}`}
+        >
+          <span className="text-lg leading-none shrink-0">🔗</span>
+          <div className="min-w-0 flex-1">
+            {editingLink ? (
+              <div className="flex items-center gap-2">
+                <input
+                  value={linkInput}
+                  onChange={(e) => setLinkInput(e.target.value)}
+                  type="url"
+                  placeholder="Paste Zoom / Google Meet URL…"
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveLink(); if (e.key === 'Escape') setEditingLink(false); }}
+                  className="flex-1 min-w-0 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-sm
+                             text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800
+                             focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500"
+                />
+                <button onClick={saveLink} disabled={savingLink}
+                  className="text-xs font-semibold text-maroon-700 dark:text-maroon-400 hover:text-maroon-900 min-h-[36px] disabled:opacity-40 shrink-0">
+                  {savingLink ? '…' : 'Save'}
+                </button>
+                <button
+                  onClick={() => { setEditingLink(false); setLinkInput(meeting.meeting_link ?? ''); }}
+                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 min-h-[36px] shrink-0">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {meeting.meeting_link ? (
+                  <a href={meeting.meeting_link} target="_blank" rel="noopener noreferrer"
+                    className="text-sm font-semibold text-sky-700 dark:text-sky-400 truncate hover:underline">
+                    Join meeting link
+                  </a>
+                ) : (
+                  <p className="text-sm font-medium text-amber-600 dark:text-amber-400">To be set</p>
+                )}
+                {canEditLink && (
+                  <button onClick={() => setEditingLink(true)}
+                    className="text-sm min-h-[32px] min-w-[32px] shrink-0 opacity-50 hover:opacity-100 transition-opacity"
+                    title="Edit meeting link">✏️</button>
                 )}
               </div>
             )}

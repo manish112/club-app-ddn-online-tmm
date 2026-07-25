@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import { useIdentity } from '@/hooks/useIdentity';
 import type { ContestResult, JuryScore, Member, MeetingWithClaims } from '@/lib/types';
+import { isClubOfficer } from '@/lib/types';
 import { formatMeetingDate, groupIdForSlot, hasSpeakerGroups } from '@/lib/utils';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL, computeContestResults } from '@/lib/contest';
 
@@ -49,7 +50,7 @@ export default function ContestResultsPage() {
   // Same access rule as the admin panel: full admins plus President / VP Education.
   // Admins (incl. President / VP Education) can compute & reveal; assigned jury
   // members get a read-only view of the results.
-  const isAdmin = !!me && (me.is_admin || me.leadership_role === 'president' || me.leadership_role === 'vp_education');
+  const isAdmin = !!me && (me.is_admin || isClubOfficer(me));
 
   if (!loaded || loading) return <Centered>Loading…</Centered>;
   if (!meeting) return <Centered>Meeting not found.</Centered>;

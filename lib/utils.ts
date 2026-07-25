@@ -1,11 +1,12 @@
-import type { Meeting, MeetingWithClaims, Member, RoleKey, SpeakerGroup } from './types';
+import type { Meeting, MeetingWithClaims, Member, RoleKey, SpeakerGroup, LeadershipRole } from './types';
+import { hasLeadershipRole } from './types';
 import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
 // Public app URL used in call-to-action prompts (e.g. WhatsApp agenda).
 export const APP_URL = 'https://dehradun-online-tm.vercel.app/';
 
-const TAG_ROLES: RoleKey[] = ['grammarian', 'ah_counter', 'timer', 'harkmaster'];
+const TAG_ROLES: RoleKey[] = ['timer', 'ah_counter', 'grammarian', 'harkmaster'];
 
 // ── Speaker groups & speaking order ───────────────────────────────────────────
 // A speakathon splits speakers into named groups (heats) and an admin-arrangeable
@@ -92,9 +93,9 @@ function buildRolePlayerBlocks(meeting: MeetingWithClaims, membersById: Map<stri
     { key: 'tmod'       as RoleKey, slots: 1 },
     { key: 'ttm'        as RoleKey, slots: 1 },
     { key: 'ge'         as RoleKey, slots: 1 },
-    { key: 'grammarian' as RoleKey, slots: 1 },
-    { key: 'ah_counter' as RoleKey, slots: 1 },
     { key: 'timer'      as RoleKey, slots: 1 },
+    { key: 'ah_counter' as RoleKey, slots: 1 },
+    { key: 'grammarian' as RoleKey, slots: 1 },
     { key: 'harkmaster' as RoleKey, slots: 1 },
   ] as { key: RoleKey; slots: number }[]).filter((r) => isRoleEnabled(meeting, r.key));
 
@@ -314,20 +315,8 @@ export function buildWhatsAppAgenda(
     lines.push(`🌐 Theme: ${meeting.theme}`);
   }
   lines.push('');
-
-  // Speech details for one speaker claim, as a " | "-joined line.
-  const speakerDetail = (slot: number): string | null => {
-    const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === slot);
-    if (!claim) return null;
-    const details: string[] = [];
-    if (claim.path)         details.push(`Path: ${claim.path}`);
-    if (claim.speech_level) details.push(`Level ${claim.speech_level}`);
-    if (claim.project)      details.push(`Project: ${claim.project}`);
-    if (claim.speech_title) details.push(`Title: "${claim.speech_title}"`);
-    const { min: tMin, max: tMax } = speechTimeRange(claim);
-    details.push(`Time: ${tMin}–${tMax} min`);
-    return details.join(' | ');
-  };
+  lines.push(meeting.meeting_link ? `🔗 Meeting link: ${meeting.meeting_link}` : '🔗 Meeting link: To be set');
+  lines.push('');
 
   // Evaluator for a speaker slot: the assigned member, or "Assignment in
   // progress" while a speaker-nominated evaluator awaits officer approval,
@@ -341,10 +330,29 @@ export function buildWhatsAppAgenda(
     return pending ? '⏳ Assignment in progress' : '';
   };
 
+  // One speaker block: bold-keyed Speaker / (speech details) / Time / Evaluator,
+  // then a blank line for spacing between speakers.
+  const pushSpeakerLines = (slot: number, indexLabel: string) => {
+    lines.push(` ${indexLabel}. *Speaker*: ${getClaimName('speaker', slot)}`);
+    const claim = meeting.role_claims.find((c) => c.role_key === 'speaker' && c.slot_index === slot);
+    if (claim) {
+      if (claim.path)         lines.push(`    *Path*: ${claim.path}`);
+      if (claim.speech_level) lines.push(`    *Level*: ${claim.speech_level}`);
+      if (claim.project)      lines.push(`    *Project*: ${claim.project}`);
+      if (claim.speech_title) lines.push(`    *Title*: "${claim.speech_title}"`);
+      const { min, max } = speechTimeRange(claim);
+      lines.push(`    *Time*: ${min}–${max} min`);
+    }
+    if (isRoleEnabled(meeting, 'evaluator') && slot <= meeting.evaluator_slots) {
+      lines.push(`    *Evaluator*: ${evaluatorForSpeaker(slot)}`);
+    }
+    lines.push('');
+  };
+
   const grouped = hasSpeakerGroups(meeting);
 
   // Prepared Speakers — grouped by heat (in speaking order) for a speakathon,
-  // otherwise a flat 1..N list. Evaluators pair inline when grouped.
+  // otherwise a flat 1..N list. Each evaluator pairs inline with its speaker.
   if (isRoleEnabled(meeting, 'speaker')) {
     if (grouped) {
       lines.push('🎙️ Prepared Speeches (by group):');
@@ -354,25 +362,12 @@ export function buildWhatsAppAgenda(
         let n = 0;
         for (const slot of bucket.slots) {
           n += 1;
-          lines.push(` ${n}. ${getClaimName('speaker', slot)}`);
-          const detail = speakerDetail(slot);
-          if (detail) lines.push(`    ${detail}`);
-          if (isRoleEnabled(meeting, 'evaluator')) lines.push(`    ⚖️ Evaluator: ${evaluatorForSpeaker(slot)}`);
+          pushSpeakerLines(slot, String(n));
         }
       }
-      lines.push('');
     } else {
-      // Each speaker with their evaluator paired directly underneath.
-      lines.push('🎙️ Prepared Speakers:');
-      for (let i = 1; i <= meeting.speaker_slots; i++) {
-        lines.push(` ${i}. ${getClaimName('speaker', i)}`);
-        const detail = speakerDetail(i);
-        if (detail) lines.push(`    ${detail}`);
-        if (isRoleEnabled(meeting, 'evaluator') && i <= meeting.evaluator_slots) {
-          lines.push(`    ⚖️ Evaluator: ${evaluatorForSpeaker(i)}`);
-        }
-      }
-      lines.push('');
+      lines.push(isRoleEnabled(meeting, 'evaluator') ? '🎙️ Prepared Speakers and Evaluators:' : '🎙️ Prepared Speakers:');
+      for (let i = 1; i <= meeting.speaker_slots; i++) pushSpeakerLines(i, String(i));
     }
   }
 
@@ -400,17 +395,17 @@ export function buildWhatsAppAgenda(
 
   // Main Roles
   lines.push('Main Roles:');
-  if (isRoleEnabled(meeting, 'tmod')) lines.push(`🎤 TMoD- ${getClaimName('tmod', 1)}`);
-  if (isRoleEnabled(meeting, 'ttm'))  lines.push(`💬 TTM- ${getClaimName('ttm', 1)}`);
-  if (isRoleEnabled(meeting, 'ge'))   lines.push(`📋 GE- ${getClaimName('ge', 1)}`);
+  if (isRoleEnabled(meeting, 'tmod')) lines.push(`🎤 *TMoD*: ${getClaimName('tmod', 1)}`);
+  if (isRoleEnabled(meeting, 'ttm'))  lines.push(`💬 *TTM*: ${getClaimName('ttm', 1)}`);
+  if (isRoleEnabled(meeting, 'ge'))   lines.push(`📋 *GE*: ${getClaimName('ge', 1)}`);
   lines.push('');
 
-  // Auxiliary Roles
+  // Auxiliary Roles — sequence: Timer, Ah-Counter, Grammarian, Harkmaster.
   lines.push('Auxiliary Roles:');
-  if (isRoleEnabled(meeting, 'grammarian')) lines.push(`📚 Grammarian- ${getClaimName('grammarian', 1)}`);
-  if (isRoleEnabled(meeting, 'ah_counter')) lines.push(`🔍 Ah-Counter- ${getClaimName('ah_counter', 1)}`);
-  if (isRoleEnabled(meeting, 'timer'))      lines.push(`⌛️ Timer- ${getClaimName('timer', 1)}`);
-  if (isRoleEnabled(meeting, 'harkmaster')) lines.push(`👂 Harkmaster- ${getClaimName('harkmaster', 1)}`);
+  if (isRoleEnabled(meeting, 'timer'))      lines.push(`⌛️ *Timer*: ${getClaimName('timer', 1)}`);
+  if (isRoleEnabled(meeting, 'ah_counter')) lines.push(`🔍 *Ah-Counter*: ${getClaimName('ah_counter', 1)}`);
+  if (isRoleEnabled(meeting, 'grammarian')) lines.push(`📚 *Grammarian*: ${getClaimName('grammarian', 1)}`);
+  if (isRoleEnabled(meeting, 'harkmaster')) lines.push(`👂 *Harkmaster*: ${getClaimName('harkmaster', 1)}`);
 
   lines.push('');
   lines.push(`⏱️ Speech Timer (use during the meeting): ${timerUrl}`);
@@ -516,10 +511,10 @@ export function buildAgendaSections(
     return claim ? (membersById.get(claim.member_id)?.display_name ?? '') : '';
   }
 
-  // Returns display_name of the member with a given leadership_role, '' if not found
-  function getLeader(role: string): string {
+  // Returns display_name of a member holding a given leadership role, '' if none
+  function getLeader(role: LeadershipRole): string {
     for (const m of membersById.values()) {
-      if (m.leadership_role === role) return m.display_name;
+      if (hasLeadershipRole(m, role)) return m.display_name;
     }
     return '';
   }

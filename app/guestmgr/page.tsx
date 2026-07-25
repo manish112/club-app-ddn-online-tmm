@@ -3,13 +3,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { Member, GuestRegistration, Meeting } from '@/lib/types';
+import { isClubOfficer } from '@/lib/types';
 import Link from 'next/link';
 import Image from 'next/image';
 
 const MEMBER_KEY = 'tm_member_id';
 
 function canManage(m: Member): boolean {
-  return m.can_manage_guests || m.is_admin || m.leadership_role === 'president' || m.leadership_role === 'vp_education';
+  return m.can_manage_guests || m.is_admin || isClubOfficer(m);
 }
 
 function formatDate(dateStr: string) {

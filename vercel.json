@@ -4,6 +4,10 @@
     {
       "path": "/api/auto-schedule",
       "schedule": "35 15 * * 3"
+    },
+    {
+      "path": "/api/notify-reminders",
+      "schedule": "0 13 * * *"
     }
   ]
 }

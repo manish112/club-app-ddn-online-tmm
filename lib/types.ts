@@ -49,16 +49,42 @@ export interface SpeakerGroup {
   name: string;
 }
 
-export type LeadershipRole = 'president' | 'vp_education' | 'vp_membership' | 'secretary' | 'vp_pr' | 'club_mentor';
+export type LeadershipRole =
+  | 'president'
+  | 'vp_education'
+  | 'vp_membership'
+  | 'secretary'
+  | 'vp_pr'
+  | 'treasurer'
+  | 'sergeant_at_arms'
+  | 'club_mentor';
 
 export const LEADERSHIP_ROLES: { value: LeadershipRole; label: string; exclusive: boolean }[] = [
-  { value: 'president',     label: 'Club President',      exclusive: true  },
-  { value: 'vp_education',  label: 'VP Education',         exclusive: true  },
-  { value: 'vp_membership', label: 'VP Membership',        exclusive: true  },
-  { value: 'secretary',     label: 'Secretary',            exclusive: true  },
-  { value: 'vp_pr',         label: 'VP Public Relations',  exclusive: true  },
-  { value: 'club_mentor',   label: 'Club Mentor',          exclusive: false },
+  { value: 'president',        label: 'Club President',      exclusive: true  },
+  { value: 'vp_education',     label: 'VP Education',         exclusive: true  },
+  { value: 'vp_membership',    label: 'VP Membership',        exclusive: true  },
+  { value: 'secretary',        label: 'Secretary',            exclusive: true  },
+  { value: 'vp_pr',            label: 'VP Public Relations',  exclusive: true  },
+  { value: 'treasurer',        label: 'Treasurer',            exclusive: true  },
+  { value: 'sergeant_at_arms', label: 'Sergeant at Arms',     exclusive: true  },
+  { value: 'club_mentor',      label: 'Club Mentor',          exclusive: false },
 ];
+
+// A member may hold several leadership roles. These helpers centralise reads so
+// callers don't poke at the array directly.
+export function memberLeadershipRoles(m: { leadership_roles?: LeadershipRole[] | null }): LeadershipRole[] {
+  return m.leadership_roles ?? [];
+}
+export function hasLeadershipRole(m: { leadership_roles?: LeadershipRole[] | null }, role: LeadershipRole): boolean {
+  return memberLeadershipRoles(m).includes(role);
+}
+// President or VP Education → treated as a club officer / auto-admin throughout.
+export function isClubOfficer(m: { leadership_roles?: LeadershipRole[] | null }): boolean {
+  return hasLeadershipRole(m, 'president') || hasLeadershipRole(m, 'vp_education');
+}
+export function leadershipRoleLabel(role: LeadershipRole): string {
+  return LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
+}
 
 export interface Member {
   id: string;
@@ -70,7 +96,7 @@ export interface Member {
   can_manage_guests: boolean;
   introduction: string | null;
   mentor_id: string | null;
-  leadership_role: LeadershipRole | null;
+  leadership_roles: LeadershipRole[];
   phone: string | null;
   email: string | null;
   city: string | null;
@@ -88,6 +114,7 @@ export interface Meeting {
   start_time: string;  // HH:MM:SS
   end_time: string;    // HH:MM:SS
   theme: string | null;
+  meeting_link: string | null;   // video-conference URL (Zoom/Meet); set by TMoD or admin
   meeting_type: MeetingType;
   speaker_slots: number;
   evaluator_slots: number;
@@ -304,7 +331,7 @@ export function getMeetingRoles(meeting: Meeting): { roleKey: RoleKey; slot: num
     roles.push({ roleKey: 'jury', slot: i });
   }
 
-  const singleRoles: RoleKey[] = ['tmod', 'ttm', 'ge', 'grammarian', 'ah_counter', 'timer', 'harkmaster'];
+  const singleRoles: RoleKey[] = ['tmod', 'ttm', 'ge', 'timer', 'ah_counter', 'grammarian', 'harkmaster'];
   for (const roleKey of singleRoles) {
     if (isRoleEnabled(meeting, roleKey)) roles.push({ roleKey, slot: 1 });
   }

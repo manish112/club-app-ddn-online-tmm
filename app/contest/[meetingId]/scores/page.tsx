@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/utils/supabase/client';
 import { useIdentity } from '@/hooks/useIdentity';
 import type { JuryScore, Member, MeetingWithClaims } from '@/lib/types';
+import { isClubOfficer } from '@/lib/types';
 import { formatMeetingDate, speakerBuckets, groupIdForSlot, hasSpeakerGroups } from '@/lib/utils';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL, scoreTotal } from '@/lib/contest';
 
@@ -43,7 +44,7 @@ export default function ScorecardsPage() {
     loadAll().finally(() => setLoading(false));
   }, [loaded, loadAll]);
 
-  const isAdmin = !!me && (me.is_admin || me.leadership_role === 'president' || me.leadership_role === 'vp_education');
+  const isAdmin = !!me && (me.is_admin || isClubOfficer(me));
 
   if (!loaded || loading) return <Centered>Loading…</Centered>;
   if (!meeting) return <Centered>Meeting not found.</Centered>;

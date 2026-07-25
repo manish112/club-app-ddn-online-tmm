@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
+import { notifyMeetingCreated, type MeetingRow } from '@/lib/email/notifications';
 
 function nextWeekdayAfter(from: Date, weekday: number): Date {
   const d = new Date(from);
@@ -93,8 +94,14 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const { error } = await supabase.from('meetings').insert(rows);
+  const { data: inserted, error } = await supabase.from('meetings').insert(rows)
+    .select('id, number, date, start_time, end_time, theme, meeting_link');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Announce each auto-created meeting to all members (best-effort).
+  for (const m of inserted ?? []) {
+    try { await notifyMeetingCreated(m as MeetingRow); } catch { /* ignore */ }
+  }
 
   console.log(`[auto-schedule] Created ${rows.length} meetings: ${rows.map(r => r.date).join(', ')}`);
   return NextResponse.json({ ok: true, created: rows.length, meetings: rows.map(r => r.date) });

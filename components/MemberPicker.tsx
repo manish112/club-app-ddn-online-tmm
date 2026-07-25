@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, Meeting } from '@/lib/types';
+import { hasLeadershipRole } from '@/lib/types';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -336,8 +337,8 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
               🔒 <strong>Forgot your password?</strong> Contact{' '}
               {(() => {
-                const president = members.find(m => m.leadership_role === 'president');
-                const vpEd = members.find(m => m.leadership_role === 'vp_education');
+                const president = members.find(m => hasLeadershipRole(m, 'president'));
+                const vpEd = members.find(m => hasLeadershipRole(m, 'vp_education'));
                 const names = [president, vpEd].filter(Boolean).map(m => <strong key={m!.id}>TM {m!.display_name}</strong>);
                 if (names.length === 0) return <strong>your club officer</strong>;
                 if (names.length === 1) return names[0];
