@@ -4,6 +4,7 @@ import { createClient } from '@/utils/supabase/client';
 
 import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES, memberLeadershipRoles, isClubOfficer } from '@/lib/types';
+import { SurveyLinks } from '@/components/SurveyLinks';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
 import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot } from '@/lib/utils';
@@ -47,6 +48,14 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [emailPref, setEmailPref] = useState(member.email_notifications !== false);
+
+  // Read the saved preference on its own (isolated so a not-yet-migrated column
+  // can never break the profile card).
+  useEffect(() => {
+    supabase.from('members').select('email_notifications').eq('id', member.id).maybeSingle()
+      .then(({ data }) => { if (data && typeof data.email_notifications === 'boolean') setEmailPref(data.email_notifications); });
+  }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -82,6 +91,8 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       gender: gender || null,
       show_phone_in_contact: showPhone,
     }).eq('id', member.id);
+    // Save the email preference separately (best-effort — never blocks the profile save).
+    await supabase.from('members').update({ email_notifications: emailPref }).eq('id', member.id);
     setSaving(false);
     setEditing(false);
     onUpdated();
@@ -160,6 +171,11 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
             <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Email</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com" className={inputCls} />
+            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+              <input type="checkbox" checked={emailPref} onChange={(e) => setEmailPref(e.target.checked)}
+                className="w-4 h-4 accent-maroon-700 rounded" />
+              <span className="text-xs text-slate-500 dark:text-slate-400">Send me email notifications</span>
+            </label>
           </div>
 
           <div>
@@ -551,6 +567,9 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
       ))}
 
       <ProfileCard member={member} onUpdated={onUpdated} />
+
+      {/* Surveys */}
+      <SurveyLinks memberId={member.id} />
 
       {/* Upcoming roles */}
       {(() => {

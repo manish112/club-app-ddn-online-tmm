@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { getEmailSettings } from '@/lib/email/mailer';
-import { sendMeetingReminder, sendRoleReminders, type MeetingRow } from '@/lib/email/notifications';
+import { sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders, type MeetingRow } from '@/lib/email/notifications';
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 
@@ -45,13 +45,19 @@ export async function GET(req: NextRequest) {
     // dedupe on the meeting id keeps it to one send).
     if (settings.hour_before_enabled && now >= startMs - 70 * 60 * 1000 && now < startMs) {
       const res = await sendMeetingReminder(m);
-      actions[`meeting_reminder:${m.number}`] = 'ok' in res ? 'sent' : ('skipped' in res ? res.skipped : res.error);
+      actions[`meeting_reminder:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
     }
 
     // 1 day before → per-role reminders to each role holder (deduped per member).
     if (settings.day_before_enabled && m.date === tomorrowIst) {
       const res = await sendRoleReminders(m);
       actions[`role_reminders:${m.number}`] = `sent ${res.sent}`;
+    }
+
+    // 1 day before → mass meeting reminder to all members (deduped on the meeting).
+    if (settings.day_before_meeting_enabled && m.date === tomorrowIst) {
+      const res = await sendMeetingReminderDayBefore(m);
+      actions[`meeting_reminder_day:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
     }
   }
 

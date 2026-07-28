@@ -3,7 +3,8 @@
 import { createServiceClient } from '@/utils/supabase/server';
 import { ROLE_META, leadershipRoleLabel, type RoleKey, type LeadershipRole } from '@/lib/types';
 import { formatDate, formatTime, escapeHtml, bioBlock } from './format';
-import { sendOne, sendMass, sendOneDeduped, getAppUrl } from './mailer';
+import { sendOne, sendOneDeduped, getAppUrl, getEmailSettings } from './mailer';
+import { buildMeetingIcs } from './ical';
 import type { TemplateVars } from './render';
 
 const CLUB_NAME = 'Dehradun Online Toastmasters';
@@ -94,45 +95,62 @@ export async function notifyRoleChange(params: {
 
 // ── New meeting announced (mass, BCC) ───────────────────────────────────────
 export async function notifyMeetingCreated(meeting: MeetingRow) {
-  const supabase = createServiceClient();
-  const { data: members } = await supabase
-    .from('members').select('id, name, display_name, email, active');
-  const recipients = (members ?? [])
-    .filter((m) => m.active && m.email)
-    .map((m) => m.email as string);
-  if (recipients.length === 0) return { skipped: 'no recipients' };
-
-  const { data: claims } = await supabase
-    .from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id);
-  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
-
-  const vars = {
-    ...baseMeetingVars(meeting, await getAppUrl()),
-    roles_summary: rolesSummaryHtml((claims ?? []) as ClaimLite[], byId),
-  };
-  return sendMass('meeting_created', recipients, vars, { meetingId: meeting.id });
+  return sendMeetingIndividual(meeting, 'meeting_created', null);
 }
 
-// ── 1-hour-before meeting reminder (mass, BCC, deduped) ─────────────────────
-export async function sendMeetingReminder(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
+// Send a meeting email individually to each active member, greeting them by name
+// ("Dear TM …"). `dedupeKind` set → each member's send is idempotent (used by the
+// once-only reminder crons); null → always send (creation / manual broadcast).
+async function sendMeetingIndividual(
+  meeting: MeetingRow,
+  templateKey: 'meeting_created' | 'meeting_reminder' | 'meeting_reminder_day_before',
+  dedupeKind: string | null,
+  attachIcs = false,
+) {
   const supabase = createServiceClient();
   const [{ data: members }, { data: claims }] = await Promise.all([
     supabase.from('members').select('id, name, display_name, email, active'),
     supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
   ]);
-  const recipients = (members ?? []).filter((m) => m.active && m.email).map((m) => m.email as string);
-  if (recipients.length === 0) return { skipped: 'no recipients' };
-  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+  const active = (members ?? []).filter((m) => m.active && m.email);
+  if (active.length === 0) return { skipped: 'no recipients' as const };
 
-  const vars = {
-    ...baseMeetingVars(meeting, await getAppUrl()),
-    roles_summary: rolesSummaryHtml((claims ?? []) as ClaimLite[], byId),
-  };
-  return sendMass('meeting_reminder', recipients, vars, {
-    // Manual broadcasts (dedupe:false) may re-send; the cron keeps its once-only guard.
-    dedupeKey: opts?.dedupe === false ? undefined : `meeting_reminder:${meeting.id}`,
-    meetingId: meeting.id,
-  });
+  const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
+  const appUrl = await getAppUrl();
+  const rolesSummary = rolesSummaryHtml((claims ?? []) as ClaimLite[], byId);
+
+  // Organizer for the calendar invite = the configured "from" identity.
+  const settings = attachIcs ? await getEmailSettings() : null;
+  const organizer = { name: settings?.from_name || CLUB_NAME, email: settings?.from_email || '' };
+
+  let sent = 0;
+  for (const m of active) {
+    const vars = {
+      ...baseMeetingVars(meeting, appUrl),
+      roles_summary: rolesSummary,
+      full_name: m.name || m.display_name,
+    };
+    const icalEvent = attachIcs && organizer.email
+      ? { method: 'REQUEST', filename: 'invite.ics', content: buildMeetingIcs(meeting, { name: m.display_name, email: m.email as string }, organizer) }
+      : undefined;
+    const res = dedupeKind
+      ? await sendOneDeduped(templateKey, m.email as string, vars, { dedupeKey: `${dedupeKind}:${meeting.id}:${m.id}`, meetingId: meeting.id, icalEvent })
+      : await sendOne(templateKey, m.email as string, vars, meeting.id, icalEvent);
+    if ('ok' in res) sent++;
+  }
+  return { ok: true as const, sent };
+}
+
+// ── 1-hour-before meeting reminder (mass, BCC, deduped) ─────────────────────
+// 1-hour-before reminder (individual "Dear TM …" emails, deduped per member).
+export function sendMeetingReminder(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
+  return sendMeetingIndividual(meeting, 'meeting_reminder', opts?.dedupe === false ? null : 'meeting_reminder');
+}
+
+// 1-day-before reminder (individual "Dear TM …" emails, deduped per member),
+// with a calendar invite (.ics) attached so members can add it to their calendar.
+export function sendMeetingReminderDayBefore(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
+  return sendMeetingIndividual(meeting, 'meeting_reminder_day_before', opts?.dedupe === false ? null : 'meeting_reminder_day_before', true);
 }
 
 // ── 1-day-before per-role reminders (1:1, deduped per member) ───────────────
@@ -243,6 +261,32 @@ export async function broadcastMentorAssigned() {
   return { sent };
 }
 
+// Send a free-form message (announcement or admin-written) individually to every
+// active member. `messageHtml` should be pre-escaped HTML.
+async function broadcastMessage(templateKey: 'announcement' | 'custom_message', extra: Record<string, string>) {
+  const supabase = createServiceClient();
+  const { data: members } = await supabase.from('members').select('id, name, display_name, email, active');
+  const active = (members ?? []).filter((m) => m.active && m.email);
+  if (active.length === 0) return { skipped: 'no recipients' as const };
+  const appUrl = await getAppUrl();
+  let sent = 0;
+  for (const m of active) {
+    const res = await sendOne(templateKey, m.email as string, {
+      club_name: CLUB_NAME, app_url: appUrl, full_name: m.name || m.display_name, ...extra,
+    });
+    if ('ok' in res) sent++;
+  }
+  return { ok: true as const, sent };
+}
+
+export function notifyAnnouncement(messageHtml: string) {
+  return broadcastMessage('announcement', { message_body: messageHtml });
+}
+
+export function sendCustomMessage(subject: string, messageHtml: string) {
+  return broadcastMessage('custom_message', { subject, message_body: messageHtml });
+}
+
 export async function broadcastWelcome() {
   const supabase = createServiceClient();
   const { data: members } = await supabase.from('members').select('id, name, display_name, email, active');
@@ -294,6 +338,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
       mentor_name: '[Mentor]', mentee_name: '[Mentee]',
       mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
       mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
+      subject: 'Sample subject line', message_body: 'This is a sample message body shown in the preview.',
     };
   }
 
@@ -320,5 +365,6 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
     mentor_name: subjectMember?.display_name ?? '[Mentor]', mentee_name: '[Mentee]',
     mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
     mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
+    subject: 'Sample subject line', message_body: 'This is a sample message body shown in the preview.',
   };
 }

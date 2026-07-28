@@ -8,6 +8,7 @@ export type TemplateKey =
   | 'role_removed'
   | 'role_reminder'
   | 'meeting_reminder'
+  | 'meeting_reminder_day_before'
   | 'evaluator_request'
   | 'leadership_assigned'
   | 'welcome'
@@ -20,7 +21,9 @@ export type TemplateKey =
   | 'evaluator_nominated'
   | 'meeting_cancelled'
   | 'mentor_assigned_to_mentee'
-  | 'mentor_assigned_to_mentor';
+  | 'mentor_assigned_to_mentor'
+  | 'announcement'
+  | 'custom_message';
 
 export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_created',
@@ -28,6 +31,7 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'role_removed',
   'role_reminder',
   'meeting_reminder',
+  'meeting_reminder_day_before',
   'evaluator_request',
   'leadership_assigned',
   'welcome',
@@ -41,6 +45,8 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_cancelled',
   'mentor_assigned_to_mentee',
   'mentor_assigned_to_mentor',
+  'announcement',
+  'custom_message',
 ];
 
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
@@ -49,6 +55,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   role_removed:     'Role removed (to the member)',
   role_reminder:    'Role reminder — 1 day before (to each role holder)',
   meeting_reminder: 'Meeting reminder — 1 hour before (to all members)',
+  meeting_reminder_day_before: 'Meeting reminder — 1 day before (to all members)',
   evaluator_request:'Evaluator approval needed (to officers)',
   leadership_assigned: 'Leadership role appointed (to the member)',
   welcome:          'Welcome email (to a newly added member)',
@@ -62,15 +69,18 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   meeting_cancelled: 'Meeting cancelled (to all members)',
   mentor_assigned_to_mentee: 'Mentor assigned — to the mentee (shows mentor bio)',
   mentor_assigned_to_mentor: 'Mentor assigned — to the mentor (shows mentee bio)',
+  announcement: 'New announcement (to all members)',
+  custom_message: 'Custom message (admin-written, to all members)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
 export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
-  meeting_created:  ['club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
+  meeting_created:  ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
   role_assigned:    ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji', 'actor_line', 'meeting_link_block'],
   role_removed:     ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'role_label', 'role_emoji', 'actor_line'],
   role_reminder:    ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji', 'meeting_link_block'],
-  meeting_reminder: ['club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
+  meeting_reminder: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
+  meeting_reminder_day_before: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
   evaluator_request:['club_name', 'app_url', 'meeting_number', 'meeting_date', 'speaker_name', 'evaluator_name'],
   leadership_assigned:['full_name', 'club_name', 'app_url', 'leadership_role', 'roles_list', 'actor_line'],
   welcome:          ['full_name', 'club_name', 'app_url'],
@@ -81,9 +91,11 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   evaluator_request_approved: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   evaluator_request_declined: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   evaluator_nominated: ['full_name', 'speaker_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time'],
-  meeting_cancelled: ['club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme'],
+  meeting_cancelled: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme'],
   mentor_assigned_to_mentee: ['full_name', 'mentor_name', 'mentor_bio_block', 'club_name', 'app_url'],
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
+  announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
+  custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -151,6 +163,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
   meeting_created: {
     subject: 'New meeting scheduled — Meeting #{{meeting_number}}',
     body_html: shell('New Meeting Scheduled', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
       <p style="${P}">A new meeting has been added to the calendar. Claim your role early!</p>
       ${meetingCard}
       {{roles_summary}}
@@ -210,9 +223,11 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
   meeting_reminder: {
     subject: '🔔 Starting soon — Meeting #{{meeting_number}} in about an hour',
     body_html: shell('Meeting Starting Soon 🔔', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
       <p style="${P}">Our meeting begins in about an hour. Here are the details:</p>
       ${meetingCard}
       {{roles_summary}}
+      <p style="${P}">See you in the meeting!</p>
       ${CTA('Open the App →')}`),
   },
 
@@ -287,6 +302,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
   meeting_cancelled: {
     subject: 'Meeting #{{meeting_number}} has been cancelled',
     body_html: shell('Meeting Cancelled', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
       <p style="${P}">Please note that the following meeting has been cancelled:</p>
       ${CARD_OPEN}
         <p style="${KICKER}">Cancelled Meeting</p>
@@ -317,6 +333,22 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       ${CTA('Open the App →')}`),
   },
 
+  announcement: {
+    subject: '📢 New announcement — {{club_name}}',
+    body_html: shell('New Announcement 📢', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <div style="color:#475569;font-size:15px;line-height:1.7;margin:0 0 24px;">{{message_body}}</div>
+      ${CTA('Open the App →')}`),
+  },
+
+  custom_message: {
+    subject: '{{subject}}',
+    body_html: shell('{{subject}}', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <div style="color:#475569;font-size:15px;line-height:1.7;margin:0 0 24px;">{{message_body}}</div>
+      ${CTA('Open the App →')}`),
+  },
+
   welcome: {
     subject: '👋 Welcome to {{club_name}}!',
     body_html: shell('Welcome aboard 👋', `
@@ -338,6 +370,17 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
         <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{roles_list}}</p>
       ${CARD_CLOSE}
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Thank you for stepping up to serve the club!</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  meeting_reminder_day_before: {
+    subject: '🔔 Reminder: Meeting #{{meeting_number}} is tomorrow — {{meeting_date}}',
+    body_html: shell('Meeting Tomorrow 🔔', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">Our next meeting is tomorrow, <strong style="color:#1e293b;">{{meeting_date}}</strong> at {{meeting_time}} IST. Here are the details:</p>
+      ${meetingCard}
+      {{roles_summary}}
+      <p style="${P}">See you in the meeting!</p>
       ${CTA('Open the App →')}`),
   },
 

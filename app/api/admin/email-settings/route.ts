@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
     reply_to: String(s.reply_to ?? '').trim(),
     app_url: String(s.app_url ?? '').trim().replace(/\/+$/, ''),
     day_before_enabled: !!s.day_before_enabled,
+    day_before_meeting_enabled: !!s.day_before_meeting_enabled,
     hour_before_enabled: !!s.hour_before_enabled,
     updated_at: new Date().toISOString(),
   };
