@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import type { Member } from '@/lib/types';
+import { RichMessageEditor } from '@/components/RichMessageEditor';
 
 const inputCls = 'w-full border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-maroon-600';
 const cardCls = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-card-light dark:shadow-card-dark';
@@ -20,6 +21,7 @@ interface Settings {
   reply_to: string;
   app_url: string;
   day_before_enabled: boolean;
+  day_before_meeting_enabled: boolean;
   hour_before_enabled: boolean;
   hasPassword?: boolean;
 }
@@ -36,7 +38,7 @@ interface TemplatesData {
 const EMPTY: Settings = {
   enabled: false, smtp_host: '', smtp_port: 587, smtp_secure: false, smtp_user: '', smtp_pass: '',
   from_name: 'Dehradun Online Toastmasters', from_email: '', reply_to: '', app_url: '',
-  day_before_enabled: true, hour_before_enabled: true,
+  day_before_enabled: true, day_before_meeting_enabled: true, hour_before_enabled: true,
 };
 
 export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId: string; members: Member[] }) {
@@ -141,6 +143,10 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
             <input type="checkbox" checked={settings.day_before_enabled} onChange={(e) => set('day_before_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
           </label>
           <label className="flex items-center justify-between gap-4">
+            <span className="text-sm text-slate-700 dark:text-slate-300">Send meeting reminder 1 day before</span>
+            <input type="checkbox" checked={settings.day_before_meeting_enabled} onChange={(e) => set('day_before_meeting_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
+          </label>
+          <label className="flex items-center justify-between gap-4">
             <span className="text-sm text-slate-700 dark:text-slate-300">Send meeting reminder 1 hour before</span>
             <input type="checkbox" checked={settings.hour_before_enabled} onChange={(e) => set('hour_before_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
           </label>
@@ -162,6 +168,9 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
         </div>
       </div>
 
+      {/* ── Write a custom message to all members ── */}
+      <CustomMessageCard currentAdminId={currentAdminId} />
+
       {/* ── Broadcast to all members ── */}
       <BroadcastCard currentAdminId={currentAdminId} />
 
@@ -174,9 +183,55 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
   );
 }
 
+function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
+  const [subject, setSubject] = useState('');
+  const [html, setHtml] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  // True when the editor has some visible content (not just empty tags).
+  const hasContent = html.replace(/<[^>]*>/g, '').trim().length > 0 || /<img/i.test(html);
+
+  async function send() {
+    if (!subject.trim() || !hasContent) return;
+    if (!confirm('Send this message by email to all members?')) return;
+    setSending(true); setMsg(null);
+    const res = await fetch('/api/admin/email-custom', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: currentAdminId, subject: subject.trim(), html }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setSending(false);
+    if (res.ok) { setMsg(`✓ Sent to ${d.recipients} member(s)`); setSubject(''); setHtml(''); }
+    else setMsg(`✗ ${d.error ?? 'Failed'}`);
+  }
+
+  return (
+    <div className={`${cardCls} p-5 space-y-3`}>
+      <div>
+        <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Message all members</h3>
+        <p className="text-xs text-slate-500">Write a message (bold, italic, images) and email it individually to every member (they see &ldquo;Dear TM &lt;name&gt;&rdquo;). Opted-out members are skipped.</p>
+      </div>
+      <div>
+        <span className={labelCls}>Subject</span>
+        <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className={inputCls} maxLength={150} />
+      </div>
+      <div>
+        <span className={labelCls}>Message</span>
+        <RichMessageEditor value={html} onChange={setHtml} />
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={send} disabled={sending || !subject.trim() || !hasContent} className={primaryBtn}>{sending ? 'Sending…' : 'Send to all members'}</button>
+        {msg && <span className="text-sm text-slate-500">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 const BROADCAST_OPTIONS = [
   { key: 'meeting_created',     label: 'New meeting announcement', to: 'all members' },
-  { key: 'meeting_reminder',    label: 'Meeting reminder',          to: 'all members' },
+  { key: 'meeting_reminder_day_before', label: 'Meeting reminder (1 day before)', to: 'all members' },
+  { key: 'meeting_reminder',    label: 'Meeting reminder (1 hour before)', to: 'all members' },
   { key: 'role_reminder',       label: 'Role reminders',            to: 'each role holder (next meeting)' },
   { key: 'role_assigned',       label: 'Role assigned',             to: 'each role holder (next meeting)' },
   { key: 'leadership_assigned', label: 'Leadership role appointed', to: 'each club officer' },

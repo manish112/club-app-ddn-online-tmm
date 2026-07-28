@@ -15,6 +15,7 @@ export interface EmailSettings {
   reply_to: string;
   app_url: string;
   day_before_enabled: boolean;
+  day_before_meeting_enabled: boolean;
   hour_before_enabled: boolean;
 }
 
@@ -63,6 +64,8 @@ const isEmail = (e: string | null | undefined): e is string => !!e && /.+@.+\..+
 
 export type SendResult = { ok: true } | { skipped: string } | { error: string };
 
+export interface IcalEvent { method: string; content: string; filename?: string }
+
 interface DeliverOpts {
   key: TemplateKey;
   vars: TemplateVars;
@@ -70,6 +73,7 @@ interface DeliverOpts {
   bcc?: string[];         // mass recipients (BCC)
   dedupeKey?: string;     // when set, a unique email_sends row guards against re-sends
   meetingId?: string | null;
+  icalEvent?: IcalEvent;  // attach a calendar invite (.ics)
 }
 
 async function deliver(opts: DeliverOpts): Promise<SendResult> {
@@ -84,8 +88,16 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
   if (!tpl.enabled) return { skipped: `template ${key} disabled` };
 
   const to = isEmail(opts.to) ? opts.to : undefined;
-  const bcc = (opts.bcc ?? []).filter(isEmail);
+  let bcc = (opts.bcc ?? []).filter(isEmail);
   if (!to && bcc.length === 0) return { skipped: 'no valid recipients' };
+
+  // Respect per-member email opt-out (members who unchecked "Send me email notifications").
+  const { data: optedRows } = await supabase.from('members').select('email').eq('email_notifications', false);
+  const blocked = new Set((optedRows ?? []).map((m) => String(m.email ?? '').toLowerCase()).filter(Boolean));
+  if (to && blocked.has(to.toLowerCase())) return { skipped: 'recipient opted out' };
+  bcc = bcc.filter((e) => !blocked.has(e.toLowerCase()));
+  if (!to && bcc.length === 0) return { skipped: 'all recipients opted out' };
+
   const recipientCount = to ? 1 : bcc.length;
 
   // Idempotency: claim the dedupe key first. A unique violation means an earlier
@@ -110,6 +122,9 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
       replyTo: settings.reply_to || undefined,
       subject,
       html,
+      icalEvent: opts.icalEvent
+        ? { method: opts.icalEvent.method, filename: opts.icalEvent.filename ?? 'invite.ics', content: opts.icalEvent.content }
+        : undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'send failed';
@@ -133,8 +148,10 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
 }
 
 // 1:1 email — greets "Dear TM {{full_name}}". `vars.full_name` should be set.
-export function sendOne(key: TemplateKey, toEmail: string, vars: TemplateVars, meetingId?: string | null): Promise<SendResult> {
-  return deliver({ key, vars, to: toEmail, meetingId });
+export function sendOne(
+  key: TemplateKey, toEmail: string, vars: TemplateVars, meetingId?: string | null, icalEvent?: IcalEvent,
+): Promise<SendResult> {
+  return deliver({ key, vars, to: toEmail, meetingId, icalEvent });
 }
 
 // Mass email — all recipients go in BCC.
@@ -145,18 +162,27 @@ export function sendMass(
   return deliver({ key, vars, bcc: recipients, dedupeKey: opts?.dedupeKey, meetingId: opts?.meetingId });
 }
 
-// Same as sendOne but supports a dedupe key (used by the 1-day-before role reminder).
+// Same as sendOne but supports a dedupe key (used by the reminders) and an
+// optional calendar invite.
 export function sendOneDeduped(
   key: TemplateKey, toEmail: string, vars: TemplateVars,
-  opts: { dedupeKey: string; meetingId?: string | null },
+  opts: { dedupeKey: string; meetingId?: string | null; icalEvent?: IcalEvent },
 ): Promise<SendResult> {
-  return deliver({ key, vars, to: toEmail, dedupeKey: opts.dedupeKey, meetingId: opts.meetingId });
+  return deliver({ key, vars, to: toEmail, dedupeKey: opts.dedupeKey, meetingId: opts.meetingId, icalEvent: opts.icalEvent });
 }
 
 // Send a one-off email with a given subject/html using the current (or provided)
 // settings, bypassing templates and the send log. Used for test/preview sends.
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  cid: string;
+  contentType?: string;
+}
+
 export async function sendCustomEmail(
-  toEmail: string, subject: string, html: string, override?: Partial<EmailSettings>,
+  toEmail: string, subject: string, html: string,
+  override?: Partial<EmailSettings>, attachments?: EmailAttachment[],
 ): Promise<SendResult> {
   const stored = await getEmailSettings();
   const settings = { ...stored, ...override } as EmailSettings;
@@ -170,6 +196,7 @@ export async function sendCustomEmail(
       replyTo: settings.reply_to || undefined,
       subject,
       html,
+      attachments: attachments && attachments.length ? attachments : undefined,
     });
     return { ok: true };
   } catch (err) {

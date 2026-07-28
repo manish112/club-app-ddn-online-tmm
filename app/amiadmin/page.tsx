@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { EmailSettingsPanel } from '@/components/EmailSettingsPanel';
+import { AdminSurveysPanel } from '@/components/AdminSurveysPanel';
 import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
@@ -1095,7 +1096,7 @@ function AgendaSettingsPanel() {
     tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
     max_speaker_slots: 2,
   });
-  const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 3, startTime: '19:30', endTime: '21:00' });
+  const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 6, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
   const [saving, setSaving] = useState(false);
@@ -1105,7 +1106,7 @@ function AgendaSettingsPanel() {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
       if (data) {
         setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2 });
-        setSchedule({ weekday: data.schedule_weekday ?? 3, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
+        setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
         setTimerModes(normalizeModes(data.timer_modes));
       }
@@ -1248,8 +1249,16 @@ function AnnouncementPanel({ current, onChanged }: { current: Announcement | nul
 
   async function post() {
     if (!text.trim()) return; setSaving(true);
+    const message = text.trim();
     await supabase.from('announcements').update({ active: false }).eq('active', true);
-    await supabase.from('announcements').insert({ message: text.trim(), active: true });
+    await supabase.from('announcements').insert({ message, active: true });
+    // Offer to email all members about the new announcement.
+    if (confirm('Email all members about this announcement?')) {
+      fetch('/api/notify-announcement', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      }).catch(() => {});
+    }
     setText(''); setSaving(false); onChanged();
   }
 
@@ -1633,7 +1642,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage' | 'email'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage' | 'email' | 'surveys'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -1657,7 +1666,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     if (bl) setBallotsMap(new Map((bl as Ballot[]).map(b => [b.meeting_id, b])));
     if (gr) setGuestRegs(gr as GuestRegistration[]);
     setCurrentAnnouncement((ann as Announcement[] | null)?.[0] ?? null);
-    if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 3, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00' });
+    if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 6, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00' });
     setLoading(false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1759,6 +1768,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     { id: 'requests'  as const, label: 'Requests' },
     { id: 'announce'  as const, label: 'Announce' },
     { id: 'usage'     as const, label: 'Usage' },
+    { id: 'surveys'   as const, label: 'Surveys' },
     { id: 'email'     as const, label: 'Email' },
     { id: 'settings'  as const, label: 'Settings' },
   ];
@@ -1820,6 +1830,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <AgendaSettingsPanel />
         ) : tab === 'email' ? (
           <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
+        ) : tab === 'surveys' ? (
+          <AdminSurveysPanel members={members} />
         ) : tab === 'usage' ? (
           <UsagePanel currentMemberId={currentMember.id} />
         ) : tab === 'guests' ? (

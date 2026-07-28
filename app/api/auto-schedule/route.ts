@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, created: 0, message: 'next meeting already exists' });
   }
 
-  const weekday   = cfg.schedule_weekday ?? 3;
+  const weekday   = cfg.schedule_weekday ?? 6;
   const startTime = cfg.schedule_start_time ?? '19:30';
   const endTime   = cfg.schedule_end_time ?? '21:00';
   const disabledRoles: string[] = cfg.default_disabled_roles ?? [];

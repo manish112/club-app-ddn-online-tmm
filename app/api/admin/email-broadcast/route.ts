@@ -2,18 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { isAdminMember } from '@/lib/admin-auth';
 import {
-  notifyMeetingCreated, sendMeetingReminder, sendRoleReminders,
+  notifyMeetingCreated, sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders,
   broadcastRoleAssigned, broadcastLeadershipAssigned, broadcastMentorAssigned, broadcastWelcome,
   type MeetingRow,
 } from '@/lib/email/notifications';
 
 // Templates that can be broadcast on demand. `meeting` ones need the next meeting.
 const BROADCAST_KEYS = [
-  'meeting_created', 'meeting_reminder', 'role_reminder', 'role_assigned',
+  'meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'role_reminder', 'role_assigned',
   'leadership_assigned', 'mentor_assigned', 'welcome',
 ] as const;
 type BroadcastKey = typeof BROADCAST_KEYS[number];
-const NEEDS_MEETING: BroadcastKey[] = ['meeting_created', 'meeting_reminder', 'role_reminder', 'role_assigned'];
+const NEEDS_MEETING: BroadcastKey[] = ['meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'role_reminder', 'role_assigned'];
 
 // Manually (re)send a broadcast email. Recipients are computed from the type
 // (and the next meeting, where relevant).
@@ -45,12 +45,15 @@ export async function POST(req: NextRequest) {
 
   switch (key) {
     case 'meeting_created':
-    case 'meeting_reminder': {
+    case 'meeting_reminder':
+    case 'meeting_reminder_day_before': {
       const { data: members } = await supabase.from('members').select('email, active');
       recipients = (members ?? []).filter((m) => m.active && m.email).length;
       const result = key === 'meeting_created'
         ? await notifyMeetingCreated(meeting!)
-        : await sendMeetingReminder(meeting!, { dedupe: false });
+        : key === 'meeting_reminder_day_before'
+          ? await sendMeetingReminderDayBefore(meeting!, { dedupe: false })
+          : await sendMeetingReminder(meeting!, { dedupe: false });
       if ('error' in result) return NextResponse.json(result, { status: 500 });
       break;
     }

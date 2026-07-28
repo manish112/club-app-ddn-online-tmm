@@ -103,6 +103,7 @@ export interface Member {
   gender: 'male' | 'female' | 'other' | null;
   avatar_url: string | null;
   show_phone_in_contact: boolean;
+  email_notifications?: boolean;   // opt-out flag; undefined/true = receives emails
   theme_preference: 'dark' | 'light' | null;
   created_at: string;
 }
@@ -265,6 +266,34 @@ export interface Announcement {
   message: string;
   active: boolean;
   created_at: string;
+}
+
+export interface MemberInterestSurvey {
+  id: string;
+  member_id: string;
+  responses: Record<string, unknown>;
+  submitted_at: string;
+}
+
+export type ClubSurveyStatus = 'draft' | 'open' | 'closed';
+
+export interface ClubSurvey {
+  id: string;
+  survey_number: number;
+  title: string | null;
+  status: ClubSurveyStatus;
+  opened_at: string | null;
+  closed_at: string | null;
+  closes_at: string | null;   // informational "open until" date (YYYY-MM-DD)
+  created_at: string;
+}
+
+export interface ClubSurveyResponse {
+  id: string;
+  survey_id: string;
+  member_id: string;
+  responses: Record<string, unknown>;
+  submitted_at: string;
 }
 
 // App-usage tracking row (device_captures). Written server-side by /api/capture.
