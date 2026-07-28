@@ -47,7 +47,7 @@ export function SurveyLinks({ memberId }: { memberId: string }) {
         {/* Member Interest — always available */}
         <Link href="/surveys/interest" className={linkCls}>
           <span className="text-lg">📝</span>
-          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Membership Interest Survey</span>
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Member Interest Survey</span>
           {interestDone && <span className="ml-auto text-xs font-semibold text-emerald-600 dark:text-emerald-400">✓ Submitted</span>}
         </Link>
 
