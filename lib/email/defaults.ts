@@ -119,6 +119,16 @@ function shell(heading: string, body: string): string {
         <tr>
           <td style="padding:28px 32px;">
 ${body}
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+              <tr><td style="padding-top:18px;border-top:1px solid #eef2f7;">
+                <p style="margin:0;color:#475569;font-size:14px;line-height:1.7;">
+                  Regards,<br>
+                  <strong style="color:#1e293b;">{{vp_education_name}}</strong><br>
+                  VP Education<br>
+                  Dehradun Online Toastmasters Club
+                </p>
+              </td></tr>
+            </table>
           </td>
         </tr>
         <tr>

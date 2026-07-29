@@ -320,6 +320,8 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
   const targetRoles: LeadershipRole[] = (members ?? []).find((m) => m.id === targetId)?.leadership_roles ?? [];
   const rolesList = targetRoles.map(leadershipRoleLabel).join(', ');
   const leadershipRoleSample = targetRoles[0] ? leadershipRoleLabel(targetRoles[0]) : '[Leadership role]';
+  const vpEd = (members ?? []).find((m) => ((m as { leadership_roles?: LeadershipRole[] }).leadership_roles ?? []).includes('vp_education'));
+  const vpEducationName = vpEd?.display_name ?? '';
 
   const list = (meetings ?? []) as MeetingRow[];
   const today = new Date().toISOString().slice(0, 10);
@@ -339,6 +341,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
       mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
       mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
       subject: 'Sample subject line', message_body: 'This is a sample message body shown in the preview.',
+      vp_education_name: vpEducationName,
     };
   }
 
@@ -366,5 +369,6 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
     mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
     mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
     subject: 'Sample subject line', message_body: 'This is a sample message body shown in the preview.',
+    vp_education_name: vpEducationName,
   };
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { isAdminMember } from '@/lib/admin-auth';
-import { resolveTemplate, sendCustomEmail, getAppUrl, getEmailSettings, type EmailAttachment } from '@/lib/email/mailer';
+import { resolveTemplate, sendCustomEmail, getAppUrl, getEmailSettings, getVpEducationName, type EmailAttachment } from '@/lib/email/mailer';
 import { fillTemplate } from '@/lib/email/render';
 
 const CLUB_NAME = 'Dehradun Online Toastmasters';
@@ -31,6 +31,19 @@ export async function POST(req: NextRequest) {
   const rawHtml = String(body.html ?? '').trim();
   if (!subject || !rawHtml) return NextResponse.json({ error: 'Subject and message are required' }, { status: 400 });
 
+  // Preview mode — render the full email (as members will see it) without sending.
+  // Keeps data: images so they display in the preview iframe.
+  if (body.preview) {
+    const supabase = createServiceClient();
+    const { data: admin } = await supabase.from('members').select('name, display_name').eq('id', body.memberId).single();
+    const tpl = await resolveTemplate('custom_message');
+    const vars = {
+      club_name: CLUB_NAME, app_url: await getAppUrl(), vp_education_name: await getVpEducationName(),
+      full_name: admin?.name || admin?.display_name || 'Member', subject, message_body: rawHtml,
+    };
+    return NextResponse.json({ subject: fillTemplate(tpl.subject, vars), html: fillTemplate(tpl.body_html, vars) });
+  }
+
   const settings = await getEmailSettings();
   if (!settings || !settings.enabled) return NextResponse.json({ error: 'Email is disabled in settings' }, { status: 400 });
 
@@ -42,11 +55,12 @@ export async function POST(req: NextRequest) {
   const tpl = await resolveTemplate('custom_message');
   const { html: bodyHtml, attachments } = inlineImages(rawHtml);
   const appUrl = await getAppUrl();
+  const vpName = await getVpEducationName();
 
   let sent = 0;
   for (const m of active) {
     const vars = {
-      club_name: CLUB_NAME, app_url: appUrl,
+      club_name: CLUB_NAME, app_url: appUrl, vp_education_name: vpName,
       full_name: m.name || m.display_name, subject, message_body: bodyHtml,
     };
     const res = await sendCustomEmail(

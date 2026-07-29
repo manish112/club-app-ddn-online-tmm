@@ -188,9 +188,24 @@ function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
   const [html, setHtml] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   // True when the editor has some visible content (not just empty tags).
   const hasContent = html.replace(/<[^>]*>/g, '').trim().length > 0 || /<img/i.test(html);
+
+  async function showPreview() {
+    if (!subject.trim() || !hasContent) return;
+    setPreviewing(true);
+    const res = await fetch('/api/admin/email-custom', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: currentAdminId, subject: subject.trim(), html, preview: true }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setPreviewing(false);
+    if (res.ok) setPreview({ subject: d.subject, html: d.html });
+    else setMsg(`✗ ${d.error ?? 'Preview failed'}`);
+  }
 
   async function send() {
     if (!subject.trim() || !hasContent) return;
@@ -220,10 +235,26 @@ function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
         <span className={labelCls}>Message</span>
         <RichMessageEditor value={html} onChange={setHtml} />
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <button onClick={send} disabled={sending || !subject.trim() || !hasContent} className={primaryBtn}>{sending ? 'Sending…' : 'Send to all members'}</button>
+        <button onClick={showPreview} disabled={previewing || !subject.trim() || !hasContent} className={ghostBtn}>{previewing ? 'Loading…' : '👁 Preview'}</button>
         {msg && <span className="text-sm text-slate-500">{msg}</span>}
       </div>
+
+      {preview && (
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setPreview(null)}>
+          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Preview · as sent to members</p>
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">{preview.subject}</p>
+              </div>
+              <button onClick={() => setPreview(null)} className="shrink-0 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-lg px-2 min-h-[36px]">✕</button>
+            </div>
+            <iframe title="Message preview" srcDoc={preview.html} sandbox="" className="w-full flex-1 bg-white border-0" style={{ minHeight: '60vh' }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

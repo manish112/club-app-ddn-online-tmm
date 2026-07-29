@@ -27,6 +27,19 @@ export async function getEmailSettings(): Promise<EmailSettings | null> {
   return (data as EmailSettings) ?? null;
 }
 
+// Display name of the current VP Education (for the email signature). Best-effort:
+// empty string if none set or the leadership column isn't available.
+export async function getVpEducationName(): Promise<string> {
+  try {
+    const supabase = createServiceClient();
+    const { data } = await supabase.from('members').select('display_name, leadership_roles, active');
+    const vp = (data ?? []).find((m) => m.active && (m.leadership_roles ?? []).includes('vp_education'));
+    return vp?.display_name ?? '';
+  } catch {
+    return '';
+  }
+}
+
 // The public app URL for email links: admin-configured value, else env, else default.
 export async function getAppUrl(): Promise<string> {
   const s = await getEmailSettings();
@@ -110,8 +123,9 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
     if (error) return { skipped: 'duplicate' };
   }
 
-  const subject = fillTemplate(tpl.subject, vars);
-  const html = fillTemplate(tpl.body_html, vars);
+  const allVars = { vp_education_name: await getVpEducationName(), ...vars };
+  const subject = fillTemplate(tpl.subject, allVars);
+  const html = fillTemplate(tpl.body_html, allVars);
 
   try {
     const transport = buildTransport(settings);
