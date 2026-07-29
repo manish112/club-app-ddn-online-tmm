@@ -21,6 +21,26 @@ export interface MeetingRow {
 
 const KICKER = 'margin:0 0 4px;color:#9d1530;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;';
 
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+// A meeting's end instant in UTC ms (date + end_time are IST wall-clock).
+function meetingEndUtcMs(m: MeetingRow): number {
+  const [y, mo, d] = m.date.split('-').map(Number);
+  const [h, mi] = (m.end_time || '23:59').split(':').map(Number);
+  return Date.UTC(y, mo - 1, d, h, mi) - IST_OFFSET_MS;
+}
+
+// The meeting that "next meeting" emails reference: the earliest one that hasn't
+// finished yet in IST, else (nothing upcoming) the most recent past meeting.
+// Comparing end instants — not a UTC date string — matters twice: a meeting stays
+// selected until it actually ends, and it then rolls to the following one instead
+// of lingering all day; and it can't drift a day because the server clock is UTC.
+export function pickUpcomingMeeting<T extends MeetingRow>(list: T[]): T | undefined {
+  const now = Date.now();
+  const sorted = [...list].sort((a, b) => meetingEndUtcMs(a) - meetingEndUtcMs(b));
+  return sorted.find((m) => meetingEndUtcMs(m) > now) ?? sorted[sorted.length - 1];
+}
+
 function meetingLinkBlock(link: string | null | undefined): string {
   if (!link) return '';
   const safe = escapeHtml(link);
@@ -124,6 +144,9 @@ async function sendMeetingIndividual(
   const organizer = { name: settings?.from_name || CLUB_NAME, email: settings?.from_email || '' };
 
   let sent = 0;
+  // Why nothing went out matters to the admin (email disabled, template off,
+  // everyone opted out…) — deliver() only reports it per-recipient, so keep one.
+  const reasons: string[] = [];
   for (const m of active) {
     const vars = {
       ...baseMeetingVars(meeting, appUrl),
@@ -137,8 +160,9 @@ async function sendMeetingIndividual(
       ? await sendOneDeduped(templateKey, m.email as string, vars, { dedupeKey: `${dedupeKind}:${meeting.id}:${m.id}`, meetingId: meeting.id, icalEvent })
       : await sendOne(templateKey, m.email as string, vars, meeting.id, icalEvent);
     if ('ok' in res) sent++;
+    else reasons.push('skipped' in res ? res.skipped : res.error);
   }
-  return { ok: true as const, sent };
+  return { ok: true as const, sent, reason: sent === 0 ? reasons[0] ?? null : null };
 }
 
 // ── 1-hour-before meeting reminder (mass, BCC, deduped) ─────────────────────
@@ -323,9 +347,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
   const vpEd = (members ?? []).find((m) => ((m as { leadership_roles?: LeadershipRole[] }).leadership_roles ?? []).includes('vp_education'));
   const vpEducationName = vpEd?.display_name ?? '';
 
-  const list = (meetings ?? []) as MeetingRow[];
-  const today = new Date().toISOString().slice(0, 10);
-  const meeting = list.find((m) => m.date >= today) ?? list[list.length - 1];
+  const meeting = pickUpcomingMeeting((meetings ?? []) as MeetingRow[]);
 
   if (!meeting) {
     return {

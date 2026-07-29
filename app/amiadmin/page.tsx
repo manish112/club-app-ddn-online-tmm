@@ -29,7 +29,7 @@ const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
   { key: 'timer',      label: 'Timer' },
   { key: 'harkmaster', label: 'Harkmaster' },
 ];
-import { isMeetingPast } from '@/lib/utils';
+import { isMeetingPast, formatMeetingDate, formatTime } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -258,14 +258,27 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
         .in('role_key', ['speaker', 'evaluator'])
         .gt('slot_index', Math.max(liveSpeaker, liveEval));
     } else {
-      const { data: created } = await supabase.from('meetings').insert(payload).select('id').single();
-      // Announce the new meeting to all members (best-effort).
-      if (created?.id) {
-        fetch('/api/notify-meeting-created', {
+      const { data: created, error } = await supabase.from('meetings').insert(payload).select('id').single();
+      if (error || !created?.id) {
+        setSaving(false);
+        alert(`Meeting not created: ${error?.message ?? 'unknown error'}`);
+        return;
+      }
+      // Announce the new meeting to all members. Awaited (and reported) rather
+      // than fire-and-forget: a silent skip here looked like "no email was sent".
+      const label = `Meeting #${payload.number} — ${formatMeetingDate(payload.date)}, ${formatTime(payload.start_time)}–${formatTime(payload.end_time)} IST`;
+      try {
+        const res = await fetch('/api/notify-meeting-created', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ meetingId: created.id }),
-        }).catch(() => {});
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) alert(`${label}\n\nCreated, but the announcement email failed: ${d.error ?? res.statusText}`);
+        else if (d.sent > 0) alert(`${label}\n\nAnnouncement emailed to ${d.sent} member(s).`);
+        else alert(`${label}\n\nCreated, but no announcement email went out (${d.reason ?? d.skipped ?? 'no recipients'}). Check the Email tab.`);
+      } catch {
+        alert(`${label}\n\nCreated, but the announcement email could not be triggered (network error).`);
       }
     }
     setSaving(false); onSave();
