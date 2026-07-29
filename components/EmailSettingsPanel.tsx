@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Member } from '@/lib/types';
 import { RichMessageEditor } from '@/components/RichMessageEditor';
+import { formatMeetingDate, formatTime } from '@/lib/utils';
 
 const inputCls = 'w-full border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-maroon-600';
 const cardCls = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-card-light dark:shadow-card-dark';
@@ -33,6 +34,56 @@ interface TemplatesData {
   placeholders: Record<string, string[]>;
   labels: Record<string, string>;
   keys: string[];
+}
+
+// The meeting a manual "next meeting" email will be built from — shown to the
+// admin *before* they send, so a wrong pick is caught rather than emailed out.
+export interface TargetMeeting {
+  id: string; number: number; date: string; start_time: string; end_time: string;
+  theme: string | null; meeting_link?: string | null;
+}
+
+function meetingSummary(m: TargetMeeting): string {
+  const theme = m.theme && m.theme !== 'TBD' ? ` · ${m.theme}` : '';
+  return `Meeting #${m.number} — ${formatMeetingDate(m.date)}, ${formatTime(m.start_time)}–${formatTime(m.end_time)} IST${theme}`;
+}
+
+function useTargetMeeting(currentAdminId: string) {
+  const [meeting, setMeeting] = useState<TargetMeeting | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  // Returns the freshly-resolved meeting so callers can confirm against it.
+  const reload = useCallback(async (): Promise<TargetMeeting | null> => {
+    const res = await fetch(`/api/admin/email-broadcast?memberId=${currentAdminId}`);
+    const d = await res.json().catch(() => ({}));
+    const next: TargetMeeting | null = res.ok ? (d.meeting ?? null) : null;
+    setMeeting(next);
+    setLoaded(true);
+    return next;
+  }, [currentAdminId]);
+
+  useEffect(() => { reload(); }, [reload]);
+  return { meeting, loaded, reload };
+}
+
+function MeetingTargetBanner({ meeting, loaded }: { meeting: TargetMeeting | null; loaded: boolean }) {
+  if (!loaded) return <p className="text-xs text-slate-400">Checking which meeting will be used…</p>;
+  if (!meeting) {
+    return (
+      <div className="rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 px-3 py-2">
+        <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">No meeting scheduled — meeting emails can&apos;t be sent.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-3 py-2">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Email will use</p>
+      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">{meetingSummary(meeting)}</p>
+      <p className="text-[11px] text-slate-400 mt-0.5">
+        {meeting.meeting_link ? 'Meeting link included.' : 'No meeting link set — the email won’t have a join link.'}
+      </p>
+    </div>
+  );
 }
 
 const EMPTY: Settings = {
@@ -175,7 +226,7 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
       <BroadcastCard currentAdminId={currentAdminId} />
 
       {/* ── Send to a specific member ── */}
-      {tpl && <SendToMember currentAdminId={currentAdminId} members={members} keys={tpl.keys} labels={tpl.labels} />}
+      {tpl && <SendToMember currentAdminId={currentAdminId} members={members} keys={tpl.keys} labels={tpl.labels} placeholders={tpl.placeholders} />}
 
       {/* ── Templates ── */}
       {tpl && <TemplateEditors data={tpl} currentAdminId={currentAdminId} />}
@@ -260,33 +311,46 @@ function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
 }
 
 const BROADCAST_OPTIONS = [
-  { key: 'meeting_created',     label: 'New meeting announcement', to: 'all members' },
-  { key: 'meeting_reminder_day_before', label: 'Meeting reminder (1 day before)', to: 'all members' },
-  { key: 'meeting_reminder',    label: 'Meeting reminder (1 hour before)', to: 'all members' },
-  { key: 'role_reminder',       label: 'Role reminders',            to: 'each role holder (next meeting)' },
-  { key: 'role_assigned',       label: 'Role assigned',             to: 'each role holder (next meeting)' },
-  { key: 'leadership_assigned', label: 'Leadership role appointed', to: 'each club officer' },
-  { key: 'mentor_assigned',     label: 'Mentor assigned',           to: 'each mentor & mentee' },
-  { key: 'welcome',             label: 'Welcome email',             to: 'all members' },
+  { key: 'meeting_created',     label: 'New meeting announcement', to: 'all members', meeting: true },
+  { key: 'meeting_reminder_day_before', label: 'Meeting reminder (1 day before)', to: 'all members', meeting: true },
+  { key: 'meeting_reminder',    label: 'Meeting reminder (1 hour before)', to: 'all members', meeting: true },
+  { key: 'role_reminder',       label: 'Role reminders',            to: 'each role holder (next meeting)', meeting: true },
+  { key: 'role_assigned',       label: 'Role assigned',             to: 'each role holder (next meeting)', meeting: true },
+  { key: 'leadership_assigned', label: 'Leadership role appointed', to: 'each club officer', meeting: false },
+  { key: 'mentor_assigned',     label: 'Mentor assigned',           to: 'each mentor & mentee', meeting: false },
+  { key: 'welcome',             label: 'Welcome email',             to: 'all members', meeting: false },
 ] as const;
 
 function BroadcastCard({ currentAdminId }: { currentAdminId: string }) {
   const [templateKey, setTemplateKey] = useState<string>(BROADCAST_OPTIONS[0].key);
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const { meeting, loaded, reload } = useTargetMeeting(currentAdminId);
+
+  const opt = BROADCAST_OPTIONS.find((o) => o.key === templateKey);
+  const needsMeeting = opt?.meeting ?? false;
 
   async function broadcast() {
-    const opt = BROADCAST_OPTIONS.find((o) => o.key === templateKey);
     if (!opt) return;
-    if (!confirm(`Send "${opt.label}" to ${opt.to} (using the next meeting's details)?`)) return;
+    // Re-resolve the target meeting first: the panel may have been open for a
+    // while, and the admin must confirm against what will actually be sent.
+    const current = await reload();
+    if (needsMeeting && !current) { setMsg('✗ No meeting to reference'); return; }
+
+    const detail = needsMeeting && current ? `\n\n${meetingSummary(current)}` : '';
+    if (!confirm(`Send "${opt.label}" to ${opt.to}?${detail}`)) return;
+
     setSending(true); setMsg(null);
     const res = await fetch('/api/admin/email-broadcast', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memberId: currentAdminId, templateKey }),
+      body: JSON.stringify({ memberId: currentAdminId, templateKey, expectedMeetingId: current?.id }),
     });
     const d = await res.json().catch(() => ({}));
     setSending(false);
-    setMsg(res.ok ? `✓ Sent to ${d.recipients} recipient(s) — Meeting #${d.meetingNumber}` : `✗ ${d.error ?? 'Failed'}`);
+    setMsg(res.ok
+      ? `✓ Sent to ${d.recipients} recipient(s)${d.meetingNumber ? ` — Meeting #${d.meetingNumber}` : ''}`
+      : `✗ ${d.error ?? 'Failed'}`);
+    reload();
   }
 
   return (
@@ -301,25 +365,35 @@ function BroadcastCard({ currentAdminId }: { currentAdminId: string }) {
           {BROADCAST_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label} → {o.to}</option>)}
         </select>
       </div>
+      {needsMeeting && <MeetingTargetBanner meeting={meeting} loaded={loaded} />}
       <div className="flex items-center gap-2">
-        <button onClick={broadcast} disabled={sending} className={primaryBtn}>{sending ? 'Sending…' : 'Send now'}</button>
+        <button onClick={broadcast} disabled={sending || (needsMeeting && loaded && !meeting)} className={primaryBtn}>{sending ? 'Sending…' : 'Send now'}</button>
         {msg && <span className="text-sm text-slate-500">{msg}</span>}
       </div>
     </div>
   );
 }
 
-function SendToMember({ currentAdminId, members, keys, labels }: {
-  currentAdminId: string; members: Member[]; keys: string[]; labels: Record<string, string>;
+function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
+  currentAdminId: string; members: Member[]; keys: string[];
+  labels: Record<string, string>; placeholders: Record<string, string[]>;
 }) {
   const withEmail = members.filter((m) => m.email);
   const [templateKey, setTemplateKey] = useState(keys[0] ?? '');
   const [targetId, setTargetId] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const { meeting, loaded, reload } = useTargetMeeting(currentAdminId);
+
+  // Templates that render meeting details are filled from the next meeting.
+  const needsMeeting = (placeholders[templateKey] ?? []).includes('meeting_number');
 
   async function send() {
     if (!targetId || !templateKey) return;
+    const current = needsMeeting ? await reload() : null;
+    const who = withEmail.find((m) => m.id === targetId);
+    const detail = current ? `\n\n${meetingSummary(current)}` : '';
+    if (!confirm(`Send "${labels[templateKey]}" to TM ${who?.display_name ?? 'this member'}?${detail}`)) return;
     setSending(true); setMsg(null);
     const res = await fetch('/api/admin/email-send-member', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -352,6 +426,7 @@ function SendToMember({ currentAdminId, members, keys, labels }: {
           <p className="text-[11px] text-slate-400 mt-1">{members.length - withEmail.length} member(s) without an email are hidden.</p>
         )}
       </div>
+      {needsMeeting && <MeetingTargetBanner meeting={meeting} loaded={loaded} />}
       <div className="flex items-center gap-2">
         <button onClick={send} disabled={sending || !targetId} className={primaryBtn}>{sending ? 'Sending…' : 'Send email'}</button>
         {msg && <span className="text-sm text-slate-500">{msg}</span>}

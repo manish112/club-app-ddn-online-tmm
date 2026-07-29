@@ -4,8 +4,26 @@ import { isAdminMember } from '@/lib/admin-auth';
 import {
   notifyMeetingCreated, sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders,
   broadcastRoleAssigned, broadcastLeadershipAssigned, broadcastMentorAssigned, broadcastWelcome,
-  type MeetingRow,
+  pickUpcomingMeeting, type MeetingRow,
 } from '@/lib/email/notifications';
+
+// The meeting every "next meeting" email (broadcast or 1:1) is built from.
+async function loadTargetMeeting(): Promise<MeetingRow | undefined> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from('meetings').select('id, number, date, start_time, end_time, theme, meeting_link')
+    .order('date', { ascending: true });
+  return pickUpcomingMeeting((data ?? []) as MeetingRow[]);
+}
+
+// Lets the admin UI show which meeting a manual send will use *before* sending.
+export async function GET(req: NextRequest) {
+  const memberId = req.nextUrl.searchParams.get('memberId') ?? '';
+  if (!(await isAdminMember(memberId))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return NextResponse.json({ meeting: (await loadTargetMeeting()) ?? null });
+}
 
 // Templates that can be broadcast on demand. `meeting` ones need the next meeting.
 const BROADCAST_KEYS = [
@@ -27,34 +45,42 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'This template cannot be broadcast' }, { status: 400 });
   }
 
-  const supabase = createServiceClient();
-
   let meeting: MeetingRow | undefined;
   if (NEEDS_MEETING.includes(key)) {
-    const { data: meetings } = await supabase
-      .from('meetings').select('id, number, date, start_time, end_time, theme, meeting_link')
-      .order('date', { ascending: true });
-    const list = (meetings ?? []) as MeetingRow[];
-    const today = new Date().toISOString().slice(0, 10);
-    meeting = list.find((m) => m.date >= today) ?? list[list.length - 1];
+    meeting = await loadTargetMeeting();
     if (!meeting) return NextResponse.json({ error: 'No meeting to reference' }, { status: 400 });
+    // The client shows the target meeting before sending; reject a stale confirm
+    // (e.g. the meeting ended, or a new one was added, while the panel sat open).
+    if (body.expectedMeetingId && body.expectedMeetingId !== meeting.id) {
+      return NextResponse.json({
+        error: `The next meeting changed to #${meeting.number} — nothing was sent. Check the details and send again.`,
+        meeting,
+      }, { status: 409 });
+    }
   }
 
   let recipients = 0;
-  let meetingNumber: number | undefined = meeting?.number;
+  const meetingNumber: number | undefined = meeting?.number;
 
   switch (key) {
     case 'meeting_created':
     case 'meeting_reminder':
     case 'meeting_reminder_day_before': {
-      const { data: members } = await supabase.from('members').select('email, active');
-      recipients = (members ?? []).filter((m) => m.active && m.email).length;
       const result = key === 'meeting_created'
         ? await notifyMeetingCreated(meeting!)
         : key === 'meeting_reminder_day_before'
           ? await sendMeetingReminderDayBefore(meeting!, { dedupe: false })
           : await sendMeetingReminder(meeting!, { dedupe: false });
       if ('error' in result) return NextResponse.json(result, { status: 500 });
+      // Report what actually went out — sends can be skipped per member (opt-out,
+      // template disabled), so the member count would overstate it.
+      if ('skipped' in result) {
+        return NextResponse.json({ error: `Nothing sent — ${result.skipped}` }, { status: 400 });
+      }
+      if (result.sent === 0) {
+        return NextResponse.json({ error: `Nothing sent — ${result.reason ?? 'no recipients'}` }, { status: 400 });
+      }
+      recipients = result.sent;
       break;
     }
     case 'role_reminder':
@@ -74,5 +100,5 @@ export async function POST(req: NextRequest) {
       break;
   }
 
-  return NextResponse.json({ ok: true, meetingNumber, recipients });
+  return NextResponse.json({ ok: true, meetingNumber, meeting: meeting ?? null, recipients });
 }

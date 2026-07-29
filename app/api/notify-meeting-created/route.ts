@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
 
     const result = await notifyMeetingCreated(meeting as MeetingRow);
     if ('error' in result) return NextResponse.json(result, { status: 500 });
-    return NextResponse.json(result);
+    // Echo the meeting back so the admin sees exactly which one was emailed.
+    return NextResponse.json({ ...result, meeting });
   } catch (err) {
     console.error('[notify-meeting-created] Unexpected error:', err);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
