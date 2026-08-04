@@ -1,5 +1,5 @@
-import type { Meeting, MeetingWithClaims, Member, ParticipationMode, RoleKey, SpeakerGroup, LeadershipRole } from './types';
-import { hasLeadershipRole, specialSessionName } from './types';
+import type { Meeting, MeetingWithClaims, Member, ParticipationMode, RoleKey, SpeakerGroup } from './types';
+import { specialSessionName } from './types';
 import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
@@ -387,9 +387,13 @@ export function buildWhatsAppAgenda(
   // written so the wording stays theirs.
   const specialName = special ? specialSessionName(meeting) : null;
   if (special) {
+    lines.push('');
     lines.push(`✨ *SPECIAL SESSION${specialName ? `: ${specialName}` : ''}* ✨`);
     const note = meeting.special_session_note?.trim();
-    if (note) lines.push(`_${note}_`);
+    if (note) {
+      lines.push('');
+      lines.push(`_${note}_`);
+    }
   }
   lines.push('');
   lines.push('Speak, Lead, Inspire');
@@ -603,14 +607,6 @@ export function buildAgendaSections(
     return claim ? (membersById.get(claim.member_id)?.display_name ?? '') : '';
   }
 
-  // Returns display_name of a member holding a given leadership role, '' if none
-  function getLeader(role: LeadershipRole): string {
-    for (const m of membersById.values()) {
-      if (hasLeadershipRole(m, role)) return m.display_name;
-    }
-    return '';
-  }
-
   function r(
     indented: boolean,
     label: string,
@@ -626,13 +622,12 @@ export function buildAgendaSections(
   // ── Section 1: Opening ───────────────────────────────────────────────────
   const s1: AgendaRow[] = [];
 
-  const presN = getLeader('president');
-
+  // The chair is whichever officer presides on the day, decided by who turns up —
+  // so the agenda says "Presiding Officer" and never names a person.
   s1.push(r(false, 'Sergeant-at-Arms calls the meeting to order'));                              offset += 5;
-  s1.push(r(false, 'Sergeant-at-Arms calls the Chair (President', presN,
-    undefined, undefined, ') for opening remarks'));                                             offset += 5;
-  s1.push(r(false, 'Chair (President', presN,
-    undefined, undefined, ') calls the Toastmaster of the Day', getName('tmod')));               offset += 1;
+  s1.push(r(false, 'Sergeant-at-Arms calls the Presiding Officer for opening remarks'));         offset += 5;
+  s1.push(r(false, 'Presiding Officer calls the Toastmaster of the Day',
+    getName('tmod')));                                                                           offset += 1;
   s1.push(r(false, 'TMoD', getName('tmod'),
     undefined, meeting.theme || 'Theme introduction', ' opens & introduces the theme'));         offset += 3;
   s1.push(r(false, 'TMoD', getName('tmod'),
@@ -751,12 +746,10 @@ export function buildAgendaSections(
   s5.push(r(false, 'TMoD', getName('tmod'),
     `~${config.tmodConclusionMins} MIN`, undefined, ' brings the theme to a conclusion'));       offset += config.tmodConclusionMins;
   s5.push(r(false, 'TMoD', getName('tmod'),
-    undefined, undefined, ' hands the meeting back to the Chair'));                              offset += 1;
-  s5.push(r(false, 'Chair (President', getLeader('president'),
-    undefined, 'Guests share their experience of the meeting',
-    ') invites the guests to introduce themselves'));                                             offset += 3;
-  s5.push(r(false, 'Chair (President', getLeader('president'),
-    undefined, undefined, ') shares awards, announcements & closing remarks'));
+    undefined, undefined, ' hands the meeting back to the Presiding Officer'));                  offset += 1;
+  s5.push(r(false, 'Presiding Officer invites the guests to introduce themselves',
+    undefined, undefined, 'Guests share their experience of the meeting'));                      offset += 3;
+  s5.push(r(false, 'Presiding Officer shares awards, announcements & closing remarks'));
 
   return [
     { title: 'Opening',           rows: s1 },
