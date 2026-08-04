@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
-import { sendOne, getAppUrl } from '@/lib/email/mailer';
+import { sendOne, sendMass, getAppUrl, getApproverEmails } from '@/lib/email/mailer';
 import { formatDate, formatTime, escapeHtml } from '@/lib/email/format';
 import type { TemplateKey } from '@/lib/email/defaults';
+import { ROLE_META, type RoleKey } from '@/lib/types';
 
 const CLUB_NAME = 'Dehradun Online Toastmasters';
 
-type Kind = 'speaker_slot' | 'evaluator';
+type Kind = 'speaker_slot' | 'evaluator' | 'role_interest';
 type ReqEvent = 'submitted' | 'approved' | 'denied';
 
 // Each request state has its own editable template.
@@ -16,9 +17,23 @@ function templateKeyFor(kind: Kind, event: ReqEvent): TemplateKey {
       : event === 'denied' ? 'speaker_slot_declined'
       : 'speaker_slot_received';
   }
+  if (kind === 'role_interest') {
+    return event === 'approved' ? 'role_interest_approved'
+      : event === 'denied' ? 'role_interest_declined'
+      : 'role_interest_received';
+  }
   return event === 'approved' ? 'evaluator_request_approved'
     : event === 'denied' ? 'evaluator_request_declined'
     : 'evaluator_request_received';
+}
+
+// The member's own note, rendered for the approvers' email.
+function noteBlock(note: string | null): string {
+  if (!note?.trim()) return '';
+  return `<table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:24px;"><tr><td style="padding:16px 20px;">
+    <p style="margin:0 0 4px;color:#9d1530;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;">Their note</p>
+    <p style="margin:0;color:#334155;font-size:14px;line-height:1.6;">${escapeHtml(note.trim())}</p>
+  </td></tr></table>`;
 }
 
 function commentBlock(comment: string | null, officerName: string | null): string {
@@ -41,11 +56,19 @@ export async function POST(req: NextRequest) {
 
     let memberId: string; let meetingId: string; let comment: string | null;
     let evaluatorId: string | null = null; let reviewerId: string | null = null;
+    let requestNote: string | null = null; let roleKey: RoleKey | null = null;
     if (kind === 'speaker_slot') {
       const { data } = await supabase.from('speaker_slot_requests')
-        .select('member_id, meeting_id, review_comment, reviewer_id').eq('id', requestId).single();
+        .select('member_id, meeting_id, review_comment, reviewer_id, request_note').eq('id', requestId).single();
       if (!data) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
-      memberId = data.member_id; meetingId = data.meeting_id; comment = data.review_comment; reviewerId = data.reviewer_id;
+      memberId = data.member_id; meetingId = data.meeting_id; comment = data.review_comment;
+      reviewerId = data.reviewer_id; requestNote = data.request_note;
+    } else if (kind === 'role_interest') {
+      const { data } = await supabase.from('role_interest_requests')
+        .select('member_id, meeting_id, review_comment, reviewer_id, request_note, role_key').eq('id', requestId).single();
+      if (!data) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+      memberId = data.member_id; meetingId = data.meeting_id; comment = data.review_comment;
+      reviewerId = data.reviewer_id; requestNote = data.request_note; roleKey = data.role_key as RoleKey;
     } else {
       const { data } = await supabase.from('evaluator_requests')
         .select('speaker_id, meeting_id, review_comment, preferred_evaluator_id, reviewer_id').eq('id', requestId).single();
@@ -76,12 +99,16 @@ export async function POST(req: NextRequest) {
       meeting_time: `${formatTime(meeting.start_time)}–${formatTime(meeting.end_time)}`,
     };
 
+    const roleMeta = roleKey ? ROLE_META[roleKey] : null;
+
     // 1) Notify the requester (speaker) about the status change.
     if (member.email && !skipRequester) {
       await sendOne(templateKeyFor(kind, event), member.email, {
         ...meetingVars,
         full_name: member.name || member.display_name,
         evaluator_name: evaluator?.display_name ?? '',
+        role_label: roleMeta?.label ?? '',
+        role_emoji: roleMeta?.emoji ?? '',
         review_comment_block: event === 'submitted' ? '' : commentBlock(comment, reviewer?.display_name ?? null),
       }, meetingId);
     }
@@ -93,6 +120,30 @@ export async function POST(req: NextRequest) {
         full_name: evaluator.name || evaluator.display_name,
         speaker_name: member.display_name,
       }, meetingId);
+    }
+
+    // 3) A new speaker-slot or role request needs someone to act on it — tell the
+    //    President, VP Education and admins. (Evaluator nominations have their own
+    //    officer mail via /api/notify-evaluator-request.)
+    if (event === 'submitted' && (kind === 'speaker_slot' || kind === 'role_interest')) {
+      // An approver can raise a request too — they already got the confirmation
+      // above, so don't also mail them "please review this".
+      const self = (member.email ?? '').trim().toLowerCase();
+      const approvers = (await getApproverEmails()).filter((e) => e !== self);
+      if (approvers.length > 0) {
+        await sendMass(
+          kind === 'speaker_slot' ? 'speaker_slot_request' : 'role_interest_request',
+          approvers,
+          {
+            ...meetingVars,
+            requester_name: member.display_name || member.name,
+            role_label: roleMeta?.label ?? '',
+            role_emoji: roleMeta?.emoji ?? '',
+            request_note_block: noteBlock(requestNote),
+          },
+          { meetingId },
+        );
+      }
     }
 
     return NextResponse.json({ ok: true });

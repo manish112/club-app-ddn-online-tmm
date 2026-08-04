@@ -1,5 +1,5 @@
-import type { Meeting, MeetingWithClaims, Member, RoleKey, SpeakerGroup, LeadershipRole } from './types';
-import { hasLeadershipRole } from './types';
+import type { Meeting, MeetingWithClaims, Member, ParticipationMode, RoleKey, SpeakerGroup, LeadershipRole } from './types';
+import { hasLeadershipRole, specialSessionName } from './types';
 import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
@@ -187,6 +187,68 @@ export function getMemberRecentRoles(
     .slice(0, limit);
 }
 
+// ── Online-only role reservation ─────────────────────────────────────────────
+// While a meeting is still further out than `daysBefore` days, its roles are
+// held for members who take part online only; from that point on they open to
+// everyone. Independent of the rotation rule (consecutiveRoleBlocked), which
+// applies in both phases.
+
+export const DEFAULT_RESERVATION_DAYS_BEFORE = 7;
+
+export interface RoleReservation {
+  active: boolean;          // reservation currently in effect for this meeting
+  opensOn: string;          // YYYY-MM-DD (IST) the roles open to everyone
+  opensAt: Date;            // that date at 00:00 IST
+  reservedThrough: string;  // YYYY-MM-DD (IST) — last full day still reserved
+}
+
+// null when the feature is switched off — callers treat that as "no gate".
+export function roleReservation(
+  meeting: Meeting,
+  enabled: boolean,
+  daysBefore: number = DEFAULT_RESERVATION_DAYS_BEFORE,
+): RoleReservation | null {
+  if (!enabled) return null;
+  const [y, mo, d] = meeting.date.split('-').map(Number);
+  const open = new Date(Date.UTC(y, mo - 1, d - Math.max(0, daysBefore)));
+  // 00:00 IST is 18:30 UTC on the previous day.
+  const opensAt = new Date(open.getTime() - (5 * 60 + 30) * 60 * 1000);
+  return {
+    active: Date.now() < opensAt.getTime(),
+    opensOn: open.toISOString().slice(0, 10),
+    opensAt,
+    // The day before opening — the last date roles are still online-only.
+    reservedThrough: new Date(open.getTime() - 86_400_000).toISOString().slice(0, 10),
+  };
+}
+
+// How far off the opening is, in plain words: "tomorrow", "in 3 days". Because
+// opensAt is midnight IST, "less than 24h away" always means the next IST day.
+export function reservationCountdown(reservation: RoleReservation): string {
+  const ms = reservation.opensAt.getTime() - Date.now();
+  if (ms <= 0) return 'now';
+  const days = Math.ceil(ms / 86_400_000);
+  return days <= 1 ? 'tomorrow' : `in ${days} days`;
+}
+
+// Why a member can't claim during the reservation window, or null if they can.
+// Online-only members are never blocked by this rule.
+export function reservationBlocked(
+  mode: ParticipationMode,
+  reservation: RoleReservation | null,
+): string | null {
+  if (!reservation?.active || mode === 'online') return null;
+  return `Reserved for online members only till ${formatShortDate(reservation.reservedThrough)}`;
+}
+
+// Format "2026-08-09" → "9 Aug"
+export function formatShortDate(dateStr: string): string {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const month = new Date(Date.UTC(y, mo - 1, d))
+    .toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+  return `${d} ${month}`;
+}
+
 // IST = UTC+5:30. Meeting deadline is start_time IST on meeting date.
 // Roles lock `lockBeforeMins` before start_time IST. start_time stored as "HH:MM:SS".
 export function getMeetingDeadlineUTC(meeting: Meeting, lockBeforeMins = 60): Date {
@@ -278,7 +340,10 @@ export function buildWhatsAppAgenda(
   membersById: Map<string, Member>,
   includeIntros = true,
   lockBeforeMins = 60,
-  baseUrl: string = APP_URL
+  baseUrl: string = APP_URL,
+  // Active online-only reservation window, if any — adds a note so the group
+  // knows why roles look open but aren't claimable by everyone yet.
+  reservation: RoleReservation | null = null,
 ): string {
   // Build links off wherever the app is actually running (passed in by the
   // client), falling back to the canonical URL for server-side callers.
@@ -299,18 +364,41 @@ export function buildWhatsAppAgenda(
 
   const lines: string[] = [];
 
+  const reserved = rolesOpen && !!reservation?.active;
+
+  const special = meeting.is_special_session === true;
+
   if (rolesOpen) {
-    lines.push('Please come forward to take the roles in the next meeting:');
+    lines.push(special
+      ? 'Please come forward to take the roles in this special session:'
+      : 'Please come forward to take the roles in the next meeting:');
+    if (reserved && reservation) {
+      lines.push('');
+      // WhatsApp has no underline — bold+italic is the strongest emphasis available.
+      // Naming both dates avoids the "until Wednesday" ambiguity (roles open *on*
+      // that day, so the last reserved day is the one before).
+      lines.push(`🌐 *Roles are reserved for members who attend online only* till *_${formatMeetingDate(reservation.reservedThrough)}_* — on *_${formatMeetingDate(reservation.opensOn)}_* the roles will open to all to claim.`);
+    }
     lines.push('');
   }
   lines.push(`Dehradun Online Toastmasters Meeting #${meeting.number}`);
+  // A special session leads with its own banner so it doesn't read as a routine
+  // meeting. The theme doubles as the session title, and the note is admin-
+  // written so the wording stays theirs.
+  const specialName = special ? specialSessionName(meeting) : null;
+  if (special) {
+    lines.push(`✨ *SPECIAL SESSION${specialName ? `: ${specialName}` : ''}* ✨`);
+    const note = meeting.special_session_note?.trim();
+    if (note) lines.push(`_${note}_`);
+  }
   lines.push('');
   lines.push('Speak, Lead, Inspire');
   lines.push('');
   lines.push(
     `🗓️ ${formatMeetingDate(meeting.date)}, ${formatTime(meeting.start_time)}- ${formatTime(meeting.end_time)} IST`
   );
-  if (meeting.theme) {
+  // Skipped when the special-session banner already carried the theme as its title.
+  if (meeting.theme && !specialName) {
     lines.push('');
     lines.push(`🌐 Theme: ${meeting.theme}`);
   }
@@ -413,6 +501,10 @@ export function buildWhatsAppAgenda(
   if (rolesOpen) {
     lines.push('');
     lines.push(`Claim your role on the app: ${base}/`);
+    if (reserved) {
+      lines.push('');
+      lines.push('ℹ️ _Would you still like a role while slots are reserved for our online-only members? You\'re very welcome to ask in the app - VP Education will review it accordingly_');
+    }
   }
 
   // Introductions section — grouped by heat for a speakathon.

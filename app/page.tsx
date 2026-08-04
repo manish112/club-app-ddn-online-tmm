@@ -6,11 +6,11 @@ import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { ThemeReminderModal } from '@/components/ThemeReminderModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import type { MeetingWithClaims } from '@/lib/types';
+import type { MeetingWithClaims, ParticipationMode } from '@/lib/types';
 import { isClubOfficer } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
-import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG } from '@/lib/utils';
+import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { useCapture } from '@/lib/capture';
 import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
@@ -30,6 +30,9 @@ export default function Home() {
   const [lockBeforeMins, setLockBeforeMins] = useState(DEFAULT_AGENDA_CONFIG.lockBeforeMins);
   const [maxSpeakerSlots, setMaxSpeakerSlots] = useState(DEFAULT_AGENDA_CONFIG.maxSpeakerSlots);
 
+  const [reservation, setReservation] = useState({ enabled: false, daysBefore: DEFAULT_RESERVATION_DAYS_BEFORE });
+  const [participationMode, setParticipationMode] = useState<ParticipationMode>('online');
+
   useEffect(() => {
     createClient()
       .from('agenda_config')
@@ -38,6 +41,19 @@ export default function Home() {
       .then(({ data }) => {
         if (data?.lock_before_mins) setLockBeforeMins(data.lock_before_mins);
         if (data?.max_speaker_slots) setMaxSpeakerSlots(data.max_speaker_slots);
+      });
+    // Reservation settings are read on their own so a not-yet-migrated column
+    // can't take the lock/slot settings down with it (feature stays off).
+    createClient()
+      .from('agenda_config')
+      .select('online_reservation_enabled, online_reservation_days_before')
+      .single()
+      .then(({ data }) => {
+        if (!data) return;
+        setReservation({
+          enabled: data.online_reservation_enabled === true,
+          daysBefore: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE,
+        });
       });
   }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
@@ -58,6 +74,15 @@ export default function Home() {
 
   const isGuest = memberId === 'guest';
   const currentMember = isGuest ? null : members.find((m) => m.id === memberId);
+
+  // Read separately from the members list (which doesn't select this column) so
+  // a missing migration degrades to the default rather than breaking sign-in.
+  useEffect(() => {
+    if (!currentMember) { setParticipationMode('online'); return; }
+    createClient()
+      .from('members').select('participation_mode').eq('id', currentMember.id).maybeSingle()
+      .then(({ data }) => setParticipationMode(data?.participation_mode === 'hybrid' ? 'hybrid' : 'online'));
+  }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!loaded || loading || !currentMember || meetings.length === 0) return;
@@ -358,6 +383,9 @@ export default function Home() {
                     hideWhatsApp={meetingTab !== 'next'}
                     lockBeforeMins={lockBeforeMins}
                     maxSpeakerSlots={maxSpeakerSlots}
+                    reservationEnabled={reservation.enabled}
+                    reservationDaysBefore={reservation.daysBefore}
+                    participationMode={participationMode}
                     onChanged={refetch}
                   />
                 </div>

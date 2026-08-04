@@ -40,6 +40,27 @@ export async function getVpEducationName(): Promise<string> {
   }
 }
 
+// Everyone who reviews member requests: Club President, VP Education and any
+// member flagged as an admin. De-duplicated, active members only. Best-effort —
+// an empty list just means nobody gets the "needs approval" mail.
+export async function getApproverEmails(): Promise<string[]> {
+  try {
+    const supabase = createServiceClient();
+    const { data } = await supabase.from('members').select('email, is_admin, leadership_roles, active');
+    const emails = (data ?? [])
+      .filter((m) => m.active !== false)
+      .filter((m) => {
+        const roles: string[] = m.leadership_roles ?? [];
+        return m.is_admin === true || roles.includes('president') || roles.includes('vp_education');
+      })
+      .map((m) => String(m.email ?? '').trim().toLowerCase())
+      .filter((e) => /.+@.+\..+/.test(e));
+    return [...new Set(emails)];
+  } catch {
+    return [];
+  }
+}
+
 // The public app URL for email links: admin-configured value, else env, else default.
 export async function getAppUrl(): Promise<string> {
   const s = await getEmailSettings();

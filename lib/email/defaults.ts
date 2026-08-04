@@ -15,6 +15,11 @@ export type TemplateKey =
   | 'speaker_slot_received'
   | 'speaker_slot_approved'
   | 'speaker_slot_declined'
+  | 'speaker_slot_request'
+  | 'role_interest_received'
+  | 'role_interest_approved'
+  | 'role_interest_declined'
+  | 'role_interest_request'
   | 'evaluator_request_received'
   | 'evaluator_request_approved'
   | 'evaluator_request_declined'
@@ -38,6 +43,11 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'speaker_slot_received',
   'speaker_slot_approved',
   'speaker_slot_declined',
+  'speaker_slot_request',
+  'role_interest_received',
+  'role_interest_approved',
+  'role_interest_declined',
+  'role_interest_request',
   'evaluator_request_received',
   'evaluator_request_approved',
   'evaluator_request_declined',
@@ -62,6 +72,11 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   speaker_slot_received: 'Speaker-slot request received (to requester)',
   speaker_slot_approved: 'Speaker-slot request approved (to requester)',
   speaker_slot_declined: 'Speaker-slot request declined (to requester)',
+  speaker_slot_request: 'Speaker-slot approval needed (to officers)',
+  role_interest_received: 'Role request received (to requester)',
+  role_interest_approved: 'Role request approved (to requester)',
+  role_interest_declined: 'Role request declined (to requester)',
+  role_interest_request: 'Role request approval needed (to officers)',
   evaluator_request_received: 'Evaluator request received (to requester)',
   evaluator_request_approved: 'Evaluator request approved (to requester)',
   evaluator_request_declined: 'Evaluator request declined (to requester)',
@@ -87,6 +102,11 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   speaker_slot_received: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time'],
   speaker_slot_approved: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   speaker_slot_declined: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
+  speaker_slot_request: ['club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'requester_name', 'request_note_block'],
+  role_interest_received: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji'],
+  role_interest_approved: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji', 'review_comment_block'],
+  role_interest_declined: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji', 'review_comment_block'],
+  role_interest_request: ['club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'requester_name', 'role_label', 'role_emoji', 'request_note_block'],
   evaluator_request_received: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time'],
   evaluator_request_approved: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   evaluator_request_declined: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
@@ -267,6 +287,71 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="${P}">Unfortunately your request for an extra speaker slot was not approved this time.</p>
       ${requestMeetingCard}
       {{review_comment_block}}
+      ${CTA('Open the App →')}`),
+  },
+
+  speaker_slot_request: {
+    subject: '🎙️ Speaker-slot approval needed — {{requester_name}}, Meeting #{{meeting_number}}',
+    body_html: shell('Speaker Slot Requested 🎙️', `
+      <p style="${P}"><strong style="color:#1e293b;">TM {{requester_name}}</strong> has asked for a prepared-speech slot at the meeting below and needs your approval.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">Member</p>
+        <p style="margin:0 0 16px;color:#1e293b;font-size:18px;font-weight:800;">🎙️ TM {{requester_name}}</p>
+        <p style="${KICKER}">Meeting</p>
+        <p style="margin:0;color:#1e293b;font-size:16px;font-weight:700;">Meeting #{{meeting_number}}</p>
+        <p style="margin:4px 0 0;color:#64748b;font-size:14px;">{{meeting_date}} · {{meeting_time}} IST</p>
+      ${CARD_CLOSE}
+      {{request_note_block}}
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Open the admin panel to approve or decline. Approving puts them into a free speaker slot, or opens an extra one if the meeting is already full.</p>
+      <a href="{{app_url}}/amiadmin" style="display:inline-block;background:linear-gradient(135deg,#9d1530,#6b0c1e);color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:10px;font-size:14px;font-weight:700;">Review Request →</a>`),
+  },
+
+  role_interest_request: {
+    subject: '🙋 Role request — {{requester_name}} wants {{role_label}}, Meeting #{{meeting_number}}',
+    body_html: shell('Role Requested 🙋', `
+      <p style="${P}"><strong style="color:#1e293b;">TM {{requester_name}}</strong> would like to play a role at the meeting below and needs your approval.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">Requested Role</p>
+        <p style="margin:0 0 16px;color:#1e293b;font-size:20px;font-weight:800;">{{role_emoji}} {{role_label}}</p>
+        <p style="${KICKER}">Member</p>
+        <p style="margin:0 0 16px;color:#1e293b;font-size:18px;font-weight:800;">TM {{requester_name}}</p>
+        <p style="${KICKER}">Meeting</p>
+        <p style="margin:0;color:#1e293b;font-size:16px;font-weight:700;">Meeting #{{meeting_number}}</p>
+        <p style="margin:4px 0 0;color:#64748b;font-size:14px;">{{meeting_date}} · {{meeting_time}} IST</p>
+      ${CARD_CLOSE}
+      {{request_note_block}}
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Approving assigns the role straight away. Declining asks you for a short reason, which is shown to the member.</p>
+      <a href="{{app_url}}/amiadmin" style="display:inline-block;background:linear-gradient(135deg,#9d1530,#6b0c1e);color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:10px;font-size:14px;font-weight:700;">Review Request →</a>`),
+  },
+
+  role_interest_received: {
+    subject: 'Request received — {{role_label}}, Meeting #{{meeting_number}}',
+    body_html: shell('Request received', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">We've received your request to play <strong style="color:#1e293b;">{{role_emoji}} {{role_label}}</strong> at the meeting below. A club officer will review it shortly and you'll get an email either way.</p>
+      ${requestMeetingCard}
+      ${CTA('Open the App →')}`),
+  },
+
+  role_interest_approved: {
+    subject: 'Request approved 🎉 — {{role_label}}, Meeting #{{meeting_number}}',
+    body_html: shell('Request approved 🎉', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">Good news! You're confirmed as <strong style="color:#1e293b;">{{role_emoji}} {{role_label}}</strong> for the meeting below.</p>
+      ${requestMeetingCard}
+      {{review_comment_block}}
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Please prepare accordingly — the full agenda is in the app.</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  role_interest_declined: {
+    subject: 'Request declined — {{role_label}}, Meeting #{{meeting_number}}',
+    body_html: shell('Request declined', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">Unfortunately your request to play <strong style="color:#1e293b;">{{role_emoji}} {{role_label}}</strong> was not approved this time.</p>
+      ${requestMeetingCard}
+      {{review_comment_block}}
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Please do come forward for another role — there's usually plenty still open.</p>
       ${CTA('Open the App →')}`),
   },
 

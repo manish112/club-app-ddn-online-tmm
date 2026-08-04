@@ -1,9 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Ballot, EvaluatorRequest, MeetingWithClaims, Member, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
-import { getMeetingRoles, isRoleEnabled } from '@/lib/types';
-import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups } from '@/lib/utils';
+import type { Ballot, EvaluatorRequest, MeetingWithClaims, Member, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
+import { ASSIGN_ONLY_ROLES, ROLE_META, getMeetingRoles, isRoleEnabled } from '@/lib/types';
+import { roleClaimBlocked, consecutiveRoleBlocked } from '@/lib/utils';
+import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups, roleReservation, reservationCountdown, formatMeetingDate } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -20,10 +21,14 @@ interface Props {
   hideWhatsApp?: boolean;
   lockBeforeMins?: number;
   maxSpeakerSlots?: number;
+  // Online-only role reservation (admin-configurable; off by default).
+  reservationEnabled?: boolean;
+  reservationDaysBefore?: number;
+  participationMode?: ParticipationMode;
   onChanged: () => void;
 }
 
-export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, maxSpeakerSlots = 2, onChanged }: Props) {
+export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, maxSpeakerSlots = 2, reservationEnabled = false, reservationDaysBefore, participationMode = 'online', onChanged }: Props) {
   const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
   const [showAgenda, setShowAgenda] = useState(false);
@@ -38,9 +43,24 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [requestNote, setRequestNote] = useState('');
   const [requestEvaluatorId, setRequestEvaluatorId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [roleRequests, setRoleRequests] = useState<RoleInterestRequest[]>([]);
+  const [showInterestForm, setShowInterestForm] = useState(false);
+  const [interestRole, setInterestRole] = useState<RoleKey | ''>('');
+  const [interestNote, setInterestNote] = useState('');
+  const [submittingInterest, setSubmittingInterest] = useState(false);
 
   const locked = isMeetingLocked(meeting, lockBeforeMins);
   const past   = isMeetingPast(meeting);
+
+  // Roles are held for online-only members until the reservation window opens.
+  const reservation = roleReservation(meeting, reservationEnabled, reservationDaysBefore);
+  const showReservationBanner = !!reservation?.active && !past && !locked;
+  // Three audiences for the reservation banner: an online-only member (has
+  // priority), a signed-in in-person member (blocked — must be told why and
+  // until when), and a guest / signed-out visitor (neutral explanation).
+  const isSignedInMember = !!memberId && memberId !== 'guest';
+  const hasPriority = participationMode === 'online' && isSignedInMember;
+  const isHeldBack   = participationMode === 'hybrid' && isSignedInMember && !isAdmin;
 
   useEffect(() => {
     if (!memberId || memberId === 'guest') return;
@@ -59,7 +79,14 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           setSlotRequest(data ?? null);
         }
       });
-  }, [meeting.id, memberId, locked]); // eslint-disable-line react-hooks/exhaustive-deps
+    // This member's role requests for this meeting (read on its own so a
+    // not-yet-migrated table can't take the slot request down with it).
+    supabase.from('role_interest_requests')
+      .select('*').eq('meeting_id', meeting.id).eq('member_id', memberId)
+      .then(({ data, error }) => { if (!error) setRoleRequests((data ?? []) as RoleInterestRequest[]); });
+    // Re-read on claim changes too: approving a request inserts a role claim,
+    // which arrives over realtime — that's the cue the status has moved on.
+  }, [meeting.id, memberId, locked, meeting.role_claims.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function submitRequest() {
     if (!memberId || memberId === 'guest') return;
@@ -191,7 +218,21 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // Extra slots are capped: once the meeting is at the admin-set maximum, there's
   // nothing left to request, so the button is hidden.
   const belowSpeakerCap = meeting.speaker_slots < maxSpeakerSlots;
-  const canRequestSlot = !past && !locked && allSpeakerSlotsFull && belowSpeakerCap && !memberHasSpeakerSlot && !!memberId && memberId !== 'guest';
+  const hasFreeSpeakerSlot = speakerRoles.some(({ slot }) => !claimsMap.has(`speaker:${slot}`));
+  // While the reservation window holds them back, an in-person member can't claim
+  // a speaker slot directly — the request flow is their way in, so it opens even
+  // when slots are still free (an approver assigns them into one).
+  const reservationBlocksMe = isHeldBack && !!reservation?.active;
+  // Hard rules (TMoD-only, max roles, two speaker slots) can't be argued away, so
+  // there's nothing to request. The back-to-back rotation rule is different: it's
+  // a club norm officers routinely override, so a member may still ask and let
+  // the approver weigh it up.
+  const speakerHardBlock = roleClaimBlocked('speaker', memberExistingRoles);
+  const speakerRotationBlock = consecutiveRoleBlocked('speaker', memberAdjacentRoles);
+  const canRequestSlot = !past && !locked && !memberHasSpeakerSlot && isSignedInMember
+    && speakerRoles.length > 0 && !speakerHardBlock
+    && (belowSpeakerCap || hasFreeSpeakerSlot)
+    && (allSpeakerSlotsFull || reservationBlocksMe);
   const juryRoles      = roles.filter((r) => r.roleKey === 'jury');
   const mainRoles      = roles.filter((r) => ['tmod', 'ttm', 'ge'].includes(r.roleKey));
   const tagRoles       = roles.filter((r) => ['timer', 'ah_counter', 'grammarian', 'harkmaster'].includes(r.roleKey));
@@ -201,6 +242,71 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // their own section so they aren't dropped.
   const pairedEvalMax = isRoleEnabled(meeting, 'speaker') ? meeting.speaker_slots : 0;
   const extraEvaluatorRoles = evaluatorRoles.filter(({ slot }) => slot > pairedEvalMax);
+
+  // ── Role interest (reservation window) ──────────────────────────────────────
+  // Roles this member could ask for: still open, not admin-only, not ruled out by
+  // the multi-role or back-to-back rules. Speaker is excluded — that has its own
+  // extra-slot request flow just above.
+  const openRoleKeys: RoleKey[] = (() => {
+    if (!reservationBlocksMe) return [];
+    const free = new Set<RoleKey>();
+    for (const { roleKey, slot } of roles) {
+      if (claimsMap.has(`${roleKey}:${slot}`)) continue;
+      if (roleKey === 'speaker' || ASSIGN_ONLY_ROLES.includes(roleKey)) continue;
+      // An evaluator slot nobody can take yet (waiting on its speaker, or held
+      // for a pending nomination) isn't worth asking for.
+      if (roleKey === 'evaluator' && (awaitingSpeakerForEval(slot) || pendingEvalName(slot))) continue;
+      free.add(roleKey);
+    }
+    return [...free];
+  })();
+
+  // Same split as the speaker slot above: hard rules remove the option, the
+  // rotation rule only flags it so the approver can decide.
+  const roleHardBlock = (rk: RoleKey) => roleClaimBlocked(rk, memberExistingRoles);
+  const roleRotationBlock = (rk: RoleKey) => consecutiveRoleBlocked(rk, memberAdjacentRoles);
+  const requestableRoles = openRoleKeys.filter((rk) => !roleHardBlock(rk));
+
+  const livingRoleRequests = roleRequests.filter((r) => r.status !== 'cancelled');
+  const pendingRoleKeys = new Set(livingRoleRequests.filter((r) => r.status === 'pending').map((r) => r.role_key));
+  const interestChoices = requestableRoles.filter((rk) => !pendingRoleKeys.has(rk));
+  const canRegisterInterest = reservationBlocksMe && !past && !locked && interestChoices.length > 0;
+  // Roles are open but the club rules rule them all out (e.g. the TMoD can't take
+  // anything else) — say so rather than hiding the section without a word.
+  const interestBlockReason = reservationBlocksMe && !past && !locked
+    && interestChoices.length === 0 && openRoleKeys.length > 0
+    ? roleHardBlock(openRoleKeys[0])
+    : null;
+
+  // Raise (or re-raise, after a denial) a request to play a role at this meeting.
+  async function submitRoleInterest() {
+    if (!memberId || memberId === 'guest' || !interestRole || submittingInterest) return;
+    setSubmittingInterest(true);
+    const { data, error } = await supabase.from('role_interest_requests')
+      .upsert({
+        meeting_id: meeting.id,
+        member_id: memberId,
+        role_key: interestRole,
+        request_note: interestNote.trim() || null,
+        status: 'pending',
+        reviewer_id: null,
+        review_comment: null,
+        reviewed_at: null,
+      }, { onConflict: 'meeting_id,member_id,role_key' })
+      .select().single();
+    if (!error && data) {
+      setRoleRequests(prev => [...prev.filter(r => r.id !== data.id), data as RoleInterestRequest]);
+      fetch('/api/notify-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'role_interest', event: 'submitted', requestId: data.id }),
+      }).catch(() => {});
+    }
+    setSubmittingInterest(false);
+    setShowInterestForm(false);
+    setInterestRole('');
+    setInterestNote('');
+  }
 
   // Speaker groups (heats): when defined, speakers + their paired evaluators are
   // rendered grouped (in speaking order) instead of as two flat grids. Group
@@ -248,6 +354,8 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     memberId,
     memberExistingRoles,
     memberAdjacentRoles,
+    reservation,
+    participationMode,
     isLocked: locked,
     isPast: past,
     isAdmin,
@@ -285,6 +393,56 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           >
             Set link
           </button>
+        </div>
+      )}
+
+      {/* Reservation window: roles held for online-only members for now */}
+      {showReservationBanner && reservation && (
+        <div className={`px-4 py-3 border-b flex items-start gap-2.5 ${
+          hasPriority
+            ? 'bg-emerald-50 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/40'
+            : isHeldBack
+              ? 'bg-amber-50 dark:bg-amber-950/25 border-amber-200 dark:border-amber-800/40'
+              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/50'
+        }`}>
+          <span className="text-base leading-none shrink-0 mt-0.5">
+            {hasPriority ? '🌐' : '🔒'}
+          </span>
+          <div className={`text-xs leading-snug flex-1 space-y-1 ${
+            hasPriority
+              ? 'text-emerald-800 dark:text-emerald-300'
+              : isHeldBack
+                ? 'text-amber-800 dark:text-amber-300'
+                : 'text-slate-600 dark:text-slate-300'
+          }`}>
+            {hasPriority ? (
+              <p>
+                <strong>Priority window.</strong> Roles are reserved for members who attend online
+                only — claim yours before they open to everyone on{' '}
+                <strong>{formatMeetingDate(reservation.opensOn)}</strong>.
+              </p>
+            ) : isHeldBack ? (
+              <>
+                <p className="font-bold">You can&apos;t claim a role for this meeting yet.</p>
+                <p>
+                  Roles are held for members who attend <strong>online only</strong> first. You&apos;re
+                  set as <strong>online &amp; in-person</strong>, so yours open{' '}
+                  <strong>{reservationCountdown(reservation)}</strong> — on{' '}
+                  <strong>{formatMeetingDate(reservation.opensOn)}</strong>, when every unclaimed role
+                  opens to the whole club.
+                </p>
+                <p className="text-amber-700/80 dark:text-amber-400/80">
+                  Think that&apos;s wrong? Ask the President or VP Education to check your participation
+                  mode on your profile.
+                </p>
+              </>
+            ) : (
+              <p>
+                <strong>Roles are reserved for online-only members</strong> until{' '}
+                <strong>{formatMeetingDate(reservation.opensOn)}</strong>, when they open to everyone.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -328,6 +486,11 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                                  bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300
                                  px-2 py-0.5 rounded-full">Table Topics</span>
               )}
+              {meeting.is_special_session && (
+                <span className="text-[10px] font-black uppercase tracking-wide
+                                 bg-gradient-to-r from-gold-300 to-amber-300 text-slate-900
+                                 px-2 py-0.5 rounded-full shadow-sm">✨ Special Session</span>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               {formatTime(meeting.start_time)}–{formatTime(meeting.end_time)} IST
@@ -349,11 +512,19 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                 </span>
               )}
               {!past && !locked && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
-                                 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400
-                                 px-2 py-0.5 rounded-full">
-                  ● Roles open
-                </span>
+                showReservationBanner ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                   bg-sky-50 dark:bg-sky-950/30 text-sky-600 dark:text-sky-400
+                                   px-2 py-0.5 rounded-full">
+                    🌐 Online-only priority
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                   bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400
+                                   px-2 py-0.5 rounded-full">
+                    ● Roles open
+                  </span>
+                )
               )}
               {!past && !locked && (
                 <span className="text-[10px] text-slate-400 dark:text-slate-500">
@@ -395,11 +566,23 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               </button>
             )}
             {!past && !hideWhatsApp && ballot?.status !== 'open' && ballot?.status !== 'closed' && (
-              <WhatsAppCopyButton meeting={meeting} members={allMembers} lockBeforeMins={lockBeforeMins} />
+              <WhatsAppCopyButton meeting={meeting} members={allMembers} lockBeforeMins={lockBeforeMins} reservation={reservation} />
             )}
           </div>
         </div>
       </div>
+
+      {/* ── Special session note ── */}
+      {meeting.is_special_session && meeting.special_session_note?.trim() && (
+        <div className="px-4 py-2.5 border-b border-amber-200 dark:border-amber-800/40
+                        bg-gradient-to-r from-amber-50 to-white dark:from-amber-950/25 dark:to-slate-900
+                        flex items-start gap-3">
+          <span className="text-lg leading-none shrink-0">✨</span>
+          <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed flex-1">
+            {meeting.special_session_note.trim()}
+          </p>
+        </div>
+      )}
 
       {/* ── Theme band ── */}
       {(meeting.theme || canEditTheme) && (
@@ -611,7 +794,21 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               </div>
             ) : showRequestForm ? (
               <div className="rounded-xl border border-maroon-200 dark:border-maroon-800/50 bg-maroon-50 dark:bg-maroon-950/20 p-3 space-y-2">
-                <p className="text-xs font-semibold text-maroon-700 dark:text-maroon-400">Request an extra speaker slot</p>
+                <p className="text-xs font-semibold text-maroon-700 dark:text-maroon-400">
+                  {reservationBlocksMe ? 'Request a speaking slot' : 'Request an extra speaker slot'}
+                </p>
+                {reservationBlocksMe && (
+                  <p className="text-[11px] text-maroon-600/90 dark:text-maroon-400/80 leading-relaxed">
+                    Speaker slots are reserved for online-only members right now — ask here and the President,
+                    VP Education or an admin will review it.
+                  </p>
+                )}
+                {speakerRotationBlock && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                    ⚠️ You&apos;re also down to speak at the meeting either side of this one. You can still ask —
+                    the officers will decide whether to make an exception.
+                  </p>
+                )}
                 <textarea
                   value={requestNote}
                   onChange={e => setRequestNote(e.target.value)}
@@ -654,7 +851,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                            hover:bg-maroon-50 dark:hover:bg-maroon-950/20 rounded-xl py-2.5
                            transition-colors"
               >
-                🎙️ Request extra speaker slot
+                🎙️ {reservationBlocksMe ? 'Request a speaking slot' : 'Request extra speaker slot'}
               </button>
             )}
           </div>
@@ -722,6 +919,95 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
               />
             ))}
           </div>
+        </section>
+        )}
+
+        {/* Role requests — the way in while the reservation window holds you back */}
+        {!past && (canRegisterInterest || livingRoleRequests.length > 0 || interestBlockReason) && (
+        <section className="space-y-2">
+          <SectionLabel icon="🙋" text="Your Role Requests" />
+
+          {livingRoleRequests.map((r) => {
+            const meta = ROLE_META[r.role_key];
+            return (
+              <div key={r.id} className={`rounded-xl px-3 py-2.5 border text-xs ${
+                r.status === 'pending'
+                  ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40 text-amber-700 dark:text-amber-400'
+                  : r.status === 'approved'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/40 text-red-600 dark:text-red-400'
+              }`}>
+                <p className="font-semibold">
+                  {r.status === 'pending'  && `⏳ ${meta.emoji} ${meta.label} — awaiting approval`}
+                  {r.status === 'approved' && `✓ ${meta.emoji} ${meta.label} — approved`}
+                  {r.status === 'denied'   && `✗ ${meta.emoji} ${meta.label} — declined`}
+                </p>
+                {r.review_comment && <p className="mt-1 opacity-80">{r.review_comment}</p>}
+              </div>
+            );
+          })}
+
+          {canRegisterInterest && (
+            showInterestForm ? (
+              <div className="rounded-xl border border-sky-200 dark:border-sky-800/50 bg-sky-50 dark:bg-sky-950/20 p-3 space-y-2">
+                <p className="text-xs font-semibold text-sky-700 dark:text-sky-400">Ask for a role</p>
+                <p className="text-[11px] text-sky-600/90 dark:text-sky-400/80 leading-relaxed">
+                  Roles are reserved for online-only members until{' '}
+                  {reservation && formatMeetingDate(reservation.opensOn)}. Register your interest and the
+                  President, VP Education or an admin will review it.
+                </p>
+                <select
+                  value={interestRole}
+                  onChange={e => setInterestRole(e.target.value as RoleKey)}
+                  className="w-full text-xs border border-sky-200 dark:border-sky-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-sky-600"
+                >
+                  <option value="">Which role would you like?</option>
+                  {interestChoices.map(rk => (
+                    <option key={rk} value={rk}>
+                      {ROLE_META[rk].emoji} {ROLE_META[rk].label}
+                      {roleRotationBlock(rk) ? ' — you had this last meeting' : ''}
+                    </option>
+                  ))}
+                </select>
+                <textarea
+                  value={interestNote}
+                  onChange={e => setInterestNote(e.target.value)}
+                  placeholder="Anything the officers should know? (optional)"
+                  rows={2}
+                  maxLength={200}
+                  className="w-full text-xs border border-sky-200 dark:border-sky-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 resize-none focus:outline-none focus:ring-1 focus:ring-sky-600 placeholder:text-slate-300 dark:placeholder:text-slate-600"
+                />
+                <div className="flex gap-2">
+                  <button onClick={submitRoleInterest} disabled={submittingInterest || !interestRole}
+                    className="flex-1 bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold rounded-lg py-2 disabled:opacity-40 active:scale-95 transition-all">
+                    {submittingInterest ? 'Sending…' : 'Send Request'}
+                  </button>
+                  <button onClick={() => { setShowInterestForm(false); setInterestRole(''); setInterestNote(''); }}
+                    className="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowInterestForm(true)}
+                className="w-full text-xs font-semibold text-sky-700 dark:text-sky-400
+                           border border-dashed border-sky-300 dark:border-sky-800/60
+                           hover:bg-sky-50 dark:hover:bg-sky-950/20 rounded-xl py-2.5
+                           transition-colors"
+              >
+                🙋 {livingRoleRequests.length > 0 ? 'Ask for another role' : 'Ask for a role at this meeting'}
+              </button>
+            )
+          )}
+
+          {!canRegisterInterest && interestBlockReason && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed rounded-xl
+                          bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 px-3 py-2.5">
+              There&apos;s nothing for you to request at this meeting —{' '}
+              <strong className="text-slate-700 dark:text-slate-300">{interestBlockReason}</strong>.
+            </p>
+          )}
         </section>
         )}
       </div>
