@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { MeetingWithClaims, Member } from '@/lib/types';
+import type { RoleReservation } from '@/lib/utils';
 import { buildWhatsAppAgenda, buildWhatsAppIntros } from '@/lib/utils';
 
 type CopyMode = 'full' | 'no-intros' | 'intros-only';
@@ -10,6 +11,8 @@ interface Props {
   meeting: MeetingWithClaims;
   members: Member[];
   lockBeforeMins?: number;
+  // Active online-only reservation window, if any — noted in the agenda text.
+  reservation?: RoleReservation | null;
 }
 
 function WhatsAppIcon() {
@@ -21,7 +24,7 @@ function WhatsAppIcon() {
   );
 }
 
-export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Props) {
+export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60, reservation = null }: Props) {
   const [picking, setPicking] = useState(false);
   const [copiedMode, setCopiedMode] = useState<CopyMode | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -33,7 +36,7 @@ export function WhatsAppCopyButton({ meeting, members, lockBeforeMins = 60 }: Pr
     const text =
       mode === 'intros-only'
         ? buildWhatsAppIntros(meeting, membersById)
-        : buildWhatsAppAgenda(meeting, membersById, mode === 'full', lockBeforeMins, baseUrl);
+        : buildWhatsAppAgenda(meeting, membersById, mode === 'full', lockBeforeMins, baseUrl, reservation);
     try {
       await navigator.clipboard.writeText(text);
     } catch {

@@ -86,6 +86,24 @@ export function leadershipRoleLabel(role: LeadershipRole): string {
   return LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
 }
 
+// How a member takes part in meetings. Admin-set; drives the role reservation
+// window (see reservationBlocked in lib/utils).
+export type ParticipationMode = 'online' | 'hybrid';
+
+export const PARTICIPATION_MODES: { value: ParticipationMode; label: string; short: string; emoji: string; hint: string }[] = [
+  { value: 'online', label: 'Online only',        short: 'Online',  emoji: '🌐', hint: 'Attends meetings online only' },
+  { value: 'hybrid', label: 'Online & in-person', short: 'Hybrid',  emoji: '🏛️', hint: 'Can attend online or in person' },
+];
+
+// Members predate this field, so treat a missing value as online-only (the club
+// default) rather than silently locking someone out of the reservation window.
+export function participationMode(m: { participation_mode?: ParticipationMode | null }): ParticipationMode {
+  return m.participation_mode === 'hybrid' ? 'hybrid' : 'online';
+}
+export function participationModeMeta(mode: ParticipationMode) {
+  return PARTICIPATION_MODES.find((p) => p.value === mode) ?? PARTICIPATION_MODES[0];
+}
+
 export interface Member {
   id: string;
   membership_no: string;
@@ -104,6 +122,8 @@ export interface Member {
   avatar_url: string | null;
   show_phone_in_contact: boolean;
   email_notifications?: boolean;   // opt-out flag; undefined/true = receives emails
+  // Admin-set; undefined when the column hasn't been read (see participationMode).
+  participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;
   created_at: string;
 }
@@ -129,7 +149,20 @@ export interface Meeting {
   contest_locked: boolean;               // when true, jury scoring is locked
   contest_reset_locked: boolean;         // when true, the reset-scores action is disabled
   contest_show_ranking: boolean;         // when false, ranks are hidden in results
+  // Special session marker — sits on top of the format, so a speakathon or a
+  // Table Topics session can be special too, and the TMoD still facilitates.
+  // Optional: undefined until the columns exist / are read.
+  is_special_session?: boolean;
+  special_session_note?: string | null;    // free line of detail, admin-written
   created_at: string;
+}
+
+// A special session's display name: the meeting's theme doubles as the title.
+// Null when no real theme is set yet, so callers can fall back to a plain label.
+export function specialSessionName(meeting: { theme: string | null }): string | null {
+  const theme = meeting.theme?.trim();
+  if (!theme || theme.toUpperCase() === 'TBD') return null;
+  return theme;
 }
 
 export interface RoleClaim {
@@ -229,6 +262,22 @@ export interface EvaluatorRequest {
   status: 'pending' | 'approved' | 'denied' | 'cancelled';
   // Set when this evaluator request came from an extra-speaker-slot request.
   speaker_slot_request_id: string | null;
+  reviewer_id: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+// A member's bid to play a role at a meeting, raised while the online-only
+// reservation window stops them claiming it directly. An approver (President /
+// VP Education / admin) approves — which assigns the role — or declines.
+export interface RoleInterestRequest {
+  id: string;
+  meeting_id: string;
+  member_id: string;
+  role_key: RoleKey;
+  status: 'pending' | 'approved' | 'denied' | 'cancelled';
+  request_note: string | null;
   reviewer_id: string | null;
   review_comment: string | null;
   reviewed_at: string | null;

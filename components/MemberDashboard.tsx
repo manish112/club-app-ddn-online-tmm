@@ -2,12 +2,12 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
-import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, RoleKey, SpeakerSlotRequest } from '@/lib/types';
-import { ROLE_META, LEADERSHIP_ROLES, memberLeadershipRoles, isClubOfficer } from '@/lib/types';
+import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
+import { ROLE_META, LEADERSHIP_ROLES, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
 import { SurveyLinks } from '@/components/SurveyLinks';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
-import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot } from '@/lib/utils';
+import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot, roleReservation, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -257,6 +257,104 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   );
 }
 
+// ─── Participation card ───────────────────────────────────────────────────────
+
+// How this member takes part (admin-set), plus what it means for role sign-ups
+// while the online-only reservation window is switched on.
+function ParticipationCard({ member, meetings }: { member: Member; meetings: MeetingWithClaims[] }) {
+  const supabase = createClient();
+  const [mode, setMode] = useState<ParticipationMode | null>(null);
+  const [reservation, setReservation] = useState({ enabled: false, daysBefore: DEFAULT_RESERVATION_DAYS_BEFORE });
+
+  useEffect(() => {
+    supabase.from('members').select('participation_mode').eq('id', member.id).maybeSingle()
+      .then(({ data, error }) => { if (!error) setMode(participationMode(data ?? {})); });
+    supabase.from('agenda_config').select('online_reservation_enabled, online_reservation_days_before').single()
+      .then(({ data }) => {
+        if (!data) return;
+        setReservation({
+          enabled: data.online_reservation_enabled === true,
+          daysBefore: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE,
+        });
+      });
+  }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Nothing useful to show until the column has actually been read.
+  if (!mode) return null;
+
+  const meta = participationModeMeta(mode);
+  const days = reservation.daysBefore;
+
+  // The next meeting still inside its reservation window — lets an in-person
+  // member see exactly when they can start claiming, not just the general rule.
+  const nextMeeting = meetings.filter((m) => !isMeetingPast(m)).sort((a, b) => a.number - b.number)[0] ?? null;
+  const nextWindow = nextMeeting ? roleReservation(nextMeeting, reservation.enabled, days) : null;
+  const heldBack = mode === 'hybrid' && !!nextWindow?.active && !!nextMeeting;
+
+  // Tense-correct tail for the "how it works" line: the next meeting may already
+  // be past its opening day.
+  const nextOpening = nextMeeting && nextWindow
+    ? (nextWindow.active
+        ? <> — for Meeting #{nextMeeting.number} that&apos;s{' '}
+            <strong className="text-slate-700 dark:text-slate-300">{formatMeetingDate(nextWindow.opensOn)}</strong>.</>
+        : <> — Meeting #{nextMeeting.number} is already open to everyone.</>)
+    : <> a few days before each meeting.</>;
+
+  return (
+    <div className={cardCls}>
+      <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">
+        🌐 How You Participate
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full ${
+          mode === 'online'
+            ? 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
+            : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50'
+        }`}>
+          {meta.emoji} {meta.label}
+        </span>
+        <span className="text-xs text-slate-500 dark:text-slate-400">{meta.hint}</span>
+      </div>
+
+      {heldBack && nextMeeting && nextWindow && (
+        <div className="mt-3 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-950/25 px-3 py-2.5">
+          <p className="text-xs font-bold text-amber-800 dark:text-amber-300">
+            🔒 Role sign-up for Meeting #{nextMeeting.number} isn&apos;t open to you yet
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-400/90 leading-relaxed mt-1">
+            Roles go to online-only members first. Yours open{' '}
+            <strong>{reservationCountdown(nextWindow)}</strong> — on{' '}
+            <strong>{formatMeetingDate(nextWindow.opensOn)}</strong>, for the meeting on{' '}
+            {formatMeetingDate(nextMeeting.date)}.
+          </p>
+        </div>
+      )}
+
+      {reservation.enabled && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+          {mode === 'online' ? (
+            <>
+              <strong className="text-emerald-700 dark:text-emerald-400">You get first pick of meeting roles.</strong>{' '}
+              Every role is held for online-only members from the moment a meeting is created, then opens to the
+              whole club{nextOpening}
+            </>
+          ) : (
+            <>
+              Roles are reserved for members who attend online only, then open to everyone{nextOpening}
+            </>
+          )}{' '}
+          Either way, you can&apos;t take the same role in two meetings in a row.
+        </p>
+      )}
+
+      <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-3">
+        Set by the club — contact the <strong className="text-slate-500 dark:text-slate-400">President</strong> or{' '}
+        <strong className="text-slate-500 dark:text-slate-400">VP Education</strong> to change it.
+      </p>
+    </div>
+  );
+}
+
 // ─── Password card ────────────────────────────────────────────────────────────
 
 function PasswordCard({ member }: { member: Member }) {
@@ -424,6 +522,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const isOfficer = isClubOfficer(member);
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [myEvalRequests, setMyEvalRequests] = useState<(EvaluatorRequest & { meeting_number?: number; meeting_date?: string; evaluator_name?: string; reviewer_name?: string; _past?: boolean })[]>([]);
+  const [myRoleRequests, setMyRoleRequests] = useState<(RoleInterestRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [myResults, setMyResults] = useState<(ContestResult & { meeting_number?: number; group_name?: string | null; show_ranking?: boolean })[]>([]);
 
@@ -463,12 +562,27 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           .filter(r => r.status !== 'cancelled' && (!r._past || r.status === 'pending'));
         setMyEvalRequests(enriched);
       });
-    // Pending count for officers (speaker-slot + evaluator requests)
+    // My role requests, raised while the reservation window blocked direct claims.
+    supabase.from('role_interest_requests').select('*')
+      .eq('member_id', member.id).order('created_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        const enriched = (data as RoleInterestRequest[])
+          .map(r => {
+            const m = meetings.find(mt => mt.id === r.meeting_id);
+            const reviewer = r.reviewer_id ? allMembers.find(mb => mb.id === r.reviewer_id) : null;
+            return { ...r, meeting_number: m?.number, meeting_date: m?.date, reviewer_name: reviewer?.display_name, _past: m ? isMeetingPast(m) : true };
+          })
+          .filter(r => r.status !== 'cancelled' && !r._past);
+        setMyRoleRequests(enriched);
+      });
+    // Pending count for officers (speaker-slot + evaluator + role requests)
     if (isOfficer) {
       Promise.all([
         supabase.from('speaker_slot_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('evaluator_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-      ]).then(([a, b]) => setPendingCount((a.count ?? 0) + (b.count ?? 0)));
+        supabase.from('role_interest_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      ]).then(([a, b, c]) => setPendingCount((a.count ?? 0) + (b.count ?? 0) + (c.count ?? 0)));
     }
     // Contest results revealed to this member
     supabase.from('contest_results').select('*')
@@ -510,7 +624,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           <span className="text-2xl shrink-0">🎙️</span>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-amber-800 dark:text-amber-300">
-              {pendingCount} speaker slot request{pendingCount > 1 ? 's' : ''} pending review
+              {pendingCount} member request{pendingCount > 1 ? 's' : ''} pending review
             </p>
             <p className="text-xs text-amber-600 dark:text-amber-500 mt-0.5">Tap to open admin panel → Requests</p>
           </div>
@@ -568,6 +682,9 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
 
       <ProfileCard member={member} onUpdated={onUpdated} />
 
+      {/* How this member takes part — drives the role reservation window */}
+      <ParticipationCard member={member} meetings={meetings} />
+
       {/* Surveys */}
       <SurveyLinks memberId={member.id} />
 
@@ -623,6 +740,55 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           </div>
         );
       })()}
+
+      {/* My role requests (raised during the reservation window) */}
+      {myRoleRequests.length > 0 && (
+        <div className={cardCls}>
+          {sectionLabel('🙋 Your Role Requests')}
+          <div className="space-y-2">
+            {myRoleRequests.map(r => {
+              const meta = ROLE_META[r.role_key];
+              return (
+                <div key={r.id} className={`rounded-xl px-3 py-2.5 border text-xs ${
+                  r.status === 'pending'
+                    ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40'
+                    : r.status === 'approved'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40'
+                    : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800/40'
+                }`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className={`font-bold ${
+                        r.status === 'pending' ? 'text-amber-700 dark:text-amber-400'
+                        : r.status === 'approved' ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-red-600 dark:text-red-400'
+                      }`}>
+                        {r.status === 'pending'  && '⏳ Awaiting approval'}
+                        {r.status === 'approved' && '✓ Approved'}
+                        {r.status === 'denied'   && '✗ Declined'}
+                        {r.meeting_number ? ` · Meeting #${r.meeting_number}` : ''}
+                      </p>
+                      <p className="mt-0.5 text-slate-500 dark:text-slate-400">
+                        You asked to play{' '}
+                        <span className="font-medium text-slate-700 dark:text-slate-300">{meta.emoji} {meta.label}</span>
+                      </p>
+                      {r.request_note && <p className="mt-0.5 text-slate-500 dark:text-slate-400">Your note: {r.request_note}</p>}
+                      {r.review_comment && (
+                        <p className="mt-1 font-medium text-slate-700 dark:text-slate-300">
+                          <span className="text-slate-500 dark:text-slate-400">Club Officer notes{r.reviewer_name ? ` (TM ${r.reviewer_name})` : ''}:</span>{' '}{r.review_comment}
+                        </p>
+                      )}
+                    </div>
+                    <p className="shrink-0 text-slate-400 dark:text-slate-600">
+                      {r.meeting_date ? new Date(r.meeting_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* My speaker slot requests */}
       {myRequests.length > 0 && (

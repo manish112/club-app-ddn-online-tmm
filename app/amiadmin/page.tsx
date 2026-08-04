@@ -9,9 +9,9 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
-  EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup,
+  EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup, ParticipationMode, RoleInterestRequest,
 } from '@/lib/types';
-import { LEADERSHIP_ROLES, memberLeadershipRoles, hasLeadershipRole, isClubOfficer } from '@/lib/types';
+import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
 import {
   DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
   type TimerModes, type TimerModeKey, type TimerThresholds,
@@ -29,7 +29,7 @@ const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
   { key: 'timer',      label: 'Timer' },
   { key: 'harkmaster', label: 'Harkmaster' },
 ];
-import { isMeetingPast, formatMeetingDate, formatTime } from '@/lib/utils';
+import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -146,8 +146,10 @@ interface MeetingFormData {
   jury_slots: string;
   speaker_groups: SpeakerGroup[];
   pair_groups: Record<string, string>;
+  is_special_session: boolean;
+  special_session_note: string;
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_link: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {} };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_link: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {}, is_special_session: false, special_session_note: '' };
 
 const newGroupId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -165,6 +167,8 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     speaker_groups: initial?.speaker_groups ?? [],
     pair_groups: initial?.pair_groups ?? {},
     meeting_link: initial?.meeting_link ?? '',
+    is_special_session: initial?.is_special_session ?? false,
+    special_session_note: initial?.special_session_note ?? '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -240,7 +244,12 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     );
     // The form's slot count is the *base* (admin minimum). Extra slots granted via
     // member requests sit on top and must not be baked into the base here.
-    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_link: form.meeting_link.trim() || null, meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), base_speaker_slots: speakerSlots, disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups };
+    const payload = { number: parseInt(form.number), date: form.date, start_time: form.start_time + ':00', end_time: form.end_time + ':00', theme: form.theme.trim() || 'TBD', meeting_link: form.meeting_link.trim() || null, meeting_type, speaker_slots: speakerSlots, evaluator_slots: parseInt(form.evaluator_slots), base_speaker_slots: speakerSlots, disabled_roles: disabled, jury_slots: parseInt(form.jury_slots) || 0, speaker_groups: form.speaker_groups, pair_groups,
+      is_special_session: form.is_special_session,
+      // The note only means anything while the flag is on — cleared otherwise so
+      // un-ticking the box doesn't leave stale text behind.
+      special_session_note: form.is_special_session ? (form.special_session_note.trim() || null) : null,
+    };
     if (initial?.id) {
       // Preserve occupied extra slots (from approved requests) that sit above the
       // base — they trim away on their own when the speaker drops. Only truly-empty
@@ -295,6 +304,38 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
       </div>
       <label><span className={labelCls}>Theme</span><input type="text" value={form.theme} onChange={e => set('theme', e.target.value)} placeholder="e.g. Mental Wellness" className={inputCls} /></label>
       <label><span className={labelCls}>Meeting link</span><input type="url" value={form.meeting_link} onChange={e => set('meeting_link', e.target.value)} placeholder="Zoom / Google Meet URL" className={inputCls} /></label>
+
+      {/* Special session — a marker on top of the format, not a format itself */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 p-3 space-y-2">
+        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+          <input type="checkbox" checked={form.is_special_session}
+            onChange={e => setForm(f => ({ ...f, is_special_session: e.target.checked }))}
+            className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">✨ Mark as a special session</span>
+            <span className="block text-xs text-slate-500">Shows a badge in the app and highlights it in the WhatsApp agenda.</span>
+          </span>
+        </label>
+        {form.is_special_session && (
+          <div className="space-y-2 pt-1">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              The <strong>Theme</strong> above is used as the session title
+              {form.theme.trim() && form.theme.trim().toUpperCase() !== 'TBD'
+                ? <> — this one will read <strong>“✨ SPECIAL SESSION: {form.theme.trim()}”</strong>.</>
+                : <>, so set one for a named session. Left as TBD it just reads <strong>“✨ SPECIAL SESSION”</strong>.</>}
+              {' '}The running order is unchanged: the TMoD still facilitates and the usual roles apply.
+            </p>
+            <label>
+              <span className={labelCls}>What makes it special (optional)</span>
+              <textarea value={form.special_session_note} rows={2} maxLength={200}
+                onChange={e => set('special_session_note', e.target.value)}
+                placeholder="One line for the app & WhatsApp agenda — e.g. Joint meeting with TM Club X, guests most welcome!"
+                className={`${inputCls} resize-none`} />
+            </label>
+          </div>
+        )}
+      </div>
+
       <div>
         <span className={labelCls}>Meeting format</span>
         <div className="flex flex-wrap gap-1.5 mt-1 mb-2">
@@ -386,6 +427,9 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [resettingPw, setResettingPw] = useState(false);
   const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
+  const [savingMode, setSavingMode] = useState(false);
+
+  const mode = participationMode(member);
 
   const autoAdmin = isClubOfficer(member);
   const hasAdmin = member.is_admin || autoAdmin;
@@ -451,6 +495,17 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setTogglingAdmin(true);
     await supabase.from('members').update({ is_admin: next }).eq('id', member.id);
     setTogglingAdmin(false); onUpdated();
+  }
+
+  // Online-only members get first pick of roles while the reservation window is
+  // open (Settings → Role Reservation).
+  async function changeParticipationMode(next: ParticipationMode) {
+    if (next === mode) return;
+    setSavingMode(true);
+    const { error } = await supabase.from('members').update({ participation_mode: next }).eq('id', member.id);
+    setSavingMode(false);
+    if (error) { alert(`Failed: ${error.message}`); return; }
+    onUpdated();
   }
 
   async function toggleGuestManager() {
@@ -536,6 +591,34 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             }`}>
             {member.active ? 'Deactivate' : 'Restore'}
           </button>
+        </div>
+      </div>
+
+      {/* Participation mode — drives the online-only role reservation window */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Attends</span>
+        <div className="flex gap-1.5 flex-1">
+          {PARTICIPATION_MODES.map(p => {
+            const selected = mode === p.value;
+            return (
+              <button
+                key={p.value}
+                type="button"
+                disabled={savingMode}
+                onClick={() => changeParticipationMode(p.value)}
+                title={p.hint}
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 disabled:opacity-40 ${
+                  selected
+                    ? p.value === 'online'
+                      ? 'bg-sky-600 border-sky-600 text-white'
+                      : 'bg-amber-600 border-amber-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500'
+                }`}
+              >
+                {p.emoji} {p.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -646,6 +729,7 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
   const supabase = createClient();
   const [requests, setRequests] = useState<SpeakerSlotRequest[]>([]);
   const [evalRequests, setEvalRequests] = useState<EvaluatorRequest[]>([]);
+  const [roleRequests, setRoleRequests] = useState<RoleInterestRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [acting, setActing] = useState<string | null>(null);
@@ -655,12 +739,14 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
   const memberMap  = new Map(allMembers.map(m => [m.id, m]));
 
   async function fetchRequests() {
-    const [{ data }, { data: evalData }] = await Promise.all([
+    const [{ data }, { data: evalData }, { data: roleData, error: roleErr }] = await Promise.all([
       supabase.from('speaker_slot_requests').select('*').order('created_at', { ascending: false }),
       supabase.from('evaluator_requests').select('*').order('created_at', { ascending: false }),
+      supabase.from('role_interest_requests').select('*').order('created_at', { ascending: false }),
     ]);
     setRequests((data ?? []) as SpeakerSlotRequest[]);
     setEvalRequests((evalData ?? []) as EvaluatorRequest[]);
+    if (!roleErr) setRoleRequests((roleData ?? []) as RoleInterestRequest[]);
     setLoading(false);
   }
 
@@ -674,19 +760,26 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
     const meeting = meetings.find(m => m.id === req.meeting_id);
     if (!meeting) return;
 
-    if (meeting.speaker_slots >= maxSpeakerSlots) {
+    // Prefer a speaker slot that's already open — during the reservation window
+    // members request a slot precisely because they can't claim a free one. Only
+    // grow the meeting (subject to the cap) when every slot is taken.
+    const openSlot = Array.from({ length: meeting.speaker_slots }, (_, i) => i + 1)
+      .find(s => !meeting.role_claims.some(c => c.role_key === 'speaker' && c.slot_index === s));
+
+    if (openSlot == null && meeting.speaker_slots >= maxSpeakerSlots) {
       alert(`This meeting is already at the maximum of ${maxSpeakerSlots} speaker slots. Raise the cap in Agenda Settings to approve more.`);
       return;
     }
     setActing(req.id);
 
-    const newSpeakerSlots = meeting.speaker_slots + 1;
-    const newEvalSlots    = meeting.evaluator_slots + 1;
+    const newSpeakerSlots = openSlot ?? meeting.speaker_slots + 1;
 
-    await supabase.from('meetings').update({
-      speaker_slots: newSpeakerSlots,
-      evaluator_slots: newEvalSlots,
-    }).eq('id', req.meeting_id);
+    if (openSlot == null) {
+      await supabase.from('meetings').update({
+        speaker_slots: newSpeakerSlots,
+        evaluator_slots: Math.max(meeting.evaluator_slots, newSpeakerSlots),
+      }).eq('id', req.meeting_id);
+    }
 
     await supabase.from('role_claims').insert({
       meeting_id: req.meeting_id,
@@ -775,6 +868,76 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
     fetch('/api/notify-request', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'speaker_slot', event: 'denied', requestId: req.id }),
+    }).catch(() => {});
+
+    setActing(null);
+    fetchRequests();
+  }
+
+  // ── Role interest requests ──────────────────────────────────────────────────
+  // Approving assigns the role outright, into the lowest still-open slot.
+  async function approveInterest(req: RoleInterestRequest) {
+    const meeting = meetings.find(m => m.id === req.meeting_id);
+    if (!meeting) return;
+    const meta = ROLE_META[req.role_key];
+
+    const openSlot = getMeetingRoles(meeting)
+      .filter(r => r.roleKey === req.role_key)
+      .map(r => r.slot)
+      .find(s => !meeting.role_claims.some(c => c.role_key === req.role_key && c.slot_index === s));
+    if (openSlot == null) {
+      alert(`Every ${meta.label} slot for this meeting is already filled. Free one up first, or deny this request.`);
+      return;
+    }
+
+    // The member may have picked up other roles since asking — warn, don't block.
+    const existing = meeting.role_claims.filter(c => c.member_id === req.member_id).map(c => c.role_key);
+    const conflict = roleClaimBlocked(req.role_key, existing);
+    if (conflict && !confirm(`${conflict}. Assign ${meta.label} anyway?`)) return;
+
+    setActing(req.id);
+    await supabase.from('role_claims').insert({
+      meeting_id: req.meeting_id,
+      role_key: req.role_key,
+      slot_index: openSlot,
+      member_id: req.member_id,
+      admin_override: true,
+    });
+    await supabase.from('role_interest_requests').update({
+      status: 'approved',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id]?.trim() || null,
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
+
+    // The approval email carries the role + any officer note; the generic
+    // "role assigned" mail would duplicate it, so it's deliberately not sent.
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'role_interest', event: 'approved', requestId: req.id }),
+    }).catch(() => {});
+
+    setActing(null);
+    fetchRequests();
+    onChanged();
+  }
+
+  async function denyInterest(req: RoleInterestRequest) {
+    if (!commentInputs[req.id]?.trim()) {
+      alert('Please add a comment explaining why the request is denied.');
+      return;
+    }
+    setActing(req.id);
+    await supabase.from('role_interest_requests').update({
+      status: 'denied',
+      reviewer_id: currentAdminId,
+      review_comment: commentInputs[req.id].trim(),
+      reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id);
+
+    fetch('/api/notify-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'role_interest', event: 'denied', requestId: req.id }),
     }).catch(() => {});
 
     setActing(null);
@@ -878,6 +1041,8 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
   const resolved = requests.filter(r => r.status !== 'pending');
   const evalPending  = evalRequests.filter(r => r.status === 'pending');
   const evalResolved = evalRequests.filter(r => r.status !== 'pending');
+  const rolePending  = roleRequests.filter(r => r.status === 'pending');
+  const roleResolved = roleRequests.filter(r => r.status !== 'pending' && r.status !== 'cancelled');
 
   if (loading) return <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-20 bg-slate-200 dark:bg-slate-800 rounded-2xl animate-pulse" />)}</div>;
 
@@ -933,6 +1098,105 @@ function RequestsPanel({ allMembers, meetings, currentAdminId, onChanged }: {
                       className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
                       {acting === req.id ? '…' : '✗ Deny'}
                     </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Role requests (raised during the online-only reservation window) */}
+      <div>
+        <p className={labelCls}>Role Requests ({rolePending.length})</p>
+        {rolePending.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No pending role requests.</p>
+        ) : (
+          <div className="space-y-3">
+            {rolePending.map(req => {
+              const member  = memberMap.get(req.member_id);
+              const meeting = meetingMap.get(req.meeting_id);
+              const meta    = ROLE_META[req.role_key];
+              // Others who asked for the same role at the same meeting — only one
+              // can have it, so surface the competition before approving.
+              const rivals = rolePending.filter(
+                r => r.id !== req.id && r.meeting_id === req.meeting_id && r.role_key === req.role_key,
+              );
+              return (
+                <div key={req.id} className={`${cardCls} p-4 space-y-3 border-l-4 border-amber-400 dark:border-amber-600`}>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      🙋 TM {member?.display_name ?? 'Unknown'} <span className="font-normal text-slate-400">wants</span> {meta.emoji} {meta.label}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      {meeting ? `Meeting #${meeting.number} · ${new Date(meeting.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'Unknown meeting'}
+                    </p>
+                    {req.request_note && (
+                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 italic">&ldquo;{req.request_note}&rdquo;</p>
+                    )}
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                      Requested {new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  {rivals.length > 0 && (
+                    <div className="rounded-lg bg-amber-100/70 dark:bg-amber-900/30 border border-amber-300/60 dark:border-amber-700/50 px-2.5 py-2">
+                      <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                        ⚠️ {rivals.length} other member{rivals.length > 1 ? 's' : ''} asked for {meta.label} too:
+                      </p>
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                        {rivals.map(r => `TM ${memberMap.get(r.member_id)?.display_name ?? 'Unknown'}`).join(', ')}
+                      </p>
+                    </div>
+                  )}
+                  <textarea
+                    value={commentInputs[req.id] ?? ''}
+                    onChange={e => setCommentInputs(prev => ({ ...prev, [req.id]: e.target.value }))}
+                    placeholder="Add a comment (required for deny, optional for approve)…"
+                    rows={2}
+                    className={`${inputCls} text-xs resize-none`}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => approveInterest(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✓ Approve & assign'}
+                    </button>
+                    <button
+                      onClick={() => denyInterest(req)}
+                      disabled={acting === req.id}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl py-2.5 disabled:opacity-40 active:scale-95 transition-all">
+                      {acting === req.id ? '…' : '✗ Deny'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {roleResolved.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {roleResolved.map(req => {
+              const member   = memberMap.get(req.member_id);
+              const meeting  = meetingMap.get(req.meeting_id);
+              const reviewer = req.reviewer_id ? memberMap.get(req.reviewer_id) : null;
+              const meta     = ROLE_META[req.role_key];
+              return (
+                <div key={req.id} className={`${cardCls} p-3 border-l-4 ${req.status === 'approved' ? 'border-emerald-400 dark:border-emerald-600' : 'border-red-400 dark:border-red-700'}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                        {req.status === 'approved' ? '✓' : '✗'} TM {member?.display_name ?? '?'} → {meta.emoji} {meta.label}
+                        {meeting ? ` · Meeting #${meeting.number}` : ''}
+                      </p>
+                      {req.review_comment && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 italic">&ldquo;{req.review_comment}&rdquo;</p>
+                      )}
+                      {reviewer && <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">by TM {reviewer.display_name}</p>}
+                    </div>
+                    <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${req.status === 'approved' ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400' : 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'}`}>
+                      {req.status}
+                    </span>
                   </div>
                 </div>
               );
@@ -1102,13 +1366,29 @@ function TimerMMSS({ value, onChange }: { value: number; onChange: (secs: number
   );
 }
 
-function AgendaSettingsPanel() {
+// The reservation setting is stored as "days before the meeting", but admins
+// think in weekdays — so it's presented as the day roles open. Covers the two
+// weeks before a meeting, which is as far back as any window needs to reach.
+function reservationOpenDayOptions(meetingWeekday: number): { days: number; label: string }[] {
+  return Array.from({ length: 14 }, (_, days) => {
+    const wd = (((meetingWeekday - days) % 7) + 7) % 7;
+    const label = days === 0
+      ? `${WEEKDAY_LABELS[wd]} — meeting day`
+      : days < 7
+        ? WEEKDAY_LABELS[wd]
+        : `${WEEKDAY_LABELS[wd]} — the week before`;
+    return { days, label };
+  });
+}
+
+function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   const supabase = createClient();
   const [vals, setVals] = useState({
     l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4,
     tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
-    max_speaker_slots: 2,
+    max_speaker_slots: 2, online_reservation_days_before: DEFAULT_RESERVATION_DAYS_BEFORE,
   });
+  const [reservationEnabled, setReservationEnabled] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 6, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
@@ -1118,7 +1398,8 @@ function AgendaSettingsPanel() {
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
       if (data) {
-        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2 });
+        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE });
+        setReservationEnabled(data.online_reservation_enabled === true);
         setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
         setTimerModes(normalizeModes(data.timer_modes));
@@ -1145,6 +1426,7 @@ function AgendaSettingsPanel() {
       schedule_end_time: schedule.endTime,
       default_disabled_roles: defaultDisabledRoles,
       timer_modes: timerModes,
+      online_reservation_enabled: reservationEnabled,
       updated_at: new Date().toISOString(),
     });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
@@ -1225,6 +1507,64 @@ function AgendaSettingsPanel() {
         <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Speaker Slots</p><div className="pt-1">{numField('max_speaker_slots', 'Max speaker slots per meeting', 'Upper cap for extra-slot requests. Meetings start with 1.')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{numField('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
+        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+      </div>
+
+      {/* Role reservation for online-only members */}
+      <div className={`${cardCls} p-5 space-y-5`}>
+        <div>
+          <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Role Reservation</h3>
+          <p className="text-xs text-slate-500">
+            Hold every role for members who attend <strong>online only</strong>, then open them to the whole club
+            closer to the meeting. Set each member&apos;s mode under <strong>Members → Attends</strong>. The
+            no-same-role-back-to-back rule applies in both phases.
+          </p>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input type="checkbox" checked={reservationEnabled} onChange={e => setReservationEnabled(e.target.checked)}
+            className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">
+              Reserve roles for online-only members
+            </span>
+            <span className="block text-xs text-slate-500">
+              Off = every role is open to everyone as soon as the meeting is created.
+            </span>
+          </span>
+        </label>
+
+        <div className={reservationEnabled ? '' : 'opacity-40 pointer-events-none'}>
+          <p className={labelCls}>Roles open to everyone on</p>
+          <select
+            value={vals.online_reservation_days_before}
+            onChange={e => setVals(v => ({ ...v, online_reservation_days_before: parseInt(e.target.value) }))}
+            className={`${inputCls} mt-1`}
+          >
+            {reservationOpenDayOptions(schedule.weekday).map(({ days, label }) => (
+              <option key={days} value={days}>{label}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1.5">
+            Roles open at midnight IST on that day and stay open right through the meeting. Days are counted
+            back from each meeting&apos;s own date, so a meeting moved off {WEEKDAY_LABELS[schedule.weekday]}
+            {' '}shifts its opening day with it.
+          </p>
+
+          {(() => {
+            const next = meetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number)[0];
+            const window = next ? roleReservation(next, true, vals.online_reservation_days_before) : null;
+            if (!next || !window) return null;
+            return (
+              <p className="text-xs text-slate-500 mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
+                Next up — <strong>Meeting #{next.number}</strong> on {formatMeetingDate(next.date)}: online-only
+                members can claim now, everyone else from{' '}
+                <strong className="text-slate-700 dark:text-slate-300">{formatMeetingDate(window.opensOn)}</strong>.
+              </p>
+            );
+          })()}
+        </div>
+
         <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
 
@@ -1840,7 +2180,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         {loading ? (
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-slate-200 dark:bg-slate-900/60 rounded-2xl h-32 animate-pulse" />)}</div>
         ) : tab === 'settings' ? (
-          <AgendaSettingsPanel />
+          <AgendaSettingsPanel meetings={meetings} />
         ) : tab === 'email' ? (
           <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
         ) : tab === 'surveys' ? (

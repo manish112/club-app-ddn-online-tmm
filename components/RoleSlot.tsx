@@ -1,9 +1,10 @@
 'use client';
 import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import type { Member, RoleClaim, RoleKey } from '@/lib/types';
+import type { Member, ParticipationMode, RoleClaim, RoleKey } from '@/lib/types';
 import { ASSIGN_ONLY_ROLES, LEVELS, PATHS, ROLE_META } from '@/lib/types';
-import { roleClaimBlocked, consecutiveRoleBlocked, speechTimeRange } from '@/lib/utils';
+import type { RoleReservation } from '@/lib/utils';
+import { roleClaimBlocked, consecutiveRoleBlocked, reservationBlocked, speechTimeRange } from '@/lib/utils';
 
 interface Props {
   meetingId: string;
@@ -15,6 +16,10 @@ interface Props {
   memberId: string | null;
   memberExistingRoles: RoleKey[];
   memberAdjacentRoles?: RoleKey[];
+  // Online-only reservation: while `reservation.active`, only members whose
+  // participation mode is 'online' may claim. null = feature off.
+  reservation?: RoleReservation | null;
+  participationMode?: ParticipationMode;
   isLocked: boolean;
   isPast: boolean;
   isAdmin: boolean;
@@ -52,7 +57,8 @@ function notifyRole(payload: {
 
 export function RoleSlot({
   meetingId, meetingNumber, meetingDate, roleKey, slotIndex, claim, memberId, memberExistingRoles,
-  memberAdjacentRoles = [], isLocked, isPast, isAdmin, allMembers = [],
+  memberAdjacentRoles = [], reservation = null, participationMode = 'online',
+  isLocked, isPast, isAdmin, allMembers = [],
   pendingEvaluatorName = null, awaitingSpeaker = false, unavailableEvaluatorIds = [],
   variant = 'row', onChanged,
 }: Props) {
@@ -74,6 +80,7 @@ export function RoleSlot({
   const blockReason = (!claim && memberId && !isGuest && !isAdmin && !assignOnly)
     ? roleClaimBlocked(roleKey, memberExistingRoles)
       ?? consecutiveRoleBlocked(roleKey, memberAdjacentRoles)
+      ?? reservationBlocked(participationMode, reservation)
     : null;
   const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && !blockReason && !assignOnly;
   const isMultiRole = memberExistingRoles.length > 0;
@@ -373,7 +380,9 @@ export function RoleSlot({
       readOnly
         ? 'border-slate-100 dark:border-slate-800/60 opacity-50'
         : blockReason
-          ? 'border-slate-100 dark:border-slate-800 opacity-40'
+          // Not faded: the reason is the only thing telling the member why they
+          // can't claim, so it has to stay readable.
+          ? 'border-slate-200 dark:border-slate-700/60 bg-slate-50/70 dark:bg-slate-800/30'
           : canClaim || isAdmin
             ? 'border-slate-200 dark:border-slate-700 hover:border-maroon-300 dark:hover:border-maroon-700 hover:bg-maroon-50/50 dark:hover:bg-maroon-950/10 cursor-pointer active:scale-[0.97]'
             : 'border-slate-100 dark:border-slate-800 opacity-50'
@@ -389,7 +398,7 @@ export function RoleSlot({
           </span>
           <p className="text-xs text-slate-300 dark:text-slate-600 mt-auto">
             {blockReason
-              ? <span className="italic text-[10px]">{blockReason}</span>
+              ? <span className="text-[10px] font-bold leading-snug text-slate-600 dark:text-slate-300">{blockReason}</span>
               : busy ? 'Claiming…'
               : isAdmin ? '+ Assign'
               : canClaim ? '+ Claim'
@@ -424,9 +433,12 @@ export function RoleSlot({
         ? isOwn
           ? `bg-maroon-50 dark:bg-maroon-950/25 border-maroon-300/50 dark:border-maroon-700/50 ${justClaimed ? 'claim-anim' : ''}`
           : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50'
-        : blockReason || readOnly
+        : readOnly
           ? 'border-dashed border-slate-100 dark:border-slate-800 opacity-40'
-          : canClaim || isAdmin
+          : blockReason
+            // Kept legible — see the chip variant.
+            ? 'border-dashed border-slate-200 dark:border-slate-700/60 bg-slate-50/70 dark:bg-slate-800/30'
+            : canClaim || isAdmin
             ? 'border-dashed border-slate-200 dark:border-slate-700 hover:border-maroon-300 dark:hover:border-maroon-700 hover:bg-maroon-50/50 dark:hover:bg-maroon-950/10 cursor-pointer active:scale-[0.97]'
             : 'border-dashed border-slate-100 dark:border-slate-800 opacity-40'
     }`;
@@ -464,7 +476,7 @@ export function RoleSlot({
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 leading-tight">
           {meta.label}
         </span>
-        <span className={`text-xs font-semibold leading-tight line-clamp-2 max-w-full px-0.5 ${
+        <span className={`text-xs font-semibold leading-tight line-clamp-3 max-w-full px-0.5 ${
           filled
             ? isOwn ? 'text-maroon-700 dark:text-maroon-400' : 'text-slate-700 dark:text-slate-300'
             : 'text-slate-300 dark:text-slate-600'
@@ -475,6 +487,7 @@ export function RoleSlot({
             : isAdmin ? '+ Assign'
             : canClaim ? '+ Claim'
             : assignOnly ? 'Admin assigns'
+            : blockReason ? <span className="text-[10px] font-bold leading-snug text-slate-600 dark:text-slate-300">{blockReason}</span>
             : '—'}
         </span>
       </div>
@@ -589,10 +602,10 @@ export function RoleSlot({
   if (blockReason) {
     return (
       <div className="flex items-center gap-2 py-2.5 px-3 rounded-xl border border-dashed
-                      border-slate-100 dark:border-slate-800 opacity-50">
-        <span className="text-base shrink-0">{meta.emoji}</span>
+                      border-slate-200 dark:border-slate-700/60 bg-slate-50/70 dark:bg-slate-800/30">
+        <span className="text-base shrink-0 opacity-60">{meta.emoji}</span>
         <span className="text-sm text-slate-400 dark:text-slate-500 font-medium shrink-0">{meta.label}</span>
-        <span className="ml-auto text-xs text-slate-300 dark:text-slate-600 italic">{blockReason}</span>
+        <span className="ml-auto text-xs font-bold text-slate-600 dark:text-slate-300 text-right leading-snug">{blockReason}</span>
       </div>
     );
   }
