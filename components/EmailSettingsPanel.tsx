@@ -198,7 +198,7 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
             <input type="checkbox" checked={settings.day_before_meeting_enabled} onChange={(e) => set('day_before_meeting_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
           </label>
           <label className="flex items-center justify-between gap-4">
-            <span className="text-sm text-slate-700 dark:text-slate-300">Send meeting reminder 1 hour before</span>
+            <span className="text-sm text-slate-700 dark:text-slate-300">Send meeting reminder shortly before it starts</span>
             <input type="checkbox" checked={settings.hour_before_enabled} onChange={(e) => set('hour_before_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
           </label>
         </div>
@@ -313,7 +313,7 @@ function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
 const BROADCAST_OPTIONS = [
   { key: 'meeting_created',     label: 'New meeting announcement', to: 'all members', meeting: true },
   { key: 'meeting_reminder_day_before', label: 'Meeting reminder (1 day before)', to: 'all members', meeting: true },
-  { key: 'meeting_reminder',    label: 'Meeting reminder (1 hour before)', to: 'all members', meeting: true },
+  { key: 'meeting_reminder',    label: 'Meeting reminder (starting soon)', to: 'all members', meeting: true },
   { key: 'role_reminder',       label: 'Role reminders',            to: 'each role holder (next meeting)', meeting: true },
   { key: 'role_assigned',       label: 'Role assigned',             to: 'each role holder (next meeting)', meeting: true },
   { key: 'leadership_assigned', label: 'Leadership role appointed', to: 'each club officer', meeting: false },

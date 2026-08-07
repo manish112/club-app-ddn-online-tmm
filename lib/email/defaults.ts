@@ -64,7 +64,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   role_assigned:    'Role assigned (to the member)',
   role_removed:     'Role removed (to the member)',
   role_reminder:    'Role reminder — 1 day before (to each role holder)',
-  meeting_reminder: 'Meeting reminder — 1 hour before (to all members)',
+  meeting_reminder: 'Meeting reminder — shortly before it starts (to all members)',
   meeting_reminder_day_before: 'Meeting reminder — 1 day before (to all members)',
   evaluator_request:'Evaluator approval needed (to officers)',
   leadership_assigned: 'Leadership role appointed (to the member)',
@@ -251,10 +251,10 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
   },
 
   meeting_reminder: {
-    subject: '🔔 Starting soon — Meeting #{{meeting_number}} in about an hour',
+    subject: '🔔 Starting soon — Meeting #{{meeting_number}} is about to begin',
     body_html: shell('Meeting Starting Soon 🔔', `
       <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
-      <p style="${P}">Our meeting begins in about an hour. Here are the details:</p>
+      <p style="${P}">Our meeting is about to start. Here are the details:</p>
       ${meetingCard}
       {{roles_summary}}
       <p style="${P}">See you in the meeting!</p>
