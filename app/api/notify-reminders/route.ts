@@ -41,8 +41,9 @@ export async function GET(req: NextRequest) {
   for (const m of (meetings ?? []) as MeetingRow[]) {
     const startMs = meetingStartUtcMs(m.date, m.start_time);
 
-    // 1 hour before → mass reminder to all members (fires within a 70-min window;
-    // dedupe on the meeting id keeps it to one send).
+    // "Starting soon" → reminder to all members (fires within a 70-min window,
+    // so the real lead time depends on when the cron lands; dedupe on the
+    // meeting id keeps it to one send).
     if (settings.hour_before_enabled && now >= startMs - 70 * 60 * 1000 && now < startMs) {
       const res = await sendMeetingReminder(m);
       actions[`meeting_reminder:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;

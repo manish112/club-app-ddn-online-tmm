@@ -165,8 +165,10 @@ async function sendMeetingIndividual(
   return { ok: true as const, sent, reason: sent === 0 ? reasons[0] ?? null : null };
 }
 
-// ── 1-hour-before meeting reminder (mass, BCC, deduped) ─────────────────────
-// 1-hour-before reminder (individual "Dear TM …" emails, deduped per member).
+// ── "starting soon" meeting reminder ────────────────────────────────────────
+// Fires on the last cron run before the meeting, so the actual lead time varies
+// (~1 hour down to a few minutes) — the copy stays time-agnostic.
+// Individual "Dear TM …" emails, deduped per member.
 export function sendMeetingReminder(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
   return sendMeetingIndividual(meeting, 'meeting_reminder', opts?.dedupe === false ? null : 'meeting_reminder');
 }
