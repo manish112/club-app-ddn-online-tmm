@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/client';
 import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES, HOME_CLUB_NAME, WIC_CLUB_NAME, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
 import { SurveyLinks } from '@/components/SurveyLinks';
+import { useWicMemberIds } from '@/hooks/useWicMemberIds';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
 import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
@@ -568,6 +569,7 @@ function PasswordCard({ member }: { member: Member }) {
 
 export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Props) {
   const supabase = createClient();
+  const wicMemberIds = useWicMemberIds();
   const mentor  = member.mentor_id ? allMembers.find((m) => m.id === member.mentor_id) : null;
   const mentees = allMembers.filter((m) => m.mentor_id === member.id && m.active);
 
@@ -658,7 +660,10 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
   const recentActivity = allActivity.slice(0, 8);
   const totalRoles = allActivity.reduce((sum, { roles }) => sum + roles.length, 0);
-  const otherMembers = allMembers.filter((m) => m.active && m.id !== member.id);
+  // Our club's roster: WIC India members take part in meetings but aren't part
+  // of this club, so they don't belong in its member list.
+  const otherMembers = allMembers.filter(
+    (m) => m.active && m.id !== member.id && !wicMemberIds.has(m.id));
 
   const sectionLabel = (text: string) => (
     <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">{text}</p>
