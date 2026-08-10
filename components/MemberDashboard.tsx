@@ -567,11 +567,64 @@ function PasswordCard({ member }: { member: Member }) {
 
 // ─── Main dashboard ───────────────────────────────────────────────────────────
 
+// ─── Roster card ──────────────────────────────────────────────────────────────
+
+// One card of people with their photo, city and intro. Used twice: our own club
+// members, and the visiting WIC India club shown the same way beneath them.
+function MemberDirectory({ title, members, note }: {
+  title: string;
+  members: Member[];
+  note?: string;
+}) {
+  if (members.length === 0) return null;
+  return (
+    <div className={cardCls}>
+      <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">
+        {title}
+      </p>
+      {note && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed -mt-1 mb-3">{note}</p>
+      )}
+      <div className="space-y-3">
+        {members.map((m, i) => (
+          <div key={m.id} className={i > 0 ? 'pt-3 border-t border-slate-100 dark:border-slate-800' : ''}>
+            <div className="flex items-start gap-3">
+              <MemberAvatar member={m} size={36} className="mt-0.5" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">TM {m.display_name}</p>
+                  {memberLeadershipRoles(m).map((role) => (
+                    <span key={role} className="text-[9px] font-semibold bg-gradient-to-r from-maroon-700 to-maroon-600
+                                     text-white px-2 py-0.5 rounded-full uppercase tracking-wide">
+                      {leadershipLabel(role)}
+                    </span>
+                  ))}
+                </div>
+                {m.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {m.city}</p>}
+                {m.introduction ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 leading-relaxed">
+                    &ldquo;{m.introduction}&rdquo;
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-300 dark:text-slate-600 mt-0.5 italic">No intro yet</p>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Props) {
   const supabase = createClient();
   const wicMemberIds = useWicMemberIds();
+  // Mentoring is a club programme and WIC members aren't in it, so their own
+  // dashboard shows neither a mentor nor mentees.
+  const isWicMember = wicMemberIds.has(member.id);
   const mentor  = member.mentor_id ? allMembers.find((m) => m.id === member.mentor_id) : null;
-  const mentees = allMembers.filter((m) => m.mentor_id === member.id && m.active);
+  const mentees = isWicMember ? [] : allMembers.filter((m) => m.mentor_id === member.id && m.active);
 
   const isOfficer = isClubOfficer(member);
   const [myRequests, setMyRequests] = useState<(SpeakerSlotRequest & { meeting_number?: number; meeting_date?: string; reviewer_name?: string })[]>([]);
@@ -660,10 +713,11 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
   const recentActivity = allActivity.slice(0, 8);
   const totalRoles = allActivity.reduce((sum, { roles }) => sum + roles.length, 0);
-  // Our club's roster: WIC India members take part in meetings but aren't part
-  // of this club, so they don't belong in its member list.
-  const otherMembers = allMembers.filter(
-    (m) => m.active && m.id !== member.id && !wicMemberIds.has(m.id));
+  // Our club's roster and the visiting club's, listed separately: WIC India
+  // members take part in meetings but aren't members of this club.
+  const otherActive = allMembers.filter((m) => m.active && m.id !== member.id);
+  const otherMembers   = otherActive.filter((m) => !wicMemberIds.has(m.id));
+  const wicClubMembers = otherActive.filter((m) => wicMemberIds.has(m.id));
 
   const sectionLabel = (text: string) => (
     <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">{text}</p>
@@ -943,7 +997,8 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
 
       <PasswordCard member={member} />
 
-      {/* Mentor */}
+      {/* Mentor — a club programme, so not shown to visiting WIC members. */}
+      {!isWicMember && (
       <div className={cardCls}>
         {sectionLabel('🤝 Your Mentor')}
         {mentor ? (
@@ -971,6 +1026,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           </div>
         )}
       </div>
+      )}
 
       {/* Mentees */}
       {mentees.length > 0 && (
@@ -1047,40 +1103,13 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
         )}
       </div>
 
-      {/* Club Members */}
-      {otherMembers.length > 0 && (
-        <div className={cardCls}>
-          {sectionLabel(`👥 Club Members (${otherMembers.length})`)}
-          <div className="space-y-3">
-            {otherMembers.map((m, i) => (
-              <div key={m.id} className={i > 0 ? 'pt-3 border-t border-slate-100 dark:border-slate-800' : ''}>
-                <div className="flex items-start gap-3">
-                  <MemberAvatar member={m} size={36} className="mt-0.5" />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">TM {m.display_name}</p>
-                      {memberLeadershipRoles(m).map((role) => (
-                        <span key={role} className="text-[9px] font-semibold bg-gradient-to-r from-maroon-700 to-maroon-600
-                                         text-white px-2 py-0.5 rounded-full uppercase tracking-wide">
-                          {leadershipLabel(role)}
-                        </span>
-                      ))}
-                    </div>
-                    {m.city && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">📍 {m.city}</p>}
-                    {m.introduction ? (
-                      <p className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 leading-relaxed">
-                        &ldquo;{m.introduction}&rdquo;
-                      </p>
-                    ) : (
-                      <p className="text-xs text-slate-300 dark:text-slate-600 mt-0.5 italic">No intro yet</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Our club's roster, then the visiting club below it. */}
+      <MemberDirectory title={`👥 Club Members (${otherMembers.length})`} members={otherMembers} />
+      <MemberDirectory
+        title={`🤝 ${WIC_CLUB_NAME} (${wicClubMembers.length})`}
+        members={wicClubMembers}
+        note="They take part in our meetings and hold roles, but are members of their own club."
+      />
     </div>
   );
 }
