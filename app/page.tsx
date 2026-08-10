@@ -6,8 +6,8 @@ import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { ThemeReminderModal } from '@/components/ThemeReminderModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import type { MeetingWithClaims, ParticipationMode } from '@/lib/types';
-import { isClubOfficer, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
+import type { MeetingWithClaims, Member, ParticipationMode } from '@/lib/types';
+import { isClubOfficer, hasLeadershipRole, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
 import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
@@ -19,6 +19,51 @@ import Image from 'next/image';
 type Tab = 'next' | 'past' | 'profile';
 
 const DISMISS_KEY = (id: string) => `tm_announcement_${id}`;
+
+// Shown on the Next Meeting tab when nothing is on the calendar yet. Names the
+// President and VP Education so a member with a role in mind knows exactly who
+// to ask, rather than being left at a dead end.
+function NoNextMeeting({ members, isAdmin }: { members: Member[]; isAdmin: boolean }) {
+  const president = members.find((m) => hasLeadershipRole(m, 'president'));
+  const vpEd      = members.find((m) => hasLeadershipRole(m, 'vp_education'));
+
+  const officer = (m: Member | undefined, role: string) =>
+    m ? <><strong className="text-slate-700 dark:text-slate-200">TM {m.display_name}</strong> ({role})</> : null;
+  const names = [officer(president, 'Club President'), officer(vpEd, 'VP Education')].filter(Boolean);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900
+                    shadow-card-light dark:shadow-card-dark px-6 py-10 text-center space-y-4">
+      <div className="text-4xl">🗓️</div>
+      <p className="text-base font-semibold text-slate-800 dark:text-slate-100 font-serif">
+        Our next meeting will be scheduled soon.
+      </p>
+      <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-sm mx-auto">
+        If you&apos;ve added your email address to this app and left notifications switched on,
+        we&apos;ll let you know the moment the next meeting is created.
+      </p>
+      <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-sm mx-auto">
+        {names.length > 0 ? (
+          <>
+            Think it should have been created by now, or want to reserve a role in advance? Do reach
+            out to {names[0]}{names.length > 1 && <> or {names[1]}</>} — they&apos;ll be glad to help.
+          </>
+        ) : (
+          <>
+            Think it should have been created by now, or want to reserve a role in advance? Do reach
+            out to your Club President or VP Education — they&apos;ll be glad to help.
+          </>
+        )}
+      </p>
+      {isAdmin && (
+        <Link href="/amiadmin"
+          className="inline-block text-sm font-semibold text-maroon-600 dark:text-maroon-400 hover:underline pt-1">
+          Schedule one in Admin →
+        </Link>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
   const { meetings, members, ballots, announcement, loading, refetch } = useMeetings();
@@ -375,6 +420,12 @@ export default function Home() {
                 ))}
               </div>
             );
+          }
+
+          // Nothing on the calendar yet: say so warmly, and point at the two
+          // officers who can actually do something about it.
+          if (meetingTab === 'next' && meetingTabContent.next.length === 0) {
+            return <NoNextMeeting members={members} isAdmin={currentMember?.is_admin === true} />;
           }
 
           if (meetingTabContent[meetingTab].length === 0) {
