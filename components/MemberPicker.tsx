@@ -1,8 +1,9 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, Meeting } from '@/lib/types';
 import { hasLeadershipRole, HOME_CLUB_NAME, WIC_CLUB_NAME } from '@/lib/types';
+import { useWicMemberIds } from '@/hooks/useWicMemberIds';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -47,18 +48,8 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
 
   const selectedMember = members.find((m) => m.id === selected);
 
-  // Which names belong to the visiting WIC India club, so the list can be split
-  // under the two club headings. Read on its own and failure-tolerant: the
-  // members list deliberately doesn't select this column, and a club that hasn't
-  // run migration 052 must still be able to sign in — it just gets one flat list.
-  const [wicMemberIds, setWicMemberIds] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    supabase.from('members').select('id, participation_mode').eq('participation_mode', 'offline')
-      .then(({ data, error }) => {
-        if (error || !data) return;
-        setWicMemberIds(new Set(data.map((m) => m.id as string)));
-      });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Split the sign-in list under the two club headings.
+  const wicMemberIds = useWicMemberIds();
 
   const memberLabel = (m: Member) =>
     m.display_name !== m.name.split(' ')[0] ? m.display_name : m.name;
