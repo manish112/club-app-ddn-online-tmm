@@ -661,6 +661,14 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     if (next === mode) return;
     setSavingMode(true);
     const { error } = await supabase.from('members').update({ participation_mode: next }).eq('id', member.id);
+    // Moving someone to the visiting club drops what only club members hold, so
+    // nothing stale lingers behind the hidden mentor/roles controls — including
+    // any mentees who were pointing at them.
+    if (!error && next === 'offline') {
+      await supabase.from('members')
+        .update({ mentor_id: null, leadership_roles: [] }).eq('id', member.id);
+      await supabase.from('members').update({ mentor_id: null }).eq('mentor_id', member.id);
+    }
     setSavingMode(false);
     if (error) { alert(`Failed: ${error.message}`); return; }
     onUpdated();
@@ -672,7 +680,11 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setTogglingGuest(false); onUpdated();
   }
 
-  const mentorOptions = allMembers.filter(m => m.active && m.id !== member.id);
+  // Mentoring is a club programme: a visiting WIC India member neither mentors
+  // nor is mentored, so they're out of the picker and get no mentor row at all.
+  const isWic = mode === 'offline';
+  const mentorOptions = allMembers.filter(
+    m => m.active && m.id !== member.id && participationMode(m) !== 'offline');
 
   return (
     <div className={`p-3.5 rounded-2xl border space-y-2 transition-opacity ${
@@ -806,7 +818,8 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
         </div>
       </div>
 
-      {/* Mentor selector */}
+      {/* Mentor selector — club programme, so not offered to WIC members. */}
+      {!isWic && (
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Mentor</span>
         <select value={member.mentor_id ?? ''} onChange={e => changeMentor(e.target.value)} disabled={savingMentor}
@@ -816,8 +829,14 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
           {mentorOptions.map(m => <option key={m.id} value={m.id}>TM {m.display_name}</option>)}
         </select>
       </div>
+      )}
 
-      {/* Leadership roles (multi-select) */}
+      {/* Leadership roles (multi-select) — club officer posts, our members only. */}
+      {isWic ? (
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
+          Mentoring and club officer roles are for {HOME_CLUB_NAME} members.
+        </p>
+      ) : (
       <div className="flex items-start gap-2">
         <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12 mt-1.5">Roles</span>
         <div className="flex flex-wrap gap-1.5 flex-1">
@@ -846,6 +865,7 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -2248,6 +2268,9 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
   const [memberSearch, setMemberSearch] = useState('');
+  // WIC India members belong to a different club, so the Members tab is our own
+  // roster by default and reveals them on request.
+  const [showWicMembers, setShowWicMembers] = useState(false);
   const [scheduleConfig, setScheduleConfig] = useState<ScheduleConfig | null>(null);
   const [autoFillStatus, setAutoFillStatus] = useState<string | null>(null);
   const [filling, setFilling] = useState(false);
@@ -2358,9 +2381,18 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     fetchAll();
   }
 
-  const displayedMembers = members
-    .filter(m => memberFilter === 'all' || m.active)
-    .filter(m => !memberSearch.trim() || m.name.toLowerCase().includes(memberSearch.toLowerCase()) || m.display_name.toLowerCase().includes(memberSearch.toLowerCase()));
+  const matchesMemberFilters = (m: Member) =>
+    (memberFilter === 'all' || m.active)
+    && (!memberSearch.trim()
+      || m.name.toLowerCase().includes(memberSearch.toLowerCase())
+      || m.display_name.toLowerCase().includes(memberSearch.toLowerCase()));
+
+  // Our own roster and the visiting WIC India club, kept apart everywhere the
+  // app talks about "club members".
+  const clubMembers = members.filter(m => participationMode(m) !== 'offline');
+  const wicMembers  = members.filter(m => participationMode(m) === 'offline');
+  const displayedMembers    = clubMembers.filter(matchesMemberFilters);
+  const displayedWicMembers = wicMembers.filter(matchesMemberFilters);
 
   const tabs = [
     { id: 'meetings'  as const, label: 'Meetings' },
@@ -2527,6 +2559,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                   </button>
                 ))}
               </div>
+              {/* Our club's count — WIC India members are tallied on their own
+                  section header below. */}
               <span className="text-xs text-slate-400 dark:text-slate-600 shrink-0">{displayedMembers.length}</span>
             </div>
 
@@ -2535,6 +2569,32 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                 <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} onUpdated={fetchAll} />
               ))}
             </div>
+
+            {/* Visiting WIC India club — not our members, so folded away. */}
+            {wicMembers.length > 0 && (
+              <div className="space-y-1.5">
+                <button
+                  onClick={() => setShowWicMembers(v => !v)}
+                  className="w-full flex items-center gap-2 text-left px-3 py-2.5 rounded-xl border border-dashed
+                             border-violet-200 dark:border-violet-800/50 bg-violet-50/60 dark:bg-violet-950/20
+                             hover:bg-violet-50 dark:hover:bg-violet-950/40 transition-colors"
+                >
+                  <span className="text-sm">🤝</span>
+                  <span className="text-xs font-semibold text-violet-800 dark:text-violet-300">
+                    {WIC_CLUB_NAME}
+                  </span>
+                  <span className="text-[10px] text-violet-500 dark:text-violet-400/80">
+                    {wicMembers.length}
+                  </span>
+                  <span className="ml-auto text-xs text-violet-400 dark:text-violet-500">
+                    {showWicMembers ? '▾ Hide' : '▸ Show'}
+                  </span>
+                </button>
+                {showWicMembers && displayedWicMembers.map(m => (
+                  <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} onUpdated={fetchAll} />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
