@@ -52,9 +52,10 @@ export default function ScorecardsPage() {
 
   const nameOf = (id: string) => members.find((m) => m.id === id)?.display_name ?? '—';
 
-  // Judges (jury), in slot order.
+  // Judges (jury), in slot order. Scoring is keyed on member ids throughout, so
+  // a guest judge (no member row) can't be scored against — skipped here.
   const judges: Judge[] = meeting.role_claims
-    .filter((c) => c.role_key === 'jury' && c.member_id)
+    .filter((c): c is typeof c & { member_id: string } => c.role_key === 'jury' && !!c.member_id)
     .sort((a, b) => a.slot_index - b.slot_index)
     .map((c) => ({ id: c.member_id, name: nameOf(c.member_id) }));
 

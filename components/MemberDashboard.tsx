@@ -3,11 +3,11 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
 import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
-import { ROLE_META, LEADERSHIP_ROLES, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
+import { ROLE_META, LEADERSHIP_ROLES, HOME_CLUB_NAME, WIC_CLUB_NAME, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
 import { SurveyLinks } from '@/components/SurveyLinks';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
-import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot, roleReservation, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -265,6 +265,7 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
   const supabase = createClient();
   const [mode, setMode] = useState<ParticipationMode | null>(null);
   const [reservation, setReservation] = useState({ enabled: false, daysBefore: DEFAULT_RESERVATION_DAYS_BEFORE });
+  const [offlineReservation, setOfflineReservation] = useState({ enabled: false, daysBefore: DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
 
   useEffect(() => {
     supabase.from('members').select('participation_mode').eq('id', member.id).maybeSingle()
@@ -275,6 +276,15 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
         setReservation({
           enabled: data.online_reservation_enabled === true,
           daysBefore: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE,
+        });
+      });
+    // Read on its own so a club still on migration 051 just sees the gate off.
+    supabase.from('agenda_config').select('offline_reservation_enabled, offline_reservation_days_before').single()
+      .then(({ data }) => {
+        if (!data) return;
+        setOfflineReservation({
+          enabled: data.offline_reservation_enabled === true,
+          daysBefore: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE,
         });
       });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -290,6 +300,13 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
   const nextMeeting = meetings.filter((m) => !isMeetingPast(m)).sort((a, b) => a.number - b.number)[0] ?? null;
   const nextWindow = nextMeeting ? roleReservation(nextMeeting, reservation.enabled, days) : null;
   const heldBack = mode === 'hybrid' && !!nextWindow?.active && !!nextMeeting;
+
+  // WIC India members answer to their own, later, window instead.
+  const isWic = mode === 'offline';
+  const wicWindow = nextMeeting
+    ? offlineClaimWindow(nextMeeting, offlineReservation.enabled, offlineReservation.daysBefore)
+    : null;
+  const wicHeldBack = isWic && !!wicWindow?.active && !!nextMeeting;
 
   // Tense-correct tail for the "how it works" line: the next meeting may already
   // be past its opening day.
@@ -309,12 +326,36 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
         <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full ${
           mode === 'online'
             ? 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
-            : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50'
+            : mode === 'offline'
+              ? 'bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-800/50'
+              : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50'
         }`}>
           {meta.emoji} {meta.label}
         </span>
         <span className="text-xs text-slate-500 dark:text-slate-400">{meta.hint}</span>
       </div>
+
+      {isWic && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-3">
+          You&apos;re a member of <strong className="text-violet-700 dark:text-violet-400">{WIC_CLUB_NAME}</strong>,
+          taking part in {HOME_CLUB_NAME} meetings.
+        </p>
+      )}
+
+      {wicHeldBack && nextMeeting && wicWindow && (
+        <div className="mt-3 rounded-xl border border-violet-200 dark:border-violet-800/40 bg-violet-50 dark:bg-violet-950/25 px-3 py-2.5">
+          <p className="text-xs font-bold text-violet-800 dark:text-violet-300">
+            🔒 Role sign-up for Meeting #{nextMeeting.number} isn&apos;t open to you yet
+          </p>
+          <p className="text-xs text-violet-700 dark:text-violet-400/90 leading-relaxed mt-1">
+            {HOME_CLUB_NAME} members get first pick. Yours open{' '}
+            <strong>{reservationCountdown(wicWindow)}</strong> — on{' '}
+            <strong>{formatMeetingDate(wicWindow.opensOn)}</strong>, for the meeting on{' '}
+            {formatMeetingDate(nextMeeting.date)}. Until then you can request a role from the
+            meeting card and an officer will assign it.
+          </p>
+        </div>
+      )}
 
       {heldBack && nextMeeting && nextWindow && (
         <div className="mt-3 rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-950/25 px-3 py-2.5">
@@ -330,7 +371,18 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
         </div>
       )}
 
-      {reservation.enabled && (
+      {isWic && offlineReservation.enabled && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+          Roles open to {WIC_CLUB_NAME} members{' '}
+          <strong className="text-slate-600 dark:text-slate-300">
+            {offlineReservation.daysBefore} {offlineReservation.daysBefore === 1 ? 'day' : 'days'}
+          </strong>{' '}
+          before each meeting, once the home club has had first pick. You can&apos;t take the same
+          role in two meetings in a row.
+        </p>
+      )}
+
+      {!isWic && reservation.enabled && (
         <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
           {mode === 'online' ? (
             <>

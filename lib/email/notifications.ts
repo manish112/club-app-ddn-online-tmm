@@ -60,7 +60,9 @@ function baseMeetingVars(meeting: MeetingRow, appUrl: string): Record<string, st
   };
 }
 
-interface ClaimLite { role_key: RoleKey; slot_index: number; member_id: string }
+// member_id is null when an admin filled the slot with a named guest, in which
+// case guest_name carries the holder (migration 053).
+interface ClaimLite { role_key: RoleKey; slot_index: number; member_id: string | null; guest_name?: string | null }
 interface MemberLite { id: string; name: string; display_name: string; email: string | null; active: boolean }
 
 function rolesSummaryHtml(claims: ClaimLite[], byId: Map<string, MemberLite>): string {
@@ -69,8 +71,10 @@ function rolesSummaryHtml(claims: ClaimLite[], byId: Map<string, MemberLite>): s
     .map((c) => {
       const meta = ROLE_META[c.role_key];
       if (!meta) return null;
-      const m = byId.get(c.member_id);
-      const name = m ? `TM ${escapeHtml(m.display_name)}` : '—';
+      const m = c.member_id ? byId.get(c.member_id) : undefined;
+      const name = c.guest_name
+        ? `${escapeHtml(c.guest_name)} (Guest)`
+        : m ? `TM ${escapeHtml(m.display_name)}` : '—';
       const label = meta.label + (['speaker', 'evaluator', 'jury'].includes(c.role_key) ? ` ${c.slot_index}` : '');
       return `<tr><td style="padding:5px 0;color:#64748b;font-size:13px;">${meta.emoji} ${label}</td>
         <td style="padding:5px 0;color:#1e293b;font-size:13px;font-weight:600;text-align:right;">${name}</td></tr>`;
@@ -130,7 +134,7 @@ async function sendMeetingIndividual(
   const supabase = createServiceClient();
   const [{ data: members }, { data: claims }] = await Promise.all([
     supabase.from('members').select('id, name, display_name, email, active'),
-    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+    supabase.from('role_claims').select('role_key, slot_index, member_id, guest_name').eq('meeting_id', meeting.id),
   ]);
   const active = (members ?? []).filter((m) => m.active && m.email);
   if (active.length === 0) return { skipped: 'no recipients' as const };
@@ -184,7 +188,7 @@ export async function sendRoleReminders(meeting: MeetingRow, opts?: { dedupe?: b
   const supabase = createServiceClient();
   const [{ data: members }, { data: claims }] = await Promise.all([
     supabase.from('members').select('id, name, display_name, email, active'),
-    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+    supabase.from('role_claims').select('role_key, slot_index, member_id, guest_name').eq('meeting_id', meeting.id),
   ]);
   const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
 
@@ -215,7 +219,7 @@ export async function broadcastRoleAssigned(meeting: MeetingRow) {
   const supabase = createServiceClient();
   const [{ data: members }, { data: claims }] = await Promise.all([
     supabase.from('members').select('id, name, display_name, email, active'),
-    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id),
+    supabase.from('role_claims').select('role_key, slot_index, member_id, guest_name').eq('meeting_id', meeting.id),
   ]);
   const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
   const appUrl = await getAppUrl();
@@ -370,7 +374,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
   }
 
   const { data: claims } = await supabase
-    .from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meeting.id);
+    .from('role_claims').select('role_key, slot_index, member_id, guest_name').eq('meeting_id', meeting.id);
   const claimList = (claims ?? []) as ClaimLite[];
   // Prefer the target's own role in this meeting; else the first claim as a sample.
   const relevantClaim = (target ? claimList.find((c) => c.member_id === target.id) : null) ?? claimList[0];

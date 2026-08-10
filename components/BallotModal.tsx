@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, Member, VoteResult } from '@/lib/types';
 import { ROLE_META } from '@/lib/types';
-import type { RoleKey } from '@/lib/types';
+import type { RoleClaim, RoleKey } from '@/lib/types';
+import { claimHolderName } from '@/lib/utils';
 
 interface Props {
   ballot: Ballot;
@@ -83,13 +84,23 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
     return () => clearInterval(id);
   }, [submitted, alreadyVoted, fetchVoteCount]);
 
+  // A role can be held by a member or by an admin-named guest; votes already
+  // carry either a member id or a bare name, so both are votable. The claim's
+  // own id is the selection key — a guest has no member id to use.
+  const claimCandidate = (c: RoleClaim, suffix = ''): Candidate => ({
+    id: c.id,
+    label: (claimHolderName(c, c.member ?? null) ?? 'TM ?') + suffix,
+    memberId: c.member_id,
+    guestName: c.guest_name,
+  });
+
   const speakerCandidates: Candidate[] = meeting.role_claims
     .filter(c => c.role_key === 'speaker')
-    .map(c => ({ id: c.member_id, label: `TM ${c.member?.display_name ?? '?'}`, memberId: c.member_id, guestName: null }));
+    .map(c => claimCandidate(c));
 
   const evaluatorCandidates: Candidate[] = meeting.role_claims
     .filter(c => c.role_key === 'evaluator')
-    .map(c => ({ id: c.member_id, label: `TM ${c.member?.display_name ?? '?'}`, memberId: c.member_id, guestName: null }));
+    .map(c => claimCandidate(c));
 
   const ttCandidates: Candidate[] = ballot.table_topics_speakers.map(s => ({
     id: s.id,
@@ -99,21 +110,13 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
   }));
 
   const roleCandidates: Candidate[] = ROLE_PLAYER_KEYS.flatMap(roleKey =>
-    meeting.role_claims.filter(c => c.role_key === roleKey).map(c => ({
-      id: c.member_id + ':' + roleKey,
-      label: `TM ${c.member?.display_name ?? '?'} · ${ROLE_META[roleKey].label}`,
-      memberId: c.member_id,
-      guestName: null,
-    }))
+    meeting.role_claims.filter(c => c.role_key === roleKey)
+      .map(c => claimCandidate(c, ` · ${ROLE_META[roleKey].label}`))
   );
 
   const auxCandidates: Candidate[] = AUX_ROLE_KEYS.flatMap(roleKey =>
-    meeting.role_claims.filter(c => c.role_key === roleKey).map(c => ({
-      id: c.member_id + ':' + roleKey,
-      label: `TM ${c.member?.display_name ?? '?'} · ${ROLE_META[roleKey].label}`,
-      memberId: c.member_id,
-      guestName: null,
-    }))
+    meeting.role_claims.filter(c => c.role_key === roleKey)
+      .map(c => claimCandidate(c, ` · ${ROLE_META[roleKey].label}`))
   );
 
   const categories: { key: VoteCategory; candidates: Candidate[] }[] = ([

@@ -2,9 +2,9 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, EvaluatorRequest, MeetingWithClaims, Member, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
-import { ASSIGN_ONLY_ROLES, ROLE_META, getMeetingRoles, isRoleEnabled } from '@/lib/types';
+import { ASSIGN_ONLY_ROLES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, getMeetingRoles, isRoleEnabled } from '@/lib/types';
 import { roleClaimBlocked, consecutiveRoleBlocked } from '@/lib/utils';
-import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups, roleReservation, reservationCountdown, formatMeetingDate } from '@/lib/utils';
+import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups, roleReservation, offlineClaimWindow, reservationCountdown, formatMeetingDate } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
@@ -24,11 +24,14 @@ interface Props {
   // Online-only role reservation (admin-configurable; off by default).
   reservationEnabled?: boolean;
   reservationDaysBefore?: number;
+  // WIC India members' own sign-up window (admin-configurable; on by default).
+  offlineReservationEnabled?: boolean;
+  offlineReservationDaysBefore?: number;
   participationMode?: ParticipationMode;
   onChanged: () => void;
 }
 
-export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, maxSpeakerSlots = 2, reservationEnabled = false, reservationDaysBefore, participationMode = 'online', onChanged }: Props) {
+export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles = [], deviceId, ballot, isAdmin, hideWhatsApp, lockBeforeMins = 60, maxSpeakerSlots = 2, reservationEnabled = false, reservationDaysBefore, offlineReservationEnabled = false, offlineReservationDaysBefore, participationMode = 'online', onChanged }: Props) {
   const supabase = createClient();
   const [showBallot, setShowBallot] = useState(false);
   const [showAgenda, setShowAgenda] = useState(false);
@@ -52,15 +55,22 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const locked = isMeetingLocked(meeting, lockBeforeMins);
   const past   = isMeetingPast(meeting);
 
-  // Roles are held for online-only members until the reservation window opens.
+  // Roles are held for online-only members until the reservation window opens;
+  // visiting WIC India members wait on their own, later, opening day.
   const reservation = roleReservation(meeting, reservationEnabled, reservationDaysBefore);
-  const showReservationBanner = !!reservation?.active && !past && !locked;
-  // Three audiences for the reservation banner: an online-only member (has
+  const offlineWindow = offlineClaimWindow(meeting, offlineReservationEnabled, offlineReservationDaysBefore);
+  // Four audiences for the reservation banner: an online-only member (has
   // priority), a signed-in in-person member (blocked — must be told why and
-  // until when), and a guest / signed-out visitor (neutral explanation).
+  // until when), a WIC India member (blocked until their own day), and a guest /
+  // signed-out visitor (neutral explanation).
   const isSignedInMember = !!memberId && memberId !== 'guest';
+  const isWicMember = participationMode === 'offline' && isSignedInMember;
   const hasPriority = participationMode === 'online' && isSignedInMember;
   const isHeldBack   = participationMode === 'hybrid' && isSignedInMember && !isAdmin;
+  const isWicHeldBack = isWicMember && !isAdmin && !!offlineWindow?.active;
+  // A WIC member reads their own window; everyone else reads the online one.
+  const showReservationBanner = !past && !locked
+    && (isWicMember ? isWicHeldBack : !!reservation?.active);
 
   useEffect(() => {
     if (!memberId || memberId === 'guest') return;
@@ -201,7 +211,10 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // evaluator claim, plus anyone pending as a nominee. They're hidden from the
   // speaker's evaluator picker so the same person can't be nominated twice.
   const unavailableEvaluatorIds: string[] = [
-    ...meeting.role_claims.filter((c) => c.role_key === 'evaluator').map((c) => c.member_id),
+    ...meeting.role_claims
+      .filter((c) => c.role_key === 'evaluator')
+      .map((c) => c.member_id)
+      .filter((id): id is string => !!id),
     ...(meeting.evaluator_requests ?? []).filter((r) => r.status === 'pending').map((r) => r.preferred_evaluator_id),
   ];
 
@@ -222,7 +235,9 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // While the reservation window holds them back, an in-person member can't claim
   // a speaker slot directly — the request flow is their way in, so it opens even
   // when slots are still free (an approver assigns them into one).
-  const reservationBlocksMe = isHeldBack && !!reservation?.active;
+  // ...and the same door is the way in for a WIC India member still waiting on
+  // their own opening day.
+  const reservationBlocksMe = (isHeldBack && !!reservation?.active) || isWicHeldBack;
   // Hard rules (TMoD-only, max roles, two speaker slots) can't be argued away, so
   // there's nothing to request. The back-to-back rotation rule is different: it's
   // a club norm officers routinely override, so a member may still ask and let
@@ -355,6 +370,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     memberExistingRoles,
     memberAdjacentRoles,
     reservation,
+    offlineWindow,
     participationMode,
     isLocked: locked,
     isPast: past,
@@ -397,7 +413,27 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
       )}
 
       {/* Reservation window: roles held for online-only members for now */}
-      {showReservationBanner && reservation && (
+      {/* WIC India members: their own opening day, shown instead of the
+          online-reservation banner so the two never contradict each other. */}
+      {showReservationBanner && isWicHeldBack && offlineWindow && (
+        <div className="px-4 py-3 border-b flex items-start gap-2.5 bg-violet-50 dark:bg-violet-950/25 border-violet-200 dark:border-violet-800/40">
+          <span className="text-base leading-none shrink-0 mt-0.5">🤝</span>
+          <div className="text-xs leading-snug flex-1 space-y-1 text-violet-800 dark:text-violet-300">
+            <p className="font-bold">Role sign-up isn&apos;t open to you yet.</p>
+            <p>
+              As a <strong>{WIC_CLUB_NAME}</strong> member, roles open to you{' '}
+              <strong>{reservationCountdown(offlineWindow)}</strong> — on{' '}
+              <strong>{formatMeetingDate(offlineWindow.opensOn)}</strong>, once{' '}
+              {HOME_CLUB_NAME} members have had first pick.
+            </p>
+            <p className="text-violet-700/80 dark:text-violet-400/80">
+              You can still request a role below and an officer will assign it to you.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showReservationBanner && !isWicMember && reservation && (
         <div className={`px-4 py-3 border-b flex items-start gap-2.5 ${
           hasPriority
             ? 'bg-emerald-50 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/40'
@@ -799,8 +835,10 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                 </p>
                 {reservationBlocksMe && (
                   <p className="text-[11px] text-maroon-600/90 dark:text-maroon-400/80 leading-relaxed">
-                    Speaker slots are reserved for online-only members right now — ask here and the President,
-                    VP Education or an admin will review it.
+                    {isWicHeldBack
+                      ? `Speaker slots open to ${WIC_CLUB_NAME} members closer to the meeting`
+                      : 'Speaker slots are reserved for online-only members right now'}
+                    {' '}— ask here and the President, VP Education or an admin will review it.
                   </p>
                 )}
                 {speakerRotationBlock && (

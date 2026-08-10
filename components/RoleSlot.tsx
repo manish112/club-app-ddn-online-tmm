@@ -4,7 +4,7 @@ import { createClient } from '@/utils/supabase/client';
 import type { Member, ParticipationMode, RoleClaim, RoleKey } from '@/lib/types';
 import { ASSIGN_ONLY_ROLES, LEVELS, PATHS, ROLE_META } from '@/lib/types';
 import type { RoleReservation } from '@/lib/utils';
-import { roleClaimBlocked, consecutiveRoleBlocked, reservationBlocked, speechTimeRange } from '@/lib/utils';
+import { roleClaimBlocked, consecutiveRoleBlocked, reservationBlocked, speechTimeRange, claimHolderName, claimHolderShortName } from '@/lib/utils';
 
 interface Props {
   meetingId: string;
@@ -19,6 +19,9 @@ interface Props {
   // Online-only reservation: while `reservation.active`, only members whose
   // participation mode is 'online' may claim. null = feature off.
   reservation?: RoleReservation | null;
+  // The WIC India members' own, later, opening day — it governs them instead of
+  // `reservation`, so the two never stack. null = that gate is off.
+  offlineWindow?: RoleReservation | null;
   participationMode?: ParticipationMode;
   isLocked: boolean;
   isPast: boolean;
@@ -55,9 +58,91 @@ function notifyRole(payload: {
   }).catch(() => {});
 }
 
+// Admin's "who takes this slot" control, shared by all three slot variants:
+// pick a member, or switch to typing the name of someone outside the club.
+function AssignPicker({
+  members, busy, compact = false, onPickMember, onPickGuest, onCancel,
+}: {
+  members: Member[];
+  busy: boolean;
+  compact?: boolean;
+  onPickMember: (id: string) => void;
+  onPickGuest: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [guestMode, setGuestMode] = useState(false);
+  const [guestName, setGuestName] = useState('');
+  const fieldCls = `text-xs border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 w-full
+                    bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200
+                    focus:outline-none focus:ring-1 focus:ring-maroon-400`;
+
+  if (guestMode) {
+    return (
+      <div className="flex flex-col gap-1 w-full">
+        <input
+          type="text"
+          value={guestName}
+          onChange={(e) => setGuestName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') onPickGuest(guestName); }}
+          placeholder="Guest name…"
+          disabled={busy}
+          autoFocus
+          className={fieldCls}
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onPickGuest(guestName)}
+            disabled={busy || !guestName.trim()}
+            className="text-[10px] font-semibold text-maroon-600 dark:text-maroon-400 hover:underline disabled:opacity-40"
+          >
+            {busy ? 'Adding…' : '+ Add guest'}
+          </button>
+          <button
+            onClick={() => { setGuestMode(false); setGuestName(''); }}
+            className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            ← Members
+          </button>
+          <button onClick={onCancel} className="ml-auto text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1 w-full">
+      <select
+        className={fieldCls}
+        defaultValue=""
+        onChange={(e) => e.target.value && onPickMember(e.target.value)}
+        disabled={busy}
+        autoFocus
+      >
+        <option value="" disabled>{compact ? 'Pick…' : 'Pick member…'}</option>
+        {members.map((m) => (
+          <option key={m.id} value={m.id}>TM {m.display_name}</option>
+        ))}
+      </select>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setGuestMode(true)}
+          className="text-[10px] font-semibold text-maroon-600 dark:text-maroon-400 hover:underline"
+        >
+          + Guest (not a member)
+        </button>
+        <button onClick={onCancel} className="ml-auto text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function RoleSlot({
   meetingId, meetingNumber, meetingDate, roleKey, slotIndex, claim, memberId, memberExistingRoles,
-  memberAdjacentRoles = [], reservation = null, participationMode = 'online',
+  memberAdjacentRoles = [], reservation = null, offlineWindow = null, participationMode = 'online',
   isLocked, isPast, isAdmin, allMembers = [],
   pendingEvaluatorName = null, awaitingSpeaker = false, unavailableEvaluatorIds = [],
   variant = 'row', onChanged,
@@ -80,7 +165,7 @@ export function RoleSlot({
   const blockReason = (!claim && memberId && !isGuest && !isAdmin && !assignOnly)
     ? roleClaimBlocked(roleKey, memberExistingRoles)
       ?? consecutiveRoleBlocked(roleKey, memberAdjacentRoles)
-      ?? reservationBlocked(participationMode, reservation)
+      ?? reservationBlocked(participationMode, reservation, offlineWindow)
     : null;
   const canClaim = !claim && memberId && !isGuest && (!isLocked || isAdmin) && !blockReason && !assignOnly;
   const isMultiRole = memberExistingRoles.length > 0;
@@ -182,7 +267,10 @@ export function RoleSlot({
       await supabase.from('meetings').update({ theme: 'TBD' }).eq('id', meetingId);
     }
     setBusy(false);
-    notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
+    // A guest holder has no member row and no inbox — nothing to notify.
+    if (claim.member_id) {
+      notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
+    }
     onChanged();
   }
 
@@ -239,11 +327,30 @@ export function RoleSlot({
     onChanged();
   }
 
-  const claimantName = claim?.member?.display_name
-    ? `TM ${claim.member.display_name}`
-    : claim?.member?.name ?? '…';
+  // Put someone who isn't in the members list into the slot — a visiting
+  // Toastmaster, a guest evaluator. Name only: no member row, no login, and
+  // nothing to email, so no notification goes out.
+  async function handleGuestAssign(name: string) {
+    const guestName = name.trim();
+    if (!guestName || busy) return;
+    setBusy(true);
+    await supabase.from('role_claims').insert({
+      meeting_id: meetingId,
+      role_key: roleKey,
+      slot_index: slotIndex,
+      guest_name: guestName,
+      admin_override: true,
+    });
+    setBusy(false);
+    setAssigning(false);
+    onChanged();
+  }
 
-  const shortName = claim?.member?.display_name ?? claim?.member?.name ?? '…';
+  const claimantName = claim
+    ? claimHolderName(claim, claim.member ?? null) ?? claim.member?.name ?? '…'
+    : '…';
+
+  const shortName = claim ? (claimHolderShortName(claim, claim.member ?? null) || '…') : '…';
 
   // ── CHIP VARIANT ─────────────────────────────────────────────────────────
   if (variant === 'chip') {
@@ -356,21 +463,13 @@ export function RoleSlot({
       return (
         <div className={`${base} bg-maroon-50 dark:bg-maroon-950/20 border-maroon-200 dark:border-maroon-800/50 col-span-full`}>
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{meta.emoji} {meta.label}</span>
-          <select
-            className="text-xs border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5
-                       bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200
-                       focus:outline-none focus:ring-1 focus:ring-maroon-400"
-            defaultValue=""
-            onChange={(e) => e.target.value && handleAdminAssign(e.target.value)}
-            disabled={busy}
-            autoFocus
-          >
-            <option value="" disabled>Pick member…</option>
-            {allMembers.map((m) => (
-              <option key={m.id} value={m.id}>TM {m.display_name}</option>
-            ))}
-          </select>
-          <button onClick={() => setAssigning(false)} className="text-[10px] text-slate-400 hover:text-slate-600">Cancel</button>
+          <AssignPicker
+            members={allMembers}
+            busy={busy}
+            onPickMember={handleAdminAssign}
+            onPickGuest={handleGuestAssign}
+            onCancel={() => setAssigning(false)}
+          />
         </div>
       );
     }
@@ -451,21 +550,16 @@ export function RoleSlot({
       return (
         <div className={`${base} border-maroon-200 dark:border-maroon-800/50 bg-maroon-50 dark:bg-maroon-950/20 col-span-full items-start`}>
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 self-start">{meta.emoji} {meta.label}</span>
-          <select
-            className="text-xs border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 w-full
-                       bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200
-                       focus:outline-none focus:ring-1 focus:ring-maroon-400 mt-1"
-            defaultValue=""
-            onChange={(e) => e.target.value && handleAdminAssign(e.target.value)}
-            disabled={busy}
-            autoFocus
-          >
-            <option value="" disabled>Pick…</option>
-            {allMembers.map((m) => (
-              <option key={m.id} value={m.id}>TM {m.display_name}</option>
-            ))}
-          </select>
-          <button onClick={() => setAssigning(false)} className="text-[10px] text-slate-400 hover:text-slate-600 mt-1">✕</button>
+          <div className="w-full mt-1">
+            <AssignPicker
+              members={allMembers}
+              busy={busy}
+              compact
+              onPickMember={handleAdminAssign}
+              onPickGuest={handleGuestAssign}
+              onCancel={() => setAssigning(false)}
+            />
+          </div>
         </div>
       );
     }
@@ -560,24 +654,15 @@ export function RoleSlot({
                         bg-maroon-50 dark:bg-maroon-950/20">
           <span className="text-base shrink-0">{meta.emoji}</span>
           <span className="text-sm text-slate-500 dark:text-slate-400 font-medium shrink-0">{meta.label}</span>
-          <select
-            className="ml-auto flex-1 min-w-0 text-sm border border-slate-200 dark:border-slate-700
-                       rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200
-                       focus:outline-none focus:ring-1 focus:ring-maroon-400"
-            defaultValue=""
-            onChange={(e) => e.target.value && handleAdminAssign(e.target.value)}
-            disabled={busy}
-            autoFocus
-          >
-            <option value="" disabled>Pick member…</option>
-            {allMembers.map((m) => (
-              <option key={m.id} value={m.id}>TM {m.display_name}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => setAssigning(false)}
-            className="shrink-0 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 min-h-[36px] px-1"
-          >✕</button>
+          <div className="ml-auto flex-1 min-w-0">
+            <AssignPicker
+              members={allMembers}
+              busy={busy}
+              onPickMember={handleAdminAssign}
+              onPickGuest={handleGuestAssign}
+              onCancel={() => setAssigning(false)}
+            />
+          </div>
         </div>
       );
     }

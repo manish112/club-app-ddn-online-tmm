@@ -28,7 +28,8 @@ export default function AgendaPage() {
           const m = data as MeetingWithClaims;
           const byId = new Map<string, Member>();
           for (const c of m.role_claims) {
-            if (c.member) byId.set(c.member_id, c.member as Member);
+            // Guest holders have no member row; their name lives on the claim.
+            if (c.member_id && c.member) byId.set(c.member_id, c.member as Member);
           }
           setMeeting(m);
           setSections(buildAgendaSections(m, byId));

@@ -73,7 +73,9 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
 
   const membersById = new Map(members.map((m) => [m.id, m]));
   for (const c of meeting.role_claims) {
-    if (c.member && !membersById.has(c.member_id)) {
+    // Guest holders have no member row — buildAgendaSections reads their name
+    // off the claim itself.
+    if (c.member_id && c.member && !membersById.has(c.member_id)) {
       membersById.set(c.member_id, c.member as Member);
     }
   }

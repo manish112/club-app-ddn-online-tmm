@@ -86,19 +86,35 @@ export function leadershipRoleLabel(role: LeadershipRole): string {
   return LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
 }
 
+// The two clubs sharing this app. Members in 'offline' mode belong to the WIC
+// India club and take part in our meetings; everyone else is a home-club member.
+export const HOME_CLUB_NAME = 'Dehradun Online Toastmasters Club';
+export const WIC_CLUB_NAME  = 'Dehradun WIC India Toastmasters Club';
+export const WIC_CLUB_SHORT = 'WIC India';
+
 // How a member takes part in meetings. Admin-set; drives the role reservation
-// window (see reservationBlocked in lib/utils).
-export type ParticipationMode = 'online' | 'hybrid';
+// window (see reservationBlocked in lib/utils). 'online' and 'hybrid' are
+// home-club members; 'offline' is a visiting WIC India club member, who gets
+// the same view of everything but a later opening day for role sign-up.
+export type ParticipationMode = 'online' | 'hybrid' | 'offline';
 
 export const PARTICIPATION_MODES: { value: ParticipationMode; label: string; short: string; emoji: string; hint: string }[] = [
-  { value: 'online', label: 'Online only',        short: 'Online',  emoji: '🌐', hint: 'Attends meetings online only' },
-  { value: 'hybrid', label: 'Online & in-person', short: 'Hybrid',  emoji: '🏛️', hint: 'Can attend online or in person' },
+  { value: 'online',  label: 'Online only',        short: 'Online',  emoji: '🌐', hint: 'Attends meetings online only' },
+  { value: 'hybrid',  label: 'Online & in-person', short: 'Hybrid',  emoji: '🏛️', hint: 'Can attend online or in person' },
+  { value: 'offline', label: 'WIC India club',     short: 'WIC',     emoji: '🤝', hint: `Member of ${WIC_CLUB_NAME}` },
 ];
 
 // Members predate this field, so treat a missing value as online-only (the club
 // default) rather than silently locking someone out of the reservation window.
 export function participationMode(m: { participation_mode?: ParticipationMode | null }): ParticipationMode {
-  return m.participation_mode === 'hybrid' ? 'hybrid' : 'online';
+  return m.participation_mode === 'hybrid' || m.participation_mode === 'offline'
+    ? m.participation_mode
+    : 'online';
+}
+
+// Which club a member belongs to — the only thing the mode says about identity.
+export function clubNameFor(mode: ParticipationMode): string {
+  return mode === 'offline' ? WIC_CLUB_NAME : HOME_CLUB_NAME;
 }
 export function participationModeMeta(mode: ParticipationMode) {
   return PARTICIPATION_MODES.find((p) => p.value === mode) ?? PARTICIPATION_MODES[0];
@@ -170,7 +186,10 @@ export interface RoleClaim {
   meeting_id: string;
   role_key: RoleKey;
   slot_index: number;   // always ≥ 1; single-slot roles use 1
-  member_id: string;
+  // Exactly one of these identifies the holder: a club member, or a guest an
+  // admin named by hand (see claimHolderName in lib/utils).
+  member_id: string | null;
+  guest_name: string | null;
   claimed_at: string;
   admin_override: boolean;
   // Speaker-only fields (Pathways speech details)

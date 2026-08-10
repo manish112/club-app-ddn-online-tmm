@@ -1,5 +1,5 @@
 import type { Meeting, MeetingWithClaims, Member, ParticipationMode, RoleKey, SpeakerGroup } from './types';
-import { specialSessionName } from './types';
+import { specialSessionName, WIC_CLUB_SHORT } from './types';
 import { isRoleEnabled } from './types';
 import { ROLE_META, getMeetingRoles } from './types';
 
@@ -65,15 +65,15 @@ function buildRolePlayerBlocks(meeting: MeetingWithClaims, membersById: Map<stri
       let n = 0;
       for (const slot of bucket.slots) {
         const sc = claimFor('speaker', slot);
-        const speaker = sc && membersById.get(sc.member_id);
-        if (!sc || !speaker) continue;
+        const speakerName = sc && claimHolderName(sc, sc.member_id ? membersById.get(sc.member_id) : null);
+        if (!sc || !speakerName) continue;
         n += 1;
         const meta = [sc.path, sc.speech_level ? `L${sc.speech_level}` : null, sc.project].filter(Boolean).join(' · ');
         const title = sc.speech_title ? ` — "${sc.speech_title}"` : '';
-        rows.push(`${n}. 🎙️ TM ${speaker.display_name}${title}${meta ? ` (${meta})` : ''}`);
+        rows.push(`${n}. 🎙️ ${speakerName}${title}${meta ? ` (${meta})` : ''}`);
         const ec = claimFor('evaluator', slot);
-        const evaluator = ec && membersById.get(ec.member_id);
-        if (evaluator) rows.push(`   ⚖️ Evaluator: TM ${evaluator.display_name}`);
+        const evaluatorName = ec && claimHolderName(ec, ec.member_id ? membersById.get(ec.member_id) : null);
+        if (evaluatorName) rows.push(`   ⚖️ Evaluator: ${evaluatorName}`);
       }
       if (rows.length) {
         blocks.push(`*${bucket.group ? bucket.group.name : 'Unassigned'}*`);
@@ -104,13 +104,14 @@ function buildRolePlayerBlocks(meeting: MeetingWithClaims, membersById: Map<stri
     for (let slot = 1; slot <= slots; slot++) {
       const claim = claimFor(key, slot);
       if (!claim) continue;
-      const member = membersById.get(claim.member_id);
-      if (!member) continue;
+      const member = claim.member_id ? membersById.get(claim.member_id) : null;
+      const name = claimHolderName(claim, member);
+      if (!name) continue;
       const label = slots > 1
-        ? `${meta.emoji} ${meta.label} ${slot} – TM ${member.display_name}`
-        : `${meta.emoji} ${meta.label} – TM ${member.display_name}`;
+        ? `${meta.emoji} ${meta.label} ${slot} – ${name}`
+        : `${meta.emoji} ${meta.label} – ${name}`;
       blocks.push(label);
-      if (member.introduction) blocks.push(member.introduction);
+      if (member?.introduction) blocks.push(member.introduction);
       blocks.push('');
     }
   }
@@ -187,13 +188,44 @@ export function getMemberRecentRoles(
     .slice(0, limit);
 }
 
-// ── Online-only role reservation ─────────────────────────────────────────────
-// While a meeting is still further out than `daysBefore` days, its roles are
-// held for members who take part online only; from that point on they open to
-// everyone. Independent of the rotation rule (consecutiveRoleBlocked), which
-// applies in both phases.
+// ── Who holds a role ─────────────────────────────────────────────────────────
+// A claim belongs either to a club member or to a guest an admin named by hand
+// (migration 053). These two helpers are the only place that decides how each
+// reads, so "TM Asha" / "Ravi (Guest)" stays the same everywhere.
+
+// Full form, for agendas, cards and share text. `member` is the resolved member
+// row (null for a guest, or when the caller couldn't look it up). Returns null
+// when neither is available — callers skip those rows rather than print "…".
+export function claimHolderName(
+  claim: { guest_name?: string | null },
+  member: Member | null | undefined,
+): string | null {
+  if (claim.guest_name) return `${claim.guest_name} (Guest)`;
+  return member ? `TM ${member.display_name}` : null;
+}
+
+// Bare form — no "TM", no "(Guest)" — for tight columns and agenda tables.
+export function claimHolderShortName(
+  claim: { guest_name?: string | null },
+  member: Member | null | undefined,
+): string {
+  return claim.guest_name ?? member?.display_name ?? '';
+}
+
+// ── Role reservation windows ─────────────────────────────────────────────────
+// Two independent gates, both "roles open N days before the meeting date":
+//
+//   online  — while a meeting is further out than DEFAULT_RESERVATION_DAYS_BEFORE
+//             days, roles are held for members who take part online only; from
+//             that point they open to the rest of the home club.
+//   offline — WIC India club members sign up only in the last few days, so the
+//             home club gets first pick of every role.
+//
+// Both are independent of the rotation rule (consecutiveRoleBlocked), which
+// applies throughout.
 
 export const DEFAULT_RESERVATION_DAYS_BEFORE = 7;
+export const DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE = 2;
 
 export interface RoleReservation {
   active: boolean;          // reservation currently in effect for this meeting
@@ -231,12 +263,29 @@ export function reservationCountdown(reservation: RoleReservation): string {
   return days <= 1 ? 'tomorrow' : `in ${days} days`;
 }
 
-// Why a member can't claim during the reservation window, or null if they can.
-// Online-only members are never blocked by this rule.
+// When role sign-up opens for WIC India ("offline") members. Same countdown as
+// the online reservation, on its own — usually much shorter — lead time, and
+// switched on separately so either gate can run without the other.
+export function offlineClaimWindow(
+  meeting: Meeting,
+  enabled: boolean,
+  daysBefore: number = DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE,
+): RoleReservation | null {
+  return roleReservation(meeting, enabled, daysBefore);
+}
+
+// Why a member can't claim yet, or null if they can. Online-only members are
+// never blocked; WIC India members answer to their own window rather than the
+// online one, so the two gates never stack.
 export function reservationBlocked(
   mode: ParticipationMode,
   reservation: RoleReservation | null,
+  offlineWindow: RoleReservation | null = null,
 ): string | null {
+  if (mode === 'offline') {
+    if (!offlineWindow?.active) return null;
+    return `Opens to ${WIC_CLUB_SHORT} members on ${formatShortDate(offlineWindow.opensOn)}`;
+  }
   if (!reservation?.active || mode === 'online') return null;
   return `Reserved for online members only till ${formatShortDate(reservation.reservedThrough)}`;
 }
@@ -354,8 +403,7 @@ export function buildWhatsAppAgenda(
       (c) => c.role_key === roleKey && c.slot_index === slot
     );
     if (!claim) return '';
-    const m = membersById.get(claim.member_id);
-    return m ? `TM ${m.display_name}` : '';
+    return claimHolderName(claim, claim.member_id ? membersById.get(claim.member_id) : null) ?? '';
   };
 
   // Only invite people to claim roles while there's still an open slot and the
@@ -599,12 +647,14 @@ export function buildAgendaSections(
     return `${h12}:${String(nm).padStart(2, '0')} ${ampm}`;
   }
 
-  // Returns display_name if the slot is claimed, '' if unclaimed (slot exists but nobody signed up)
+  // Returns the holder's bare name if the slot is claimed (a guest's typed name
+  // reads as-is), '' if unclaimed (slot exists but nobody signed up)
   function getName(key: RoleKey, slot = 1): string {
     const claim = meeting.role_claims.find(
       (c) => c.role_key === key && c.slot_index === slot
     );
-    return claim ? (membersById.get(claim.member_id)?.display_name ?? '') : '';
+    if (!claim) return '';
+    return claimHolderShortName(claim, claim.member_id ? membersById.get(claim.member_id) : null);
   }
 
   function r(
@@ -674,7 +724,9 @@ export function buildAgendaSections(
         const spkClaim = meeting.role_claims.find(
           (c) => c.role_key === 'speaker' && c.slot_index === slot
         );
-        const spkName  = spkClaim ? (membersById.get(spkClaim.member_id)?.display_name ?? '') : '';
+        const spkName  = spkClaim
+          ? claimHolderShortName(spkClaim, spkClaim.member_id ? membersById.get(spkClaim.member_id) : null)
+          : '';
         const { min: spkMin, max: spkMax } = speechTimeRange(spkClaim, config.l1SpeechMins, config.otherSpeechMins);
         const durLabel = `${spkMin}–${spkMax} MIN`;
         const spkMins  = spkMax;

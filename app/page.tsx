@@ -7,10 +7,10 @@ import { MemberPicker } from '@/components/MemberPicker';
 import { ThemeReminderModal } from '@/components/ThemeReminderModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims, ParticipationMode } from '@/lib/types';
-import { isClubOfficer } from '@/lib/types';
+import { isClubOfficer, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
 import { MemberDashboard } from '@/components/MemberDashboard';
 import { SiteFooter } from '@/components/SiteFooter';
-import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { isMeetingPast, getAdjacentMemberRoles, DEFAULT_AGENDA_CONFIG, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { useCapture } from '@/lib/capture';
 import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
@@ -31,6 +31,7 @@ export default function Home() {
   const [maxSpeakerSlots, setMaxSpeakerSlots] = useState(DEFAULT_AGENDA_CONFIG.maxSpeakerSlots);
 
   const [reservation, setReservation] = useState({ enabled: false, daysBefore: DEFAULT_RESERVATION_DAYS_BEFORE });
+  const [offlineReservation, setOfflineReservation] = useState({ enabled: false, daysBefore: DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
   const [participationMode, setParticipationMode] = useState<ParticipationMode>('online');
 
   useEffect(() => {
@@ -53,6 +54,19 @@ export default function Home() {
         setReservation({
           enabled: data.online_reservation_enabled === true,
           daysBefore: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE,
+        });
+      });
+    // Likewise for the WIC India window — its own read, so a club that hasn't
+    // run migration 052 yet simply sees the gate switched off.
+    createClient()
+      .from('agenda_config')
+      .select('offline_reservation_enabled, offline_reservation_days_before')
+      .single()
+      .then(({ data }) => {
+        if (!data) return;
+        setOfflineReservation({
+          enabled: data.offline_reservation_enabled === true,
+          daysBefore: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE,
         });
       });
   }, []);
@@ -81,7 +95,7 @@ export default function Home() {
     if (!currentMember) { setParticipationMode('online'); return; }
     createClient()
       .from('members').select('participation_mode').eq('id', currentMember.id).maybeSingle()
-      .then(({ data }) => setParticipationMode(data?.participation_mode === 'hybrid' ? 'hybrid' : 'online'));
+      .then(({ data }) => setParticipationMode(readParticipationMode(data ?? {})));
   }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -264,6 +278,20 @@ export default function Home() {
         </div>
       </header>
 
+      {/* ── Visiting-club banner ── */}
+      {/* WIC India members share this app with the home club, so say plainly
+          which club they're signed in as — everything else looks identical. */}
+      {currentMember && participationMode === 'offline' && (
+        <div className="bg-violet-50 dark:bg-violet-950/40 border-b border-violet-200 dark:border-violet-800/40">
+          <div className="max-w-2xl mx-auto px-4 py-2.5 flex items-center gap-2.5">
+            <span className="text-base leading-none shrink-0">🤝</span>
+            <p className="text-xs text-violet-800 dark:text-violet-300 leading-relaxed">
+              You&apos;re signed in as a member of <strong>{WIC_CLUB_NAME}</strong>.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Announcement banner ── */}
       {announcement && !announceDismissed && (
         <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/40">
@@ -385,6 +413,8 @@ export default function Home() {
                     maxSpeakerSlots={maxSpeakerSlots}
                     reservationEnabled={reservation.enabled}
                     reservationDaysBefore={reservation.daysBefore}
+                    offlineReservationEnabled={offlineReservation.enabled}
+                    offlineReservationDaysBefore={offlineReservation.daysBefore}
                     participationMode={participationMode}
                     onChanged={refetch}
                   />
