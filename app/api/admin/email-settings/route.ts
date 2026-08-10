@@ -17,6 +17,17 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ...rest, hasPassword: !!smtp_pass });
 }
 
+// Lead times for the open-roles invitation: whole days in the fortnight before
+// a meeting, unique, furthest-out first, at most four. Anything unusable is
+// dropped rather than rejected — a bad value shouldn't block a settings save.
+function sanitizeLeadDays(raw: unknown): number[] {
+  const list = Array.isArray(raw) ? raw : [raw];
+  const days = list
+    .map((d) => Number(d))
+    .filter((d) => Number.isInteger(d) && d >= 0 && d <= 14);
+  return [...new Set(days)].sort((a, b) => b - a).slice(0, 4);
+}
+
 // POST: update settings. A blank smtp_pass leaves the stored password unchanged.
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -39,6 +50,11 @@ export async function POST(req: NextRequest) {
     day_before_enabled: !!s.day_before_enabled,
     day_before_meeting_enabled: !!s.day_before_meeting_enabled,
     hour_before_enabled: !!s.hour_before_enabled,
+    // Open-roles invitation (migration 054). Lead times are de-duplicated and
+    // clamped to the fortnight before a meeting; four sends is plenty, beyond
+    // that an invitation starts to feel like pestering.
+    open_roles_enabled: !!s.open_roles_enabled,
+    open_roles_days_before: sanitizeLeadDays(s.open_roles_days_before),
     updated_at: new Date().toISOString(),
   };
   // Only overwrite the password when a non-empty value was supplied.

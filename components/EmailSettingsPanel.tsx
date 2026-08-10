@@ -2,7 +2,34 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Member } from '@/lib/types';
 import { RichMessageEditor } from '@/components/RichMessageEditor';
+import { createClient } from '@/utils/supabase/client';
 import { formatMeetingDate, formatTime } from '@/lib/utils';
+
+const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// Whatever is stored, read it as a list of lead days. Guards the UI against a
+// null column or the single integer this setting used to be.
+function asLeadDays(raw: unknown): number[] {
+  const list = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  return list.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 14);
+}
+
+// The lead time is stored as days before the meeting, but admins think in
+// weekdays — so each option is labelled with the day it lands on for the club's
+// usual meeting day. Covers the fortnight before a meeting.
+function leadDayOptions(meetingWeekday: number): { days: number; label: string }[] {
+  return Array.from({ length: 15 }, (_, days) => {
+    const wd = (((meetingWeekday - days) % 7) + 7) % 7;
+    const label = days === 0
+      ? `${WEEKDAY_LABELS[wd]} — meeting day`
+      : days === 1
+        ? `${WEEKDAY_LABELS[wd]} — the day before`
+        : days < 7
+          ? `${WEEKDAY_LABELS[wd]} — ${days} days before`
+          : `${WEEKDAY_LABELS[wd]} — ${days} days before, the week prior`;
+    return { days, label };
+  });
+}
 
 const inputCls = 'w-full border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-maroon-600';
 const cardCls = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-card-light dark:shadow-card-dark';
@@ -24,6 +51,8 @@ interface Settings {
   day_before_enabled: boolean;
   day_before_meeting_enabled: boolean;
   hour_before_enabled: boolean;
+  open_roles_enabled: boolean;
+  open_roles_days_before: number[];
   hasPassword?: boolean;
 }
 
@@ -90,6 +119,7 @@ const EMPTY: Settings = {
   enabled: false, smtp_host: '', smtp_port: 587, smtp_secure: false, smtp_user: '', smtp_pass: '',
   from_name: 'Dehradun Online Toastmasters', from_email: '', reply_to: '', app_url: '',
   day_before_enabled: true, day_before_meeting_enabled: true, hour_before_enabled: true,
+  open_roles_enabled: true, open_roles_days_before: [2],
 };
 
 export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId: string; members: Member[] }) {
@@ -101,6 +131,14 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
   const [testTo, setTestTo] = useState('');
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<string | null>(null);
+  // The club's usual meeting day, so the lead-time picker can name the weekday
+  // each option lands on. Defaults to Saturday if the read fails.
+  const [meetingWeekday, setMeetingWeekday] = useState(6);
+
+  useEffect(() => {
+    createClient().from('agenda_config').select('schedule_weekday').single()
+      .then(({ data }) => { if (data?.schedule_weekday != null) setMeetingWeekday(data.schedule_weekday); });
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -110,7 +148,12 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
       ]);
       if (sRes.ok) {
         const s = await sRes.json();
-        setSettings({ ...EMPTY, ...s, smtp_pass: '' });
+        setSettings({
+          ...EMPTY, ...s, smtp_pass: '',
+          // Tolerate a stored scalar or null: this setting was a single integer
+          // before it became a list of lead days.
+          open_roles_days_before: asLeadDays(s.open_roles_days_before),
+        });
       }
       if (tRes.ok) setTpl(await tRes.json());
       setLoading(false);
@@ -201,6 +244,54 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
             <span className="text-sm text-slate-700 dark:text-slate-300">Send meeting reminder shortly before it starts</span>
             <input type="checkbox" checked={settings.hour_before_enabled} onChange={(e) => set('hour_before_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
           </label>
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm text-slate-700 dark:text-slate-300">
+              Invite members to fill open roles
+              <span className="block text-xs text-slate-400 dark:text-slate-500">
+                Lists only the roles still unclaimed; skipped when the agenda is full.
+              </span>
+            </span>
+            <input type="checkbox" checked={settings.open_roles_enabled} onChange={(e) => set('open_roles_enabled', e.target.checked)} className="w-5 h-5 accent-maroon-600" />
+          </label>
+          {settings.open_roles_enabled && (
+            <div className="pl-1">
+              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+                Send the invitation on <span className="text-slate-400">(pick up to 4)</span>
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                {leadDayOptions(meetingWeekday).slice(0, 8).map(({ days, label }) => {
+                  const selected = asLeadDays(settings.open_roles_days_before);
+                  const chosen = selected.includes(days);
+                  const atLimit = selected.length >= 4 && !chosen;
+                  return (
+                    <label key={days} className={`flex items-center gap-2 text-xs ${atLimit ? 'opacity-40' : 'cursor-pointer'}`}>
+                      <input
+                        type="checkbox"
+                        checked={chosen}
+                        disabled={atLimit}
+                        onChange={(e) => set('open_roles_days_before', e.target.checked
+                          ? [...selected, days].sort((a, b) => b - a)
+                          : selected.filter((d) => d !== days))}
+                        className="w-4 h-4 accent-maroon-600 shrink-0"
+                      />
+                      <span className="text-slate-600 dark:text-slate-300">{label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">
+                Counted back from each meeting&apos;s own date, so a meeting moved off{' '}
+                {WEEKDAY_LABELS[meetingWeekday]} takes its invitations with it. Each send goes only to
+                members who still don&apos;t have a role — so a second nudge never reaches someone who
+                signed up after the first.
+              </p>
+              {asLeadDays(settings.open_roles_days_before).length === 0 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                  No days chosen — the invitation won&apos;t go out at all.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -228,8 +319,235 @@ export function EmailSettingsPanel({ currentAdminId, members }: { currentAdminId
       {/* ── Send to a specific member ── */}
       {tpl && <SendToMember currentAdminId={currentAdminId} members={members} keys={tpl.keys} labels={tpl.labels} placeholders={tpl.placeholders} />}
 
+      {/* ── Activity report for one member ── */}
+      <ActivityReportCard currentAdminId={currentAdminId} members={members} />
+
       {/* ── Templates ── */}
       {tpl && <TemplateEditors data={tpl} currentAdminId={currentAdminId} />}
+    </div>
+  );
+}
+
+// Send one member their own record of roles played — a single month, or
+// everything since they joined. On demand only; nothing here is scheduled.
+function ActivityReportCard({ currentAdminId, members }: { currentAdminId: string; members: Member[] }) {
+  const [audience, setAudience] = useState<'one' | 'all' | 'without_roles'>('one');
+  const [memberId, setMemberId] = useState('');
+  const [period, setPeriod] = useState<'month' | 'all'>('month');
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  type Sample = { subject: string; html: string; template: string; to: string };
+  const [preview, setPreview] = useState<Sample | null>(null);
+  // Dry run of a club-wide send: exactly who'd be emailed, and what they'd get.
+  const [dryRun, setDryRun] = useState<
+    { recipients: { id: string; name: string; template: string }[]; passedOver: number; skipped: number } | null
+  >(null);
+
+  const withEmail = members.filter((m) => m.email && m.active);
+  const payload = () => ({
+    adminId: currentAdminId,
+    memberId,
+    scope: audience,
+    month: period === 'month' ? month : null,
+  });
+  const clear = () => { setMsg(null); setPreview(null); setDryRun(null); };
+
+  const periodText = period === 'month' ? `for ${month}` : 'since they joined';
+
+  async function send() {
+    if (audience === 'all' && !confirm(
+      `Email every active member their activity ${periodText}?\n\n`
+      + 'Members with nothing on record get the encouraging version instead.'
+    )) return;
+    if (audience === 'without_roles' && !confirm(
+      `Send a "pick up a role" reminder to the members who took no role ${periodText}?\n\n`
+      + 'Everyone who did take a role is left alone — they get nothing.'
+    )) return;
+
+    setBusy(true); clear();
+    const res = await fetch('/api/admin/email-activity', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(`✗ ${data.error ?? 'Could not send'}`); return; }
+    if (audience === 'without_roles') {
+      setMsg(`✓ ${data.encouragements} reminder${data.encouragements === 1 ? '' : 's'} sent`
+        + ` · ${data.passedOver} already took a role`
+        + (data.skipped ? ` · ${data.skipped} skipped` : ''));
+    } else if (audience === 'all') {
+      setMsg(`✓ ${data.reports} report${data.reports === 1 ? '' : 's'} and ${data.encouragements} encouragement${data.encouragements === 1 ? '' : 's'} sent`
+        + (data.skipped ? ` · ${data.skipped} skipped` : ''));
+    } else {
+      setMsg(data.template === 'activity_encouragement'
+        ? '✓ Sent — no roles on record, so the encouraging version went out'
+        : '✓ Report sent');
+    }
+  }
+
+  // For one member this renders their email. For a club-wide run it lists who
+  // would be emailed and shows a real sample built from the first of them.
+  async function showPreview() {
+    setBusy(true); clear();
+    const res = await fetch('/api/admin/email-activity', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload(), preview: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(`✗ ${data.error ?? 'Could not build preview'}`); return; }
+    if (audience === 'one') { setPreview(data); return; }
+    setDryRun({ recipients: data.recipients ?? [], passedOver: data.passedOver ?? 0, skipped: data.skipped ?? 0 });
+    setPreview(data.sample ?? null);
+    if ((data.recipients ?? []).length === 0) setMsg('No one matches — nothing would be sent.');
+  }
+
+  return (
+    <div className={`${cardCls} p-5 space-y-4`}>
+      <div>
+        <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">
+          Activity report &amp; role reminders
+        </h3>
+        <p className="text-xs text-slate-500">
+          Email members their own record — which meetings they took a role at and what they played.
+          Counts roles already played and any they&apos;re signed up for in meetings still to come.
+          Anyone with nothing on record gets a nudge to pick up a role instead of a report.
+        </p>
+      </div>
+
+      <div>
+        <span className={labelCls}>Send to</span>
+        <div className="flex gap-1.5 flex-wrap">
+          {([
+            ['one', 'One member'],
+            ['all', 'All members'],
+            ['without_roles', 'Remind those without a role'],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => { setAudience(value); clear(); }}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                audience === value
+                  ? 'bg-maroon-700 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {audience === 'one' ? (
+        <div>
+          <span className={labelCls}>Member</span>
+          <select value={memberId} onChange={(e) => { setMemberId(e.target.value); clear(); }} className={inputCls}>
+            <option value="">Pick a member…</option>
+            {withEmail.map((m) => <option key={m.id} value={m.id}>TM {m.display_name}</option>)}
+          </select>
+          {members.length !== withEmail.length && (
+            <p className="text-[11px] text-slate-400 mt-1">
+              {members.length - withEmail.length} inactive or without an email are hidden.
+            </p>
+          )}
+        </div>
+      ) : audience === 'all' ? (
+        <p className="text-xs text-slate-500 dark:text-slate-400 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
+          Goes to all <strong className="text-slate-700 dark:text-slate-300">{withEmail.length}</strong> active
+          members with an email address. To check the wording first, switch to <strong>One member</strong> and preview it.
+        </p>
+      ) : (
+        <p className="text-xs text-slate-500 dark:text-slate-400 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
+          A nudge to <strong className="text-slate-700 dark:text-slate-300">pick up a role</strong> — not an
+          activity report. It goes only to members who took no role at all in the chosen period, listing
+          what&apos;s still open at the next meeting so they have something to say yes to. Anyone who did
+          take a role, or is already signed up for an upcoming one, gets nothing.
+        </p>
+      )}
+
+      <div>
+        <span className={labelCls}>Period</span>
+        <div className="flex gap-1.5 mb-2">
+          {([['month', 'A month'], ['all', 'Since joining']] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => { setPeriod(value); clear(); }}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                period === value
+                  ? 'bg-maroon-700 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {period === 'month' && (
+          <input type="month" value={month} onChange={(e) => { setMonth(e.target.value); clear(); }} className={inputCls} />
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={send} disabled={busy || (audience === 'one' && !memberId) || (period === 'month' && !month)} className={primaryBtn}>
+          {busy ? 'Working…'
+            : audience === 'all' ? `Send to ${withEmail.length} members`
+            : audience === 'without_roles' ? 'Send reminders'
+            : 'Send report'}
+        </button>
+        <button
+          onClick={showPreview}
+          disabled={busy || (audience === 'one' && !memberId) || (period === 'month' && !month)}
+          className={ghostBtn}
+        >
+          {audience === 'one' ? 'Preview' : 'Preview & list recipients'}
+        </button>
+        {msg && <span className="text-sm text-slate-500">{msg}</span>}
+      </div>
+
+      {dryRun && (
+        <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+            Who would get this · {dryRun.recipients.length}
+          </p>
+          {dryRun.recipients.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              Nobody matches right now — everyone has taken a role in this period.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {dryRun.recipients.map((r) => (
+                <span key={r.id}
+                  title={r.template === 'activity_encouragement' ? 'Gets the pick-a-role reminder' : 'Gets their activity report'}
+                  className={`text-[11px] font-medium px-2 py-1 rounded-lg border ${
+                    r.template === 'activity_encouragement'
+                      ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50'
+                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/60'
+                  }`}>
+                  TM {r.name}
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-slate-400 mt-2">
+            {dryRun.passedOver > 0 && <>{dryRun.passedOver} already took a role and would be skipped. </>}
+            {dryRun.skipped > 0 && <>{dryRun.skipped} have no email on file. </>}
+            Nothing has been sent yet.
+          </p>
+        </div>
+      )}
+
+      {preview && (
+        <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">
+            {audience === 'one' ? 'Preview' : 'Sample of what they receive'}
+            {' · '}
+            {preview.template === 'activity_encouragement' ? 'pick-a-role reminder' : 'activity report'}
+          </p>
+          <p className="text-xs text-slate-500 mb-2">
+            <strong className="text-slate-700 dark:text-slate-300">
+              {audience === 'one' ? 'To:' : 'Example recipient:'}
+            </strong> {preview.to}<br />
+            <strong className="text-slate-700 dark:text-slate-300">Subject:</strong> {preview.subject}
+          </p>
+          <iframe srcDoc={preview.html} title="Email preview" className="w-full h-96 rounded-xl border border-slate-200 dark:border-slate-700 bg-white" />
+        </div>
+      )}
     </div>
   );
 }
@@ -314,6 +632,7 @@ const BROADCAST_OPTIONS = [
   { key: 'meeting_created',     label: 'New meeting announcement', to: 'all members', meeting: true },
   { key: 'meeting_reminder_day_before', label: 'Meeting reminder (1 day before)', to: 'all members', meeting: true },
   { key: 'meeting_reminder',    label: 'Meeting reminder (starting soon)', to: 'all members', meeting: true },
+  { key: 'open_roles',          label: 'Open roles invitation', to: 'all members', meeting: true },
   { key: 'role_reminder',       label: 'Role reminders',            to: 'each role holder (next meeting)', meeting: true },
   { key: 'role_assigned',       label: 'Role assigned',             to: 'each role holder (next meeting)', meeting: true },
   { key: 'leadership_assigned', label: 'Leadership role appointed', to: 'each club officer', meeting: false },
@@ -383,10 +702,26 @@ function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
   const [targetId, setTargetId] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
   const { meeting, loaded, reload } = useTargetMeeting(currentAdminId);
 
   // Templates that render meeting details are filled from the next meeting.
   const needsMeeting = (placeholders[templateKey] ?? []).includes('meeting_number');
+
+  // Render exactly what this member would receive — their name, their roles,
+  // the meeting it would reference — without sending anything.
+  async function showPreview() {
+    if (!targetId || !templateKey) return;
+    setSending(true); setMsg(null); setPreview(null);
+    const res = await fetch('/api/admin/email-preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: currentAdminId, targetMemberId: targetId, templateKey }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setSending(false);
+    if (!res.ok) { setMsg(`✗ ${d.error ?? 'Could not build preview'}`); return; }
+    setPreview({ subject: d.subject, html: d.html });
+  }
 
   async function send() {
     if (!targetId || !templateKey) return;
@@ -427,10 +762,23 @@ function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
         )}
       </div>
       {needsMeeting && <MeetingTargetBanner meeting={meeting} loaded={loaded} />}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <button onClick={send} disabled={sending || !targetId} className={primaryBtn}>{sending ? 'Sending…' : 'Send email'}</button>
+        <button onClick={showPreview} disabled={sending || !targetId} className={ghostBtn}>Preview</button>
         {msg && <span className="text-sm text-slate-500">{msg}</span>}
       </div>
+
+      {preview && (
+        <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">
+            Preview · as {withEmail.find((m) => m.id === targetId)?.display_name ?? 'this member'} would receive it
+          </p>
+          <p className="text-xs text-slate-500 mb-2">
+            <strong className="text-slate-700 dark:text-slate-300">Subject:</strong> {preview.subject}
+          </p>
+          <iframe srcDoc={preview.html} title="Email preview" className="w-full h-96 rounded-xl border border-slate-200 dark:border-slate-700 bg-white" />
+        </div>
+      )}
     </div>
   );
 }

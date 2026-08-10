@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import { createServiceClient } from '@/utils/supabase/server';
 import { DEFAULT_TEMPLATES, type TemplateKey } from './defaults';
 import { fillTemplate, type TemplateVars } from './render';
+import { decodeEntities } from './format';
 
 export interface EmailSettings {
   enabled: boolean;
@@ -17,6 +18,10 @@ export interface EmailSettings {
   day_before_enabled: boolean;
   day_before_meeting_enabled: boolean;
   hour_before_enabled: boolean;
+  open_roles_enabled: boolean;
+  // Lead times in days before the meeting, so the invitation tracks the club's
+  // schedule. More than one means it goes out more than once.
+  open_roles_days_before: number[];
 }
 
 export const DEFAULT_APP_URL = 'https://dehradun-online-tm.vercel.app';
@@ -145,7 +150,7 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
   }
 
   const allVars = { vp_education_name: await getVpEducationName(), ...vars };
-  const subject = fillTemplate(tpl.subject, allVars);
+  const subject = decodeEntities(fillTemplate(tpl.subject, allVars));
   const html = fillTemplate(tpl.body_html, allVars);
 
   try {

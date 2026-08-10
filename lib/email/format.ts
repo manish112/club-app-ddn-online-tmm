@@ -23,6 +23,22 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// Email subjects are plain text, not HTML — an entity there arrives literally
+// ("There&apos;s a place for you"). Templates are HTML everywhere else, so an
+// entity slipping into a subject is an easy mistake to make, whether in a
+// built-in default or an admin's edit. Undo it at send time so it can't reach
+// anyone's inbox.
+export function decodeEntities(s: string): string {
+  return s
+    .replace(/&apos;|&#0*39;/g, "'")
+    .replace(/&quot;|&#0*34;/g, '"')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    // Ampersand last, so "&amp;lt;" doesn't become a tag.
+    .replace(/&amp;/g, '&');
+}
+
 // A card showing a person's bio (profile introduction). Empty when absent.
 export function bioBlock(name: string, bio: string | null | undefined): string {
   if (!bio?.trim()) return '';
