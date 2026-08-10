@@ -11,7 +11,7 @@ import type {
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
   EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup, ParticipationMode, RoleInterestRequest,
 } from '@/lib/types';
-import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
+import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
 import {
   DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
   type TimerModes, type TimerModeKey, type TimerThresholds,
@@ -29,7 +29,7 @@ const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
   { key: 'timer',      label: 'Timer' },
   { key: 'harkmaster', label: 'Harkmaster' },
 ];
-import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, DEFAULT_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, offlineClaimWindow, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -414,6 +414,117 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   );
 }
 
+// ─── Deactivate / delete confirmation ─────────────────────────────────────────
+
+// One dialog for both destructive member actions, because the useful thing to
+// say is how they differ: deactivating is reversible and keeps the record,
+// deleting isn't and doesn't. Delete asks the admin to type the name — the
+// button sits next to Deactivate, and the two must not be one slip apart.
+function MemberActionConfirm({
+  member, action, working, history, error, confirmName,
+  onConfirmNameChange, onCancel, onDeactivate, onDelete,
+}: {
+  member: Member;
+  action: 'deactivate' | 'delete';
+  working: boolean;
+  history: { label: string; count: number }[] | null;
+  error: string;
+  confirmName: string;
+  onConfirmNameChange: (v: string) => void;
+  onCancel: () => void;
+  onDeactivate: () => void;
+  onDelete: (purgeHistory: boolean) => void;
+}) {
+  const name = member.display_name || member.name;
+  const nameMatches = confirmName.trim().toLowerCase() === name.toLowerCase();
+  const hasHistory = !!history && history.length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+      onClick={onCancel}>
+      <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark p-6"
+        onClick={(e) => e.stopPropagation()}>
+        {action === 'deactivate' ? (
+          <>
+            <h2 className="font-serif text-lg font-semibold text-slate-900 dark:text-white mb-1">
+              Deactivate TM {name}?
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed mb-4">
+              They&apos;ll drop off the roster, the sign-in list and the role pickers, and stop receiving
+              club emails. Roles they already hold stay on their meetings. You can restore them at any
+              time — nothing is lost.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={onDeactivate} disabled={working}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2.5 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all">
+                {working ? 'Deactivating…' : 'Deactivate'}
+              </button>
+              <button onClick={onCancel} className="px-4 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[44px]">
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="font-serif text-lg font-semibold text-slate-900 dark:text-white mb-1">
+              Delete TM {name}?
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed mb-3">
+              This removes the member from the database for good. There is no undo. If they&apos;ve just
+              left the club, <strong className="text-slate-600 dark:text-slate-300">Deactivate</strong> is
+              almost always what you want.
+            </p>
+
+            {hasHistory && (
+              <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/25 p-3 mb-3">
+                <p className="text-xs font-bold text-red-800 dark:text-red-300 mb-1">
+                  TM {name} has club history on record
+                </p>
+                <ul className="text-xs text-red-700 dark:text-red-400/90 leading-relaxed">
+                  {history.map((h) => (
+                    <li key={h.label}>• {h.count} {h.label}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-red-700 dark:text-red-400/90 leading-relaxed mt-1.5">
+                  Deleting them erases all of it — past agendas and results will no longer show who did what.
+                </p>
+              </div>
+            )}
+
+            {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
+
+            <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+              Type <strong className="text-slate-700 dark:text-slate-200">{name}</strong> to confirm
+            </label>
+            <input
+              type="text"
+              value={confirmName}
+              onChange={(e) => onConfirmNameChange(e.target.value)}
+              autoFocus
+              className="w-full border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm mb-4
+                         bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100
+                         focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => onDelete(hasHistory)}
+                disabled={working || !nameMatches}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2.5 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all"
+              >
+                {working ? 'Deleting…' : hasHistory ? 'Delete member and history' : 'Delete permanently'}
+              </button>
+              <button onClick={onCancel} className="px-4 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[44px]">
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Member row ────────────────────────────────────────────────────────────────
 
 function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
@@ -428,6 +539,13 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
+  // Both destructive actions confirm first; 'delete' also reports what history
+  // stands in the way before anything is touched.
+  const [confirming, setConfirming] = useState<'deactivate' | 'delete' | null>(null);
+  const [working, setWorking] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteHistory, setDeleteHistory] = useState<{ label: string; count: number }[] | null>(null);
+  const [confirmName, setConfirmName] = useState('');
 
   const mode = participationMode(member);
 
@@ -442,10 +560,50 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setSaving(false); setEditing(false); onUpdated();
   }
 
+  // Reversible: the member keeps everything, just stops appearing in pickers,
+  // sign-in and the roster. Restoring puts them straight back.
   async function toggleActive() {
+    setWorking(true);
     const { error } = await supabase.from('members').update({ active: !member.active }).eq('id', member.id);
+    setWorking(false);
     if (error) { alert(`Failed: ${error.message}`); return; }
+    closeConfirm();
     onUpdated();
+  }
+
+  // Irreversible: removes the member row itself. The route refuses (409) while
+  // the member still has history, and only proceeds once the admin has seen the
+  // tally and asked for it to be purged too.
+  async function deleteMember(purgeHistory: boolean) {
+    setWorking(true);
+    setDeleteError('');
+    const res = await fetch('/api/admin/delete-member', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminId: currentAdminId, memberId: member.id, purgeHistory }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setWorking(false);
+    if (!res.ok) {
+      // Revealing the history is a new fact to weigh — make them re-type the
+      // name so the second click can't be a stray double-click on the first.
+      if (data.error === 'has_history') {
+        setDeleteHistory(data.history ?? []);
+        setConfirmName('');
+        return;
+      }
+      setDeleteError(data.error || 'Could not delete this member.');
+      return;
+    }
+    closeConfirm();
+    onUpdated();
+  }
+
+  function closeConfirm() {
+    setConfirming(null);
+    setDeleteHistory(null);
+    setDeleteError('');
+    setConfirmName('');
   }
 
   async function changeMentor(mentorId: string) {
@@ -583,16 +741,40 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             className="text-xs px-2 py-1 rounded-lg min-h-[32px] text-slate-400 dark:text-slate-500 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 disabled:opacity-40 transition-colors">
             {resettingPw ? '…' : '🔑'}
           </button>
-          <button onClick={toggleActive}
-            className={`text-[10px] font-medium px-2 py-1 rounded-lg min-h-[32px] transition-colors ${
+          {/* Restoring is harmless, so it goes straight through; deactivating
+              and deleting both stop for a confirmation. */}
+          <button onClick={() => member.active ? setConfirming('deactivate') : toggleActive()}
+            disabled={working}
+            className={`text-[10px] font-medium px-2 py-1 rounded-lg min-h-[32px] transition-colors disabled:opacity-40 ${
               member.active
                 ? 'text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
                 : 'text-emerald-600 dark:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/30'
             }`}>
             {member.active ? 'Deactivate' : 'Restore'}
           </button>
+          {member.id !== currentAdminId && (
+            <button onClick={() => setConfirming('delete')} disabled={working} title="Delete permanently"
+              className="text-xs px-2 py-1 rounded-lg min-h-[32px] text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-40 transition-colors">
+              🗑️
+            </button>
+          )}
         </div>
       </div>
+
+      {confirming && (
+        <MemberActionConfirm
+          member={member}
+          action={confirming}
+          working={working}
+          history={deleteHistory}
+          error={deleteError}
+          confirmName={confirmName}
+          onConfirmNameChange={setConfirmName}
+          onCancel={closeConfirm}
+          onDeactivate={toggleActive}
+          onDelete={deleteMember}
+        />
+      )}
 
       {/* Participation mode — drives the online-only role reservation window */}
       <div className="flex items-center gap-2">
@@ -611,11 +793,13 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
                   selected
                     ? p.value === 'online'
                       ? 'bg-sky-600 border-sky-600 text-white'
-                      : 'bg-amber-600 border-amber-600 text-white'
+                      : p.value === 'offline'
+                        ? 'bg-violet-600 border-violet-600 text-white'
+                        : 'bg-amber-600 border-amber-600 text-white'
                     : 'border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500'
                 }`}
               >
-                {p.emoji} {p.label}
+                {p.emoji} {p.short}
               </button>
             );
           })}
@@ -1387,8 +1571,10 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
     l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4,
     tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
     max_speaker_slots: 2, online_reservation_days_before: DEFAULT_RESERVATION_DAYS_BEFORE,
+    offline_reservation_days_before: DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE,
   });
   const [reservationEnabled, setReservationEnabled] = useState(false);
+  const [offlineReservationEnabled, setOfflineReservationEnabled] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 6, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
@@ -1398,8 +1584,9 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
       if (data) {
-        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE });
+        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE, offline_reservation_days_before: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
         setReservationEnabled(data.online_reservation_enabled === true);
+        setOfflineReservationEnabled(data.offline_reservation_enabled === true);
         setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
         setTimerModes(normalizeModes(data.timer_modes));
@@ -1427,6 +1614,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
       default_disabled_roles: defaultDisabledRoles,
       timer_modes: timerModes,
       online_reservation_enabled: reservationEnabled,
+      offline_reservation_enabled: offlineReservationEnabled,
       updated_at: new Date().toISOString(),
     });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
@@ -1559,6 +1747,66 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
               <p className="text-xs text-slate-500 mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
                 Next up — <strong>Meeting #{next.number}</strong> on {formatMeetingDate(next.date)}: online-only
                 members can claim now, everyone else from{' '}
+                <strong className="text-slate-700 dark:text-slate-300">{formatMeetingDate(window.opensOn)}</strong>.
+              </p>
+            );
+          })()}
+        </div>
+
+        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+      </div>
+
+      {/* Role sign-up window for visiting WIC India club members */}
+      <div className={`${cardCls} p-5 space-y-5`}>
+        <div>
+          <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">
+            {WIC_CLUB_NAME}
+          </h3>
+          <p className="text-xs text-slate-500">
+            Members of our sister club see everything our own members see, but sign up for roles only in
+            the last few days — so {HOME_CLUB_NAME} members get first pick. Mark a member as{' '}
+            <strong>WIC</strong> under <strong>Members → Attends</strong>. This window is separate from the
+            online reservation above; a WIC member answers to this one only.
+          </p>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input type="checkbox" checked={offlineReservationEnabled} onChange={e => setOfflineReservationEnabled(e.target.checked)}
+            className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">
+              Hold roles back from WIC India members
+            </span>
+            <span className="block text-xs text-slate-500">
+              Off = WIC members can claim any open role as soon as a meeting is created.
+            </span>
+          </span>
+        </label>
+
+        <div className={offlineReservationEnabled ? '' : 'opacity-40 pointer-events-none'}>
+          <p className={labelCls}>Roles open to WIC India members on</p>
+          <select
+            value={vals.offline_reservation_days_before}
+            onChange={e => setVals(v => ({ ...v, offline_reservation_days_before: parseInt(e.target.value) }))}
+            className={`${inputCls} mt-1`}
+          >
+            {reservationOpenDayOptions(schedule.weekday).map(({ days, label }) => (
+              <option key={days} value={days}>{label}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1.5">
+            Counted back from each meeting&apos;s own date, opening at midnight IST. Until then a WIC member
+            can still request a role and an officer assigns it.
+          </p>
+
+          {(() => {
+            const next = meetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number)[0];
+            const window = next ? offlineClaimWindow(next, true, vals.offline_reservation_days_before) : null;
+            if (!next || !window) return null;
+            return (
+              <p className="text-xs text-slate-500 mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
+                Next up — <strong>Meeting #{next.number}</strong> on {formatMeetingDate(next.date)}: WIC India
+                members can claim from{' '}
                 <strong className="text-slate-700 dark:text-slate-300">{formatMeetingDate(window.opensOn)}</strong>.
               </p>
             );

@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, Meeting } from '@/lib/types';
-import { hasLeadershipRole } from '@/lib/types';
+import { hasLeadershipRole, HOME_CLUB_NAME, WIC_CLUB_NAME } from '@/lib/types';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
@@ -46,6 +46,24 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   const [uploading, setUploading] = useState(false);
 
   const selectedMember = members.find((m) => m.id === selected);
+
+  // Which names belong to the visiting WIC India club, so the list can be split
+  // under the two club headings. Read on its own and failure-tolerant: the
+  // members list deliberately doesn't select this column, and a club that hasn't
+  // run migration 052 must still be able to sign in — it just gets one flat list.
+  const [wicMemberIds, setWicMemberIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    supabase.from('members').select('id, participation_mode').eq('participation_mode', 'offline')
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        setWicMemberIds(new Set(data.map((m) => m.id as string)));
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const memberLabel = (m: Member) =>
+    m.display_name !== m.name.split(' ')[0] ? m.display_name : m.name;
+  const homeClubMembers = members.filter((m) => !wicMemberIds.has(m.id));
+  const wicClubMembers  = members.filter((m) => wicMemberIds.has(m.id));
 
   async function submitGuestDetails(e: React.FormEvent) {
     e.preventDefault();
@@ -479,11 +497,24 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
           className={`${inputCls} text-base`}
         >
           <option value="">Select your name…</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.display_name !== m.name.split(' ')[0] ? m.display_name : m.name}
-            </option>
-          ))}
+          {wicClubMembers.length === 0 ? (
+            members.map((m) => (
+              <option key={m.id} value={m.id}>{memberLabel(m)}</option>
+            ))
+          ) : (
+            <>
+              <optgroup label={`${HOME_CLUB_NAME} members`}>
+                {homeClubMembers.map((m) => (
+                  <option key={m.id} value={m.id}>{memberLabel(m)}</option>
+                ))}
+              </optgroup>
+              <optgroup label={`${WIC_CLUB_NAME} members`}>
+                {wicClubMembers.map((m) => (
+                  <option key={m.id} value={m.id}>{memberLabel(m)}</option>
+                ))}
+              </optgroup>
+            </>
+          )}
         </select>
 
         <button

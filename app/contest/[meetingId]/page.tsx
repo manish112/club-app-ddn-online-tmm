@@ -71,11 +71,19 @@ export default function ContestResultsPage() {
   const nameOf = (id: string) => members.find((m) => m.id === id)?.display_name ?? '—';
 
   const contestants = meeting.role_claims
-    .filter((c) => c.role_key === 'speaker' && c.member_id && c.slot_index <= meeting.speaker_slots)
+    // Contest scoring is keyed on member ids end to end, so guest holders (no
+    // member row) aren't contestants or judges here.
+    .filter((c): c is typeof c & { member_id: string } =>
+      c.role_key === 'speaker' && !!c.member_id && c.slot_index <= meeting.speaker_slots)
     .map((c) => ({ slot: c.slot_index, id: c.member_id }))
     .sort((a, b) => a.slot - b.slot);
   const contestantIds = contestants.map((c) => c.id);
-  const judgeIds = Array.from(new Set(meeting.role_claims.filter((c) => c.role_key === 'jury').map((c) => c.member_id)));
+  const judgeIds = Array.from(new Set(
+    meeting.role_claims
+      .filter((c) => c.role_key === 'jury')
+      .map((c) => c.member_id)
+      .filter((id): id is string => !!id)
+  ));
 
   // Group helpers: contestant → their heat (for per-group ranking & display).
   const grouped = hasSpeakerGroups(meeting);
