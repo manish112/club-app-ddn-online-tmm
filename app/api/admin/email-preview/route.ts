@@ -3,6 +3,7 @@ import { isAdminMember } from '@/lib/admin-auth';
 import { resolveTemplate } from '@/lib/email/mailer';
 import { buildPreviewVars } from '@/lib/email/notifications';
 import { fillTemplate } from '@/lib/email/render';
+import { decodeEntities } from '@/lib/email/format';
 import { TEMPLATE_KEYS, type TemplateKey } from '@/lib/email/defaults';
 
 // Render a template with REAL data (next meeting, actual roles, configured app
@@ -22,9 +23,11 @@ export async function POST(req: NextRequest) {
   const subject = String(body.subject ?? '').trim() || tpl.subject;
   const html = String(body.body_html ?? '').trim() || tpl.body_html;
 
-  const vars = await buildPreviewVars(body.memberId);
+  // With a target member the preview is personalised to them — their name, and
+  // their own role at the meeting where the template shows one.
+  const vars = await buildPreviewVars(body.memberId, body.targetMemberId);
   return NextResponse.json({
-    subject: fillTemplate(subject, vars),
+    subject: decodeEntities(fillTemplate(subject, vars)),
     html: fillTemplate(html, vars),
   });
 }

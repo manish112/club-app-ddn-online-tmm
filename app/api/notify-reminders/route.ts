@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { getEmailSettings } from '@/lib/email/mailer';
-import { sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders, type MeetingRow } from '@/lib/email/notifications';
+import { sendMeetingReminder, sendMeetingReminderDayBefore, sendOpenRolesNudge, sendRoleReminders, type MeetingRow } from '@/lib/email/notifications';
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 
@@ -15,6 +15,14 @@ function meetingStartUtcMs(date: string, startTime: string): number {
 // YYYY-MM-DD for an IST-shifted instant (read via UTC getters).
 function istDateStr(utcMs: number): string {
   const s = new Date(utcMs + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, '0')}-${String(s.getUTCDate()).padStart(2, '0')}`;
+}
+
+// Shift a YYYY-MM-DD calendar date by whole days. Pure date arithmetic — no
+// timezone involved, since both sides are already IST wall-clock dates.
+function shiftDate(dateStr: string, days: number): string {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const s = new Date(Date.UTC(y, mo - 1, d + days));
   return `${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, '0')}-${String(s.getUTCDate()).padStart(2, '0')}`;
 }
 
@@ -35,11 +43,36 @@ export async function GET(req: NextRequest) {
 
   const now = Date.now();
   const tomorrowIst = istDateStr(now + 24 * 60 * 60 * 1000);
+  const todayIst = istDateStr(now);
 
   const actions: Record<string, string> = {};
 
+  // Configurable lead times for the open-roles invitation (default 2 days —
+  // Thursday for a Saturday meeting). More than one means it goes out more than
+  // once, each time to whoever is still without a role.
+  // Read defensively: this column was a single integer before it became a list,
+  // so a database still on the older shape must not crash the whole cron.
+  const rawDays: unknown = settings.open_roles_days_before;
+  const openRolesDays = (Array.isArray(rawDays) ? rawDays : rawDays == null ? [2] : [rawDays])
+    .map(Number)
+    .filter((d) => Number.isInteger(d));
+
   for (const m of (meetings ?? []) as MeetingRow[]) {
     const startMs = meetingStartUtcMs(m.date, m.start_time);
+
+    // Open-roles invitation, N days before this meeting's own date — so moving
+    // a meeting moves its invitation too. Goes only to members without a role
+    // yet, and sends nothing when every role is taken.
+    if (settings.open_roles_enabled) {
+      // The lead day is part of the dedupe key: two configured days are two
+      // distinct sends, and without it the second would be suppressed as a
+      // duplicate of the first.
+      const dueDay = openRolesDays.find((d) => shiftDate(m.date, -d) === todayIst);
+      if (dueDay !== undefined) {
+        const res = await sendOpenRolesNudge(m, { leadDay: dueDay });
+        actions[`open_roles:${m.number}:d${dueDay}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
+      }
+    }
 
     // "Starting soon" → reminder to all members (fires within a 70-min window,
     // so the real lead time depends on when the cron lands; dedupe on the

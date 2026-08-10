@@ -9,6 +9,9 @@ export type TemplateKey =
   | 'role_reminder'
   | 'meeting_reminder'
   | 'meeting_reminder_day_before'
+  | 'open_roles'
+  | 'activity_report'
+  | 'activity_encouragement'
   | 'evaluator_request'
   | 'leadership_assigned'
   | 'welcome'
@@ -37,6 +40,9 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'role_reminder',
   'meeting_reminder',
   'meeting_reminder_day_before',
+  'open_roles',
+  'activity_report',
+  'activity_encouragement',
   'evaluator_request',
   'leadership_assigned',
   'welcome',
@@ -66,6 +72,9 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   role_reminder:    'Role reminder — 1 day before (to each role holder)',
   meeting_reminder: 'Meeting reminder — shortly before it starts (to all members)',
   meeting_reminder_day_before: 'Meeting reminder — 1 day before (to all members)',
+  open_roles:       'Open roles invitation — a few days before (to all members)',
+  activity_report:  'Activity report (on demand, to a member with roles played)',
+  activity_encouragement: 'Activity report — the warm version, for members with none yet',
   evaluator_request:'Evaluator approval needed (to officers)',
   leadership_assigned: 'Leadership role appointed (to the member)',
   welcome:          'Welcome email (to a newly added member)',
@@ -96,6 +105,9 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   role_reminder:    ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'role_emoji', 'meeting_link_block'],
   meeting_reminder: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
   meeting_reminder_day_before: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'roles_summary'],
+  open_roles:       ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'meeting_link_block', 'open_roles_list', 'open_roles_count'],
+  activity_report:  ['full_name', 'club_name', 'app_url', 'period_label', 'activity_table', 'meetings_count', 'roles_count', 'top_roles_line'],
+  activity_encouragement: ['full_name', 'club_name', 'app_url', 'period_label', 'open_roles_list', 'open_roles_count', 'next_meeting_line'],
   evaluator_request:['club_name', 'app_url', 'meeting_number', 'meeting_date', 'speaker_name', 'evaluator_name'],
   leadership_assigned:['full_name', 'club_name', 'app_url', 'leadership_role', 'roles_list', 'actor_line'],
   welcome:          ['full_name', 'club_name', 'app_url'],
@@ -259,6 +271,71 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       {{roles_summary}}
       <p style="${P}">See you in the meeting!</p>
       ${CTA('Open the App →')}`),
+  },
+
+  // Weekly nudge listing only the roles still unfilled. An invitation, not a
+  // chase — nobody is obliged to take one, and {{open_roles_list}} is built by
+  // sendOpenRolesNudge so the mail never goes out with an empty list.
+  open_roles: {
+    subject: 'Roles still open for Meeting #{{meeting_number}} — you\'re warmly invited',
+    body_html: shell('Roles Still Open', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">We&apos;re looking forward to our next meeting, and a few roles are still
+        waiting for a volunteer. If you&apos;d like to take one, we&apos;d be delighted to have you.</p>
+      ${meetingCard}
+      <p style="${KICKER}">Still open</p>
+      {{open_roles_list}}
+      <p style="${P}">Every role is a chance to practise something different, and there&apos;s no
+        obligation at all — take one only if it suits you this week.</p>
+      ${CTA('Pick a Role →')}`),
+  },
+
+  // Sent by an officer on request, for one month or for everything since the
+  // member joined. {{activity_table}} is built by sendMemberActivityReport.
+  activity_report: {
+    subject: 'Your Toastmasters activity — {{period_label}}',
+    body_html: shell('Your Activity', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">Here&apos;s a summary of the roles you&apos;ve taken on at the club
+        <strong style="color:#1e293b;">{{period_label}}</strong> — including anything you&apos;re
+        already signed up for. Thank you for showing up and giving it a go; it&apos;s what keeps our
+        meetings running.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">In this period</p>
+        <p style="margin:0;color:#1e293b;font-size:18px;font-weight:800;">
+          {{meetings_count}} meetings · {{roles_count}} roles
+        </p>
+        {{top_roles_line}}
+      ${CARD_CLOSE}
+      <p style="${KICKER}">Meeting by meeting</p>
+      {{activity_table}}
+      <p style="${P}">If you&apos;d like to try something new next time, every open role is listed
+        in the app — and we&apos;re always glad to help you prepare.</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  // The counterpart to activity_report, for a member with nothing on record in
+  // the period. Deliberately warm and free of guilt — it opens a door rather
+  // than pointing at an absence, and gives them something concrete to say yes
+  // to via {{open_roles_list}}.
+  activity_encouragement: {
+    // Subjects are plain text — a real apostrophe, not an HTML entity.
+    subject: 'There\'s a place for you on the agenda 🌱',
+    body_html: shell('We&apos;d Love to See You', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">We noticed you haven&apos;t taken a meeting role {{period_label}} — and that&apos;s
+        absolutely fine. Life gets busy, and there&apos;s no expectation here.</p>
+      <p style="${P}">We only wanted to say that whenever you feel like it, there&apos;s a place for you
+        on the agenda. Roles like <strong style="color:#1e293b;">Timer</strong> or
+        <strong style="color:#1e293b;">Ah-Counter</strong> take just a few minutes to prepare and are a
+        lovely way to ease in — and if you&apos;d rather jump straight to a speech, we&apos;d be
+        thrilled about that too.</p>
+      {{next_meeting_line}}
+      {{open_roles_list}}
+      <p style="${P}">Not sure which one to pick, or want a hand getting ready? Do reach out to any
+        of your club officers — they&apos;d be genuinely happy to help, and there&apos;s no such thing
+        as a silly question here. We&apos;re all learning together. 😊</p>
+      ${CTA('See What&apos;s Open →')}`),
   },
 
   speaker_slot_received: {

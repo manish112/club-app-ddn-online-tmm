@@ -721,6 +721,12 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
               <button onClick={() => setEditing(true)} className="ml-1.5 text-maroon-600 dark:text-maroon-500 hover:text-maroon-700 dark:hover:text-maroon-400">Edit</button>
             </p>
           )}
+          {/* When this member was added to the app (members.created_at). */}
+          {member.created_at && (
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+              Added {new Date(member.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </p>
+          )}
         </div>
 
         {/* Action buttons */}
