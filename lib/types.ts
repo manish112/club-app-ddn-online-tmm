@@ -89,8 +89,8 @@ export function leadershipRoleLabel(role: LeadershipRole): string {
 // The two clubs sharing this app. Members in 'offline' mode belong to the WIC
 // India club and take part in our meetings; everyone else is a home-club member.
 export const HOME_CLUB_NAME = 'Dehradun Online Toastmasters Club';
-export const WIC_CLUB_NAME  = 'Dehradun WIC India Toastmasters Club';
-export const WIC_CLUB_SHORT = 'WIC India';
+export const WIC_CLUB_NAME  = 'Dehradun WIC Toastmasters Club';
+export const WIC_CLUB_SHORT = 'WIC';
 
 // How a member takes part in meetings. Admin-set; drives the role reservation
 // window (see reservationBlocked in lib/utils). 'online' and 'hybrid' are
@@ -101,7 +101,7 @@ export type ParticipationMode = 'online' | 'hybrid' | 'offline';
 export const PARTICIPATION_MODES: { value: ParticipationMode; label: string; short: string; emoji: string; hint: string }[] = [
   { value: 'online',  label: 'Online only',        short: 'Online',  emoji: '🌐', hint: 'Attends meetings online only' },
   { value: 'hybrid',  label: 'Online & in-person', short: 'Hybrid',  emoji: '🏛️', hint: 'Can attend online or in person' },
-  { value: 'offline', label: 'WIC India club',     short: 'WIC',     emoji: '🤝', hint: `Member of ${WIC_CLUB_NAME}` },
+  { value: 'offline', label: 'WIC club',           short: 'WIC',     emoji: '🤝', hint: `Member of ${WIC_CLUB_NAME}` },
 ];
 
 // Members predate this field, so treat a missing value as online-only (the club

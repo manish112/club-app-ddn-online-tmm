@@ -11,7 +11,7 @@ import type {
   VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
   EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup, ParticipationMode, RoleInterestRequest,
 } from '@/lib/types';
-import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
+import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, WIC_CLUB_SHORT, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
 import {
   DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
   type TimerModes, type TimerModeKey, type TimerThresholds,
@@ -1795,7 +1795,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
             className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
           <span className="min-w-0">
             <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">
-              Hold roles back from WIC India members
+              Hold roles back from {WIC_CLUB_SHORT} members
             </span>
             <span className="block text-xs text-slate-500">
               Off = WIC members can claim any open role as soon as a meeting is created.
@@ -1804,7 +1804,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
         </label>
 
         <div className={offlineReservationEnabled ? '' : 'opacity-40 pointer-events-none'}>
-          <p className={labelCls}>Roles open to WIC India members on</p>
+          <p className={labelCls}>Roles open to {WIC_CLUB_SHORT} members on</p>
           <select
             value={vals.offline_reservation_days_before}
             onChange={e => setVals(v => ({ ...v, offline_reservation_days_before: parseInt(e.target.value) }))}
@@ -1825,8 +1825,8 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
             if (!next || !window) return null;
             return (
               <p className="text-xs text-slate-500 mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
-                Next up — <strong>Meeting #{next.number}</strong> on {formatMeetingDate(next.date)}: WIC India
-                members can claim from{' '}
+                Next up — <strong>Meeting #{next.number}</strong> on {formatMeetingDate(next.date)}:{' '}
+                {WIC_CLUB_SHORT} members can claim from{' '}
                 <strong className="text-slate-700 dark:text-slate-300">{formatMeetingDate(window.opensOn)}</strong>.
               </p>
             );
