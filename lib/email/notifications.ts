@@ -1,7 +1,8 @@
 // High-level, server-only notification helpers. Callers (API routes + the
 // reminder cron) stay thin; these do the DB reads and build template vars.
 import { createServiceClient } from '@/utils/supabase/server';
-import { ROLE_META, ASSIGN_ONLY_ROLES, getMeetingRoles, leadershipRoleLabel, type Meeting, type RoleKey, type LeadershipRole } from '@/lib/types';
+import { ROLE_META, getMeetingRoles, leadershipRoleLabel, type Meeting, type RoleKey, type LeadershipRole } from '@/lib/types';
+import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime, escapeHtml, bioBlock } from './format';
 import { sendOne, sendOneDeduped, getAppUrl, getEmailSettings, getVpEducationName } from './mailer';
 import { buildMeetingIcs } from './ical';
@@ -242,30 +243,9 @@ async function openRolesFor(meetingId: string): Promise<{
   /** Members already holding a role at this meeting — they don't need inviting. */
   claimedBy: Set<string>;
 }> {
-  const supabase = createServiceClient();
-  // getMeetingRoles needs the slot counts and disabled categories, which the
-  // lighter MeetingRow used elsewhere doesn't carry.
-  const [{ data: full }, { data: claims }] = await Promise.all([
-    supabase.from('meetings')
-      .select('id, speaker_slots, evaluator_slots, jury_slots, disabled_roles, meeting_type')
-      .eq('id', meetingId).single(),
-    supabase.from('role_claims').select('role_key, slot_index, member_id').eq('meeting_id', meetingId),
-  ]);
-  const claimedBy = new Set(
-    (claims ?? []).map((c) => c.member_id).filter((id): id is string => !!id));
-  if (!full) return { count: 0, listHtml: '', claimedBy };
-
-  const taken = new Set((claims ?? []).map((c) => `${c.role_key}:${c.slot_index}`));
-
-  const openRoles = getMeetingRoles(full as unknown as Meeting).filter(({ roleKey, slot }) => {
-    if (taken.has(`${roleKey}:${slot}`)) return false;
-    // An admin assigns these, so a member can't act on the invitation.
-    if (ASSIGN_ONLY_ROLES.includes(roleKey)) return false;
-    // The app holds an evaluator slot closed until its speaker claims and names
-    // a preference — offering one now would be a dead end.
-    if (roleKey === 'evaluator' && !taken.has(`speaker:${slot}`)) return false;
-    return true;
-  });
+  // What counts as "open" is shared with the WhatsApp nudge (lib/open-roles.ts);
+  // only the presentation differs.
+  const { roles: openRoles, claimedBy } = await openRoleSlots(meetingId);
   if (openRoles.length === 0) return { count: 0, listHtml: '', claimedBy };
 
   // Multi-slot roles are numbered so "Prepared Speaker 2" reads unambiguously.

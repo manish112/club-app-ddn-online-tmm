@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { EmailSettingsPanel } from '@/components/EmailSettingsPanel';
+import { WhatsAppSettingsPanel } from '@/components/WhatsAppSettingsPanel';
 import { AdminSurveysPanel } from '@/components/AdminSurveysPanel';
 import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -283,9 +284,20 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
           body: JSON.stringify({ meetingId: created.id }),
         });
         const d = await res.json().catch(() => ({}));
-        if (!res.ok) alert(`${label}\n\nCreated, but the announcement email failed: ${d.error ?? res.statusText}`);
-        else if (d.sent > 0) alert(`${label}\n\nAnnouncement emailed to ${d.sent} member(s).`);
-        else alert(`${label}\n\nCreated, but no announcement email went out (${d.reason ?? d.skipped ?? 'no recipients'}). Check the Email tab.`);
+        // WhatsApp rides along with the email but is configured separately, so
+        // report it separately too — otherwise a working email hides a WhatsApp
+        // that never went out (or vice versa).
+        const w = d.whatsapp ?? {};
+        const waLine = w.error
+          ? `\nWhatsApp: failed — ${w.error}`
+          : w.skipped
+            ? `\nWhatsApp: nothing sent (${w.skipped})`
+            : typeof w.sent === 'number'
+              ? `\nWhatsApp: sent to ${w.sent}${w.sent === 0 && w.reason ? ` (${w.reason})` : ''}`
+              : '';
+        if (!res.ok) alert(`${label}\n\nCreated, but the announcement email failed: ${d.error ?? res.statusText}${waLine}`);
+        else if (d.sent > 0) alert(`${label}\n\nAnnouncement emailed to ${d.sent} member(s).${waLine}`);
+        else alert(`${label}\n\nCreated, but no announcement email went out (${d.reason ?? d.skipped ?? 'no recipients'}). Check the Email tab.${waLine}`);
       } catch {
         alert(`${label}\n\nCreated, but the announcement email could not be triggered (network error).`);
       }
@@ -2269,7 +2281,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [guestRegs, setGuestRegs] = useState<GuestRegistration[]>([]);
   const [currentAnnouncement, setCurrentAnnouncement] = useState<Announcement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage' | 'email' | 'surveys'>('meetings');
+  const [tab, setTab] = useState<'meetings' | 'members' | 'guests' | 'requests' | 'announce' | 'settings' | 'usage' | 'email' | 'whatsapp' | 'surveys'>('meetings');
   const [showNewMeeting, setShowNewMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingWithClaims | null>(null);
   const [memberFilter, setMemberFilter] = useState<'active' | 'all'>('active');
@@ -2376,8 +2388,10 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       .insert({ membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true, email: email || null })
       .select('id').single();
     if (error) { alert(`Failed: ${error.message}`); return; }
-    // Welcome the new member if they have an email (best-effort).
-    if (created?.id && email) {
+    // Welcome the new member (best-effort). The route decides per channel —
+    // a member with no email may still be reachable on WhatsApp once they fill
+    // in a phone number, and gating here would rule that out for both.
+    if (created?.id) {
       fetch('/api/notify-welcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2409,6 +2423,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     { id: 'usage'     as const, label: 'Usage' },
     { id: 'surveys'   as const, label: 'Surveys' },
     { id: 'email'     as const, label: 'Email' },
+    { id: 'whatsapp'  as const, label: 'WhatsApp' },
     { id: 'settings'  as const, label: 'Settings' },
   ];
 
@@ -2469,6 +2484,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <AgendaSettingsPanel meetings={meetings} />
         ) : tab === 'email' ? (
           <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
+        ) : tab === 'whatsapp' ? (
+          <WhatsAppSettingsPanel currentAdminId={currentMember.id} />
         ) : tab === 'surveys' ? (
           <AdminSurveysPanel members={members} />
         ) : tab === 'usage' ? (

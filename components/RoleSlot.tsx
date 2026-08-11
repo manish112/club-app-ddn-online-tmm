@@ -47,6 +47,9 @@ function notifyRole(payload: {
   meetingId: string;
   targetMemberId: string;
   roleKey: RoleKey;
+  // Numbers a multi-slot role in the message ("Prepared Speaker 2"), so a
+  // member holding two of them can tell which one changed.
+  slotIndex?: number;
   action: 'claimed' | 'released' | 'assigned' | 'removed';
   actorId: string | null;
   actorIsAdmin: boolean;
@@ -189,7 +192,7 @@ export function RoleSlot({
     setBusy(false);
     setJustClaimed(true);
     setTimeout(() => setJustClaimed(false), 400);
-    notifyRole({ meetingId, targetMemberId: memberId, roleKey, action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
+    notifyRole({ meetingId, targetMemberId: memberId, roleKey, slotIndex, action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 
@@ -237,7 +240,7 @@ export function RoleSlot({
     setChoosingEvaluator(false);
     setJustClaimed(true);
     setTimeout(() => setJustClaimed(false), 400);
-    notifyRole({ meetingId, targetMemberId: memberId, roleKey: 'speaker', action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
+    notifyRole({ meetingId, targetMemberId: memberId, roleKey: 'speaker', slotIndex, action: 'claimed', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 
@@ -269,7 +272,7 @@ export function RoleSlot({
     setBusy(false);
     // A guest holder has no member row and no inbox — nothing to notify.
     if (claim.member_id) {
-      notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
+      notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, slotIndex, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
     }
     onChanged();
   }
@@ -323,7 +326,7 @@ export function RoleSlot({
     });
     setBusy(false);
     setAssigning(false);
-    notifyRole({ meetingId, targetMemberId: selectedId, roleKey, action: 'assigned', actorId: memberId, actorIsAdmin: isAdmin });
+    notifyRole({ meetingId, targetMemberId: selectedId, roleKey, slotIndex, action: 'assigned', actorId: memberId, actorIsAdmin: isAdmin });
     onChanged();
   }
 

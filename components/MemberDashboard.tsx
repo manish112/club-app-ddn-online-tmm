@@ -50,12 +50,16 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [emailPref, setEmailPref] = useState(member.email_notifications !== false);
+  const [waPref, setWaPref] = useState(member.whatsapp_notifications !== false);
 
-  // Read the saved preference on its own (isolated so a not-yet-migrated column
-  // can never break the profile card).
+  // Read the saved preferences on their own (isolated so a not-yet-migrated
+  // column can never break the profile card). Kept as two reads for the same
+  // reason: a database with 046 but not 055 must still load the email one.
   useEffect(() => {
     supabase.from('members').select('email_notifications').eq('id', member.id).maybeSingle()
       .then(({ data }) => { if (data && typeof data.email_notifications === 'boolean') setEmailPref(data.email_notifications); });
+    supabase.from('members').select('whatsapp_notifications').eq('id', member.id).maybeSingle()
+      .then(({ data }) => { if (data && typeof data.whatsapp_notifications === 'boolean') setWaPref(data.whatsapp_notifications); });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -92,8 +96,10 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       gender: gender || null,
       show_phone_in_contact: showPhone,
     }).eq('id', member.id);
-    // Save the email preference separately (best-effort — never blocks the profile save).
+    // Save each notification preference separately (best-effort — an unmigrated
+    // column must never block the profile save, nor take the other one down).
     await supabase.from('members').update({ email_notifications: emailPref }).eq('id', member.id);
+    await supabase.from('members').update({ whatsapp_notifications: waPref }).eq('id', member.id);
     setSaving(false);
     setEditing(false);
     onUpdated();
@@ -166,6 +172,11 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
                 </span>
               </label>
             )}
+            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+              <input type="checkbox" checked={waPref} onChange={(e) => setWaPref(e.target.checked)}
+                className="w-4 h-4 accent-maroon-700 rounded" />
+              <span className="text-xs text-slate-500 dark:text-slate-400">Send me WhatsApp reminders</span>
+            </label>
           </div>
 
           <div>
