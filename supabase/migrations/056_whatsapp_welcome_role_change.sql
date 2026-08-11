@@ -29,3 +29,10 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE whatsapp_settings ALTER COLUMN api_version SET DEFAULT 'v25.0';
 
 UPDATE whatsapp_settings SET api_version = 'v25.0' WHERE api_version = 'v21.0';
+
+-- ── Drop the WhatsApp business account ID ──────────────────────────────────
+-- It was recorded for reference and nothing ever read it: sending needs only
+-- the token, the phone number ID and the version, which are the three pieces of
+-- Meta's send URL. An always-empty field on a settings screen reads as
+-- something the admin forgot to fill in, so it goes.
+ALTER TABLE whatsapp_settings DROP COLUMN IF EXISTS business_account_id;

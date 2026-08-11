@@ -4,6 +4,7 @@ import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { EmailSettingsPanel } from '@/components/EmailSettingsPanel';
 import { WhatsAppSettingsPanel } from '@/components/WhatsAppSettingsPanel';
+import { normalizePhone, isEmailAddress } from '@/lib/phone';
 import { AdminSurveysPanel } from '@/components/AdminSurveysPanel';
 import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -551,6 +552,13 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
+  // Contact details, edited in place. Held locally so the row doesn't write on
+  // every keystroke; the Save button appears only once something differs.
+  const [email, setEmail] = useState(member.email ?? '');
+  const [phone, setPhone] = useState(member.phone ?? '');
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactMsg, setContactMsg] = useState<string | null>(null);
+  const [togglingPref, setTogglingPref] = useState<'email' | 'whatsapp' | null>(null);
   // Both destructive actions confirm first; 'delete' also reports what history
   // stands in the way before anything is touched.
   const [confirming, setConfirming] = useState<'deactivate' | 'delete' | null>(null);
@@ -560,6 +568,15 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [confirmName, setConfirmName] = useState('');
 
   const mode = participationMode(member);
+
+  // Both preferences are opt-OUT: a column that's null, or absent because the
+  // migration hasn't run, means the member still receives notifications.
+  const emailPrefOn = member.email_notifications !== false;
+  const waPrefOn = member.whatsapp_notifications !== false;
+  const contactDirty = email.trim() !== (member.email ?? '') || phone.trim() !== (member.phone ?? '');
+  // The same rule the sender applies, so "on but unreachable" is visible here
+  // rather than discovered as silence.
+  const phoneUsable = !!normalizePhone(phone, '91');
 
   const autoAdmin = isClubOfficer(member);
   const hasAdmin = member.is_admin || autoAdmin;
@@ -686,6 +703,32 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     onUpdated();
   }
 
+  // Contact details drive both notification channels, so an admin fixing a typo
+  // here is often the whole reason someone stopped hearing from the club.
+  async function saveContact() {
+    setSavingContact(true); setContactMsg(null);
+    const { error } = await supabase.from('members').update({
+      email: email.trim() || null,
+      phone: phone.trim() || null,
+    }).eq('id', member.id);
+    setSavingContact(false);
+    setContactMsg(error ? `✗ ${error.message}` : '✓ Saved');
+    setTimeout(() => setContactMsg(null), 2500);
+    if (!error) onUpdated();
+  }
+
+  // Each preference is written on its own: the WhatsApp column arrived in
+  // migration 055, so on a database without it the email toggle must still work.
+  async function togglePref(channel: 'email' | 'whatsapp') {
+    const column = channel === 'email' ? 'email_notifications' : 'whatsapp_notifications';
+    const next = !(channel === 'email' ? emailPrefOn : waPrefOn);
+    setTogglingPref(channel);
+    const { error } = await supabase.from('members').update({ [column]: next }).eq('id', member.id);
+    setTogglingPref(null);
+    if (error) { alert(`Failed: ${error.message}`); return; }
+    onUpdated();
+  }
+
   async function toggleGuestManager() {
     setTogglingGuest(true);
     await supabase.from('members').update({ can_manage_guests: !member.can_manage_guests }).eq('id', member.id);
@@ -806,6 +849,70 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
         />
       )}
 
+      {/* Contact details + notification preferences. Grouped, because the two
+          are inseparable in practice: a channel switched on with nothing to
+          send to is the commonest reason a member hears nothing. */}
+      <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 p-2.5 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Email</span>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="none set"
+            className="flex-1 min-w-0 text-xs border border-slate-200 dark:border-slate-700/60 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-maroon-600" />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Phone</span>
+          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="none set"
+            className="flex-1 min-w-0 text-xs border border-slate-200 dark:border-slate-700/60 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-maroon-600" />
+        </div>
+
+        {contactDirty && (
+          <div className="flex items-center gap-2 pl-14">
+            <button onClick={saveContact} disabled={savingContact}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-maroon-700 text-white disabled:opacity-40 active:scale-95 transition-all">
+              {savingContact ? 'Saving…' : 'Save contact'}
+            </button>
+            <button onClick={() => { setEmail(member.email ?? ''); setPhone(member.phone ?? ''); }}
+              className="text-[11px] text-slate-400 dark:text-slate-500">Cancel</button>
+          </div>
+        )}
+        {contactMsg && <p className="text-[10px] text-slate-500 pl-14">{contactMsg}</p>}
+
+        {/* Notification switches — saved the moment they're clicked. */}
+        <div className="flex items-center gap-2 flex-wrap pt-0.5">
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Notify</span>
+          <button onClick={() => togglePref('email')} disabled={togglingPref === 'email'}
+            title={emailPrefOn ? 'Receiving emails — click to stop' : 'Not receiving emails — click to resume'}
+            className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 disabled:opacity-40 ${
+              emailPrefOn
+                ? 'bg-maroon-600 border-maroon-600 text-white'
+                : 'border-slate-200 dark:border-slate-700/60 text-slate-400 dark:text-slate-500'
+            }`}>
+            {togglingPref === 'email' ? '…' : `✉️ Email ${emailPrefOn ? 'on' : 'off'}`}
+          </button>
+          <button onClick={() => togglePref('whatsapp')} disabled={togglingPref === 'whatsapp'}
+            title={waPrefOn ? 'Receiving WhatsApp — click to stop' : 'Not receiving WhatsApp — click to resume'}
+            className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 disabled:opacity-40 ${
+              waPrefOn
+                ? 'bg-emerald-600 border-emerald-600 text-white'
+                : 'border-slate-200 dark:border-slate-700/60 text-slate-400 dark:text-slate-500'
+            }`}>
+            {togglingPref === 'whatsapp' ? '…' : `💬 WhatsApp ${waPrefOn ? 'on' : 'off'}`}
+          </button>
+        </div>
+
+        {/* A channel switched on with nothing to reach them by sends nothing and
+            reports nothing. Say so here, where it can actually be fixed. */}
+        {emailPrefOn && !isEmailAddress(email) && (
+          <p className="text-[10px] text-amber-600 dark:text-amber-400 pl-14">
+            Email is on, but there&apos;s no valid address — nothing will reach them.
+          </p>
+        )}
+        {waPrefOn && !phoneUsable && (
+          <p className="text-[10px] text-amber-600 dark:text-amber-400 pl-14">
+            WhatsApp is on, but the phone number {phone.trim() ? 'is not usable' : 'is missing'} — nothing will reach them.
+          </p>
+        )}
+      </div>
+
       {/* Participation mode — drives the online-only role reservation window */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 w-12">Attends</span>
@@ -890,22 +997,35 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
 
 // ─── Add member form ──────────────────────────────────────────────────────────
 
-function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string) => void }) {
+function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string, phone: string) => void }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+
+  // Warn before the member is created, not after: a number typed wrong here is
+  // one nobody looks at again until the reminders quietly fail to arrive.
+  const phoneBad = !!phone.trim() && !normalizePhone(phone, '91');
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    onAdd(name.trim(), email.trim());
-    setName(''); setEmail('');
+    onAdd(name.trim(), email.trim(), phone.trim());
+    setName(''); setEmail(''); setPhone('');
   }
   return (
     <form onSubmit={submit} className="space-y-2">
       <input value={name} onChange={e => setName(e.target.value)} placeholder="New member full name" className={inputCls} />
+      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (sends a welcome email)" className={inputCls} />
       <div className="flex gap-2">
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (sends a welcome email)" className={inputCls} />
+        <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
+          placeholder="Phone (sends a welcome on WhatsApp)" className={inputCls} />
         <button type="submit" disabled={!name.trim()} className={`shrink-0 ${primaryBtn}`}>Add</button>
       </div>
+      {phoneBad && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          That does not look like a usable number — it will be saved, but WhatsApp will not reach them.
+        </p>
+      )}
     </form>
   );
 }
@@ -2383,9 +2503,15 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     fetchAll();
   }
 
-  async function addMember(name: string, email: string) {
+  async function addMember(name: string, email: string, phone: string) {
     const { data: created, error } = await supabase.from('members')
-      .insert({ membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true, email: email || null })
+      .insert({
+        membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true,
+        email: email || null,
+        // Captured up front so the welcome can go out on WhatsApp too — added
+        // later, it arrives after the member has already missed the introduction.
+        phone: phone || null,
+      })
       .select('id').single();
     if (error) { alert(`Failed: ${error.message}`); return; }
     // Welcome the new member (best-effort). The route decides per channel —

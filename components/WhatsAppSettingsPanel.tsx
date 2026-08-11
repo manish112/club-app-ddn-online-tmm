@@ -12,7 +12,6 @@ interface Settings {
   enabled: boolean;
   access_token: string;        // write-only; blank means "keep existing"
   phone_number_id: string;
-  business_account_id: string;
   api_version: string;
   default_country_code: string;
   text_mode: boolean;
@@ -27,7 +26,7 @@ interface Settings {
 }
 
 const EMPTY: Settings = {
-  enabled: false, access_token: '', phone_number_id: '', business_account_id: '',
+  enabled: false, access_token: '', phone_number_id: '',
   api_version: 'v25.0', default_country_code: '91', text_mode: false,
   welcome_enabled: true, meeting_created_enabled: true, role_change_enabled: true,
   role_reminder_enabled: true, no_role_nudge_enabled: true, meeting_starting_enabled: true,
@@ -122,7 +121,8 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
       <div className="rounded-2xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
         <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">{loadError}</p>
         <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-          Apply <code>supabase/migrations/055_whatsapp_notifications.sql</code> to this database, then reload.
+          Apply <code>055_whatsapp_notifications.sql</code> and <code>056_whatsapp_welcome_role_change.sql</code>{' '}
+          from <code>supabase/migrations</code> to this database, then reload.
         </p>
       </div>
     );
@@ -164,11 +164,15 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
             </span>
           </label>
           <label><span className={labelCls}>Phone number ID</span>
-            <input type="text" value={settings.phone_number_id} onChange={(e) => set('phone_number_id', e.target.value)} placeholder="123456789012345" className={inputCls} /></label>
-          <label><span className={labelCls}>WhatsApp business account ID</span>
-            <input type="text" value={settings.business_account_id} onChange={(e) => set('business_account_id', e.target.value)} placeholder="optional" className={inputCls} /></label>
+            <input type="text" value={settings.phone_number_id} onChange={(e) => set('phone_number_id', e.target.value)} placeholder="123456789012345" className={inputCls} />
+            <span className="text-[11px] text-slate-400 mt-1 block">
+              The number in the middle of Meta&apos;s send URL — <code>graph.facebook.com/v25.0/<strong>123…</strong>/messages</code>.
+            </span>
+          </label>
           <label><span className={labelCls}>Graph API version</span>
-            <input type="text" value={settings.api_version} onChange={(e) => set('api_version', e.target.value)} placeholder="v25.0" className={inputCls} /></label>
+            <input type="text" value={settings.api_version} onChange={(e) => set('api_version', e.target.value)} placeholder="v25.0" className={inputCls} />
+            <span className="text-[11px] text-slate-400 mt-1 block">Only change this when Meta retires a version.</span>
+          </label>
           <label><span className={labelCls}>Default country code</span>
             <input type="text" value={settings.default_country_code} onChange={(e) => set('default_country_code', e.target.value)} placeholder="91" className={inputCls} />
             <span className="text-[11px] text-slate-400 mt-1 block">Added to member phone numbers stored without one.</span>
@@ -229,6 +233,9 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
       {/* ── Send one now ── */}
       <SendNowCard currentAdminId={currentAdminId} labels={tpl?.labels ?? {}}
         keys={tpl?.manualKeys ?? []} meetinglessKeys={tpl?.meetinglessKeys ?? []} />
+
+      {/* ── What actually went out ── */}
+      <MessageLogCard currentAdminId={currentAdminId} />
 
       {/* ── Templates ── */}
       {tpl && <TemplateEditors data={tpl} currentAdminId={currentAdminId} onSaved={loadTemplates} />}
@@ -424,6 +431,128 @@ function SendNowCard({ currentAdminId, keys, meetinglessKeys, labels }: {
   );
 }
 
+// ── Message log ─────────────────────────────────────────────────────────────
+// Every send, successful or not, with who it went to. The failures are the
+// point: a WhatsApp send that fails does so silently — no bounce, nothing in
+// the member's inbox — so without this the first sign of trouble is somebody
+// mentioning they never got a reminder.
+interface LogEntry {
+  id: string;
+  at: string;
+  templateLabel: string;
+  status: string;
+  error: string | null;
+  recipient: string | null;
+  memberName: string | null;
+  meetingNumber: number | null;
+}
+
+// "3 min ago" / "2 days ago" — the useful framing for a log read right after a
+// cron run, where an absolute timestamp needs mental arithmetic.
+function timeAgo(iso: string): string {
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [counts, setCounts] = useState<{ sent: number; failed: number } | null>(null);
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    const res = await fetch(
+      `/api/admin/whatsapp-log?memberId=${currentAdminId}&errorsOnly=${errorsOnly ? 1 : 0}`);
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+    if (!res.ok) { setErr(data.error ?? 'Could not load the log'); return; }
+    setEntries(data.entries ?? []);
+    setCounts(data.last24h ?? null);
+  }, [currentAdminId, errorsOnly]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div className={`${cardCls} p-5 space-y-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Message log</h3>
+          <p className="text-xs text-slate-500">
+            Every WhatsApp message sent, and to which number.
+            {counts && (
+              <span className="block mt-0.5">
+                Last 24 hours: <strong className="text-emerald-600 dark:text-emerald-400">{counts.sent} sent</strong>
+                {counts.failed > 0 && <> · <strong className="text-red-600 dark:text-red-400">{counts.failed} failed</strong></>}
+              </span>
+            )}
+          </p>
+        </div>
+        <button onClick={load} disabled={loading} className={`${ghostBtn} shrink-0 !px-3 !py-1.5 !text-xs`}>
+          {loading ? '…' : 'Refresh'}
+        </button>
+      </div>
+
+      <div className="flex gap-2">
+        {([false, true] as const).map((only) => (
+          <button key={String(only)} onClick={() => setErrorsOnly(only)}
+            className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+              errorsOnly === only
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+            }`}>
+            {only ? 'Failures only' : 'Everything'}
+          </button>
+        ))}
+      </div>
+
+      {err ? (
+        <p className="text-xs text-amber-600 dark:text-amber-400">{err}</p>
+      ) : entries.length === 0 ? (
+        <p className="text-xs text-slate-400">
+          {loading ? 'Loading…' : errorsOnly ? 'No failures recorded 🎉' : 'Nothing sent yet.'}
+        </p>
+      ) : (
+        <div className="divide-y divide-slate-100 dark:divide-slate-800 -mx-1">
+          {entries.map((e) => (
+            <div key={e.id} className="px-1 py-2">
+              <div className="flex items-baseline gap-2">
+                <span className={`shrink-0 text-[10px] ${e.status === 'sent' ? 'text-emerald-500' : 'text-red-500'}`}>
+                  {e.status === 'sent' ? '●' : '✕'}
+                </span>
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
+                  {e.memberName ? `TM ${e.memberName}` : e.recipient ?? 'Unknown recipient'}
+                </span>
+                <span className="ml-auto shrink-0 text-[10px] text-slate-400">{timeAgo(e.at)}</span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
+                {e.templateLabel}
+                {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
+                {e.memberName && e.recipient && ` · +${e.recipient}`}
+              </p>
+              {e.error && (
+                <p className="text-[11px] text-red-600 dark:text-red-400 pl-4 mt-0.5 leading-relaxed">{e.error}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="text-[11px] text-slate-400 leading-relaxed">
+        &quot;Sent&quot; means Meta accepted the message, not that it was read. Delivery failures after that
+        point — a number not on WhatsApp, a member who blocked the sender — are only visible in Meta&apos;s
+        own dashboard.
+      </p>
+    </div>
+  );
+}
+
 // ── Template editors ────────────────────────────────────────────────────────
 function TemplateEditors({ data, currentAdminId, onSaved }: {
   data: TemplatesData; currentAdminId: string; onSaved: () => void;
@@ -464,6 +593,14 @@ function TemplateEditor({ tplKey, data, currentAdminId, onSaved }: {
   // a variable used twice (the sign-off names the VP Education, and the welcome
   // names them mid-sentence too) needs two parameters, and mapping it once would
   // leave the second occurrence to be stripped silently.
+  // Two messages pointing at one approved template is always a mistake, and a
+  // silent one: the send succeeds against the wrong body, or fails on a
+  // parameter count that looks inexplicable. Name the clash here instead.
+  const clashesWith = data.templates
+    .filter((t) => t.key !== tplKey && t.template_name.trim()
+      && t.template_name.trim().toLowerCase() === templateName.trim().toLowerCase())
+    .map((t) => data.labels[t.key] ?? t.key);
+
   const used = [...body.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
   const tally = (list: string[]) => list.reduce<Record<string, number>>(
     (acc, v) => ({ ...acc, [v]: (acc[v] ?? 0) + 1 }), {});
@@ -535,10 +672,29 @@ function TemplateEditor({ tplKey, data, currentAdminId, onSaved }: {
           <div className="grid grid-cols-3 gap-3">
             <label className="col-span-2"><span className={labelCls}>Approved template name</span>
               <input type="text" value={templateName} onChange={(e) => setTemplateName(e.target.value)}
-                placeholder="club_meeting_created" className={inputCls} /></label>
+                placeholder={`club_${tplKey}`} className={inputCls} />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Exactly as it appears in Meta, and it must show <strong>Active</strong> there — a template still
+                <em> In review</em> cannot be sent.
+              </span>
+            </label>
             <label><span className={labelCls}>Language</span>
-              <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} placeholder="en" className={inputCls} /></label>
+              <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} placeholder="en" className={inputCls} />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Meta&apos;s &quot;English&quot; is <code>en</code>; &quot;English (US)&quot; is <code>en_US</code>. They are not interchangeable.
+              </span>
+            </label>
           </div>
+
+          {clashesWith.length > 0 && (
+            <div className="rounded-xl border border-red-300 dark:border-red-800/60 bg-red-50 dark:bg-red-900/20 px-3 py-2">
+              <p className="text-[11px] text-red-700 dark:text-red-300 leading-relaxed">
+                <strong>Same template name as {clashesWith.join(' and ')}.</strong> Each message needs its own
+                template in Meta — sharing one sends the wrong wording, or fails on a parameter count that
+                looks inexplicable.
+              </p>
+            </div>
+          )}
 
           <label><span className={labelCls}>Message body</span>
             <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={7} className={`${inputCls} font-mono text-xs leading-relaxed`} />
@@ -596,6 +752,11 @@ function TemplateEditor({ tplKey, data, currentAdminId, onSaved }: {
               </button>
             </div>
             <pre className="text-[11px] font-mono text-slate-600 dark:text-slate-300 whitespace-pre-wrap leading-relaxed">{metaBody}</pre>
+            <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+              Submit it under category <strong>Utility</strong>, not Marketing — these are reminders about
+              something the member already signed up for. Utility templates are cheaper, deliver more
+              reliably, and are not capped by marketing limits.
+            </p>
           </div>
 
           {/* What a member reads */}

@@ -10,11 +10,16 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { WA_DEFAULT_TEMPLATES, WA_PARAM_VARS, type WaTemplateKey } from './defaults';
 import { fillTemplate, type TemplateVars } from '@/lib/email/render';
 
+// Lives in lib/phone.ts, free of server-only imports, so the admin UI can warn
+// about an unusable number using this exact rule. Imported for use below and
+// re-exported because every server caller already reaches for it here.
+import { normalizePhone } from '@/lib/phone';
+export { normalizePhone };
+
 export interface WhatsAppSettings {
   enabled: boolean;
   access_token: string;
   phone_number_id: string;
-  business_account_id: string;
   api_version: string;
   default_country_code: string;
   text_mode: boolean;
@@ -31,36 +36,6 @@ export async function getWhatsAppSettings(): Promise<WhatsAppSettings | null> {
   const supabase = createServiceClient();
   const { data } = await supabase.from('whatsapp_settings').select('*').eq('id', 1).single();
   return (data as WhatsAppSettings) ?? null;
-}
-
-// ── Phone numbers ───────────────────────────────────────────────────────────
-
-// Members type their phone however they like: "+91 98765 43210", "098765 43210",
-// "9876543210". Meta wants bare E.164 digits with no '+'. Anything that can't
-// plausibly be a number comes back null so the caller can skip it silently.
-export function normalizePhone(raw: string | null | undefined, countryCode = '91'): string | null {
-  if (!raw) return null;
-  let digits = String(raw).replace(/\D+/g, '');
-  if (!digits) return null;
-
-  const cc = String(countryCode).replace(/\D+/g, '');
-
-  // "00" is the international prefix in much of the world — same as a leading '+'.
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  // A single leading zero is a national trunk prefix; it never belongs in E.164.
-  else if (digits.startsWith('0')) digits = digits.slice(1);
-
-  // Already carries a country code (and enough digits after it) → leave it be.
-  // The length check matters: an Indian mobile starting "9198…" is a local
-  // number, not a country code plus seven digits.
-  if (cc && digits.startsWith(cc) && digits.length >= cc.length + 9) return digits;
-
-  // A bare national number: prefix the configured country code.
-  if (cc && digits.length <= 10) digits = cc + digits;
-
-  // Shortest plausible E.164 subscriber numbers are around 8 digits plus a
-  // country code; anything under 10 in total is a typo, not a phone number.
-  return digits.length >= 10 && digits.length <= 15 ? digits : null;
 }
 
 // ── Templates ───────────────────────────────────────────────────────────────
@@ -142,6 +117,27 @@ function graphUrl(s: WhatsAppSettings): string {
   return `https://graph.facebook.com/${version}/${s.phone_number_id}/messages`;
 }
 
+// Meta's error text names the symptom, not the cause. "Template name does not
+// exist in the translation" is the same message whether the template is still in
+// review, the name is misspelt, or the language code doesn't match — three very
+// different fixes. Add the likely cause so an admin isn't left guessing.
+const META_ERROR_HINTS: Record<number, string> = {
+  132001: 'Check the template in Meta: it must show Active/Approved (not "In review"), '
+    + 'the approved name must match exactly, and its language must match the code set here.',
+  132000: 'The number of parameters sent does not match the template. Count the {{1}}, {{2}}… '
+    + 'in the approved body and make the parameter order below the same length.',
+  132005: 'A parameter is too long for the template, or the approved body has changed.',
+  132012: 'A parameter contains something Meta rejects — a newline, a tab, or four or more spaces in a row.',
+  131047: 'Free-form text only reaches someone who messaged your number in the last 24 hours. '
+    + 'Turn off "send as plain text" and use an approved template instead.',
+  131026: 'That number cannot receive the message — it may not be on WhatsApp, or not yet '
+    + 'added as a recipient on a Meta test number.',
+  131030: 'On a Meta test number you can only message the recipients listed in the API Setup page.',
+  133010: 'The sending number is not registered for the Cloud API. Finish registration in Meta first.',
+  190: 'The access token has expired or been revoked. Generate a new permanent System User token.',
+  100: 'Meta rejected the request shape — usually a wrong phone number ID or Graph API version.',
+};
+
 async function postToMeta(s: WhatsAppSettings, payload: Record<string, unknown>): Promise<WaSendResult> {
   try {
     const res = await fetch(graphUrl(s), {
@@ -154,11 +150,10 @@ async function postToMeta(s: WhatsAppSettings, payload: Record<string, unknown>)
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      // Meta nests the useful part; its top-level message is usually enough to
-      // act on ("Template name does not exist in the translation").
       const err = data?.error ?? {};
       const detail = err.error_user_msg || err.message || `HTTP ${res.status}`;
-      return { error: String(detail) };
+      const hint = META_ERROR_HINTS[Number(err.code)];
+      return { error: hint ? `${detail} — ${hint}` : String(detail) };
     }
     return { ok: true, messageId: data?.messages?.[0]?.id };
   } catch (err) {
