@@ -445,6 +445,23 @@ interface LogEntry {
   recipient: string | null;
   memberName: string | null;
   meetingNumber: number | null;
+  deliveryStatus: string | null;
+  deliveryError: string | null;
+}
+
+// Two separate facts, and the distinction is the whole point of the log: `status`
+// is whether Meta accepted the message, `deliveryStatus` is whether a phone ever
+// received it. Meta answers the send with a message id either way, so a row that
+// never gets a callback is genuinely unknown — never call it delivered.
+function deliveryBadge(e: LogEntry): { mark: string; cls: string; label: string } {
+  if (e.status === 'error') return { mark: '✕', cls: 'text-red-500', label: 'Rejected by Meta' };
+  switch (e.deliveryStatus) {
+    case 'read':      return { mark: '●', cls: 'text-emerald-500', label: 'Read' };
+    case 'delivered': return { mark: '●', cls: 'text-emerald-500', label: 'Delivered' };
+    case 'sent':      return { mark: '◐', cls: 'text-sky-500', label: 'Sent, not yet delivered' };
+    case 'failed':    return { mark: '✕', cls: 'text-red-500', label: 'Not delivered' };
+    default:          return { mark: '○', cls: 'text-slate-400', label: 'Accepted — no delivery confirmation yet' };
+  }
 }
 
 // "3 min ago" / "2 days ago" — the useful framing for a log read right after a
@@ -462,7 +479,7 @@ function timeAgo(iso: string): string {
 
 function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [counts, setCounts] = useState<{ sent: number; failed: number } | null>(null);
+  const [counts, setCounts] = useState<{ sent: number; failed: number; delivered?: number } | null>(null);
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -490,6 +507,7 @@ function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
             {counts && (
               <span className="block mt-0.5">
                 Last 24 hours: <strong className="text-emerald-600 dark:text-emerald-400">{counts.sent} sent</strong>
+                {!!counts.delivered && <> · <strong className="text-emerald-600 dark:text-emerald-400">{counts.delivered} delivered</strong></>}
                 {counts.failed > 0 && <> · <strong className="text-red-600 dark:text-red-400">{counts.failed} failed</strong></>}
               </span>
             )}
@@ -521,33 +539,39 @@ function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
         </p>
       ) : (
         <div className="divide-y divide-slate-100 dark:divide-slate-800 -mx-1">
-          {entries.map((e) => (
-            <div key={e.id} className="px-1 py-2">
-              <div className="flex items-baseline gap-2">
-                <span className={`shrink-0 text-[10px] ${e.status === 'sent' ? 'text-emerald-500' : 'text-red-500'}`}>
-                  {e.status === 'sent' ? '●' : '✕'}
-                </span>
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
-                  {e.memberName ? `TM ${e.memberName}` : e.recipient ?? 'Unknown recipient'}
-                </span>
-                <span className="ml-auto shrink-0 text-[10px] text-slate-400">{timeAgo(e.at)}</span>
+          {entries.map((e) => {
+            const badge = deliveryBadge(e);
+            return (
+              <div key={e.id} className="px-1 py-2">
+                <div className="flex items-baseline gap-2">
+                  <span title={badge.label} className={`shrink-0 text-[10px] ${badge.cls}`}>{badge.mark}</span>
+                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
+                    {e.memberName ? `TM ${e.memberName}` : e.recipient ?? 'Unknown recipient'}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] text-slate-400">{timeAgo(e.at)}</span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
+                  {badge.label}
+                  {' · '}{e.templateLabel}
+                  {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
+                  {e.memberName && e.recipient && ` · +${e.recipient}`}
+                </p>
+                {(e.error || e.deliveryError) && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400 pl-4 mt-0.5 leading-relaxed">
+                    {e.error ?? e.deliveryError}
+                  </p>
+                )}
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
-                {e.templateLabel}
-                {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
-                {e.memberName && e.recipient && ` · +${e.recipient}`}
-              </p>
-              {e.error && (
-                <p className="text-[11px] text-red-600 dark:text-red-400 pl-4 mt-0.5 leading-relaxed">{e.error}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <p className="text-[11px] text-slate-400 leading-relaxed">
-        &quot;Sent&quot; means Meta accepted the message, not that it was read. Delivery failures after that
-        point — a number not on WhatsApp, a member who blocked the sender — are only visible in Meta&apos;s
-        own dashboard.
+        Meta accepts a message before it delivers one, so &quot;sent&quot; is not &quot;arrived&quot;.
+        The mark on the left is what actually happened: ● delivered or read, ◐ on its way,
+        ✕ never arrived, ○ no word back yet. That last one means the delivery webhook is not
+        configured — set <code>WHATSAPP_VERIFY_TOKEN</code> and <code>WHATSAPP_APP_SECRET</code>, then
+        point Meta at <code>/api/whatsapp-webhook</code>.
       </p>
     </div>
   );

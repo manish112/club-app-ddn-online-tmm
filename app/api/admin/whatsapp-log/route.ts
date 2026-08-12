@@ -25,15 +25,30 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServiceClient();
 
-  let query = supabase
-    .from('whatsapp_sends')
-    .select('id, created_at, template_key, status, error, recipient, wa_message_id, meeting:meetings(number)')
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (errorsOnly) query = query.eq('status', 'error');
+  const BASE_COLS = 'id, created_at, template_key, status, error, recipient, wa_message_id, meeting:meetings(number)';
+  const DELIVERY_COLS = 'delivery_status, delivery_error, delivery_at';
 
-  const [{ data: rows, error }, { data: members }, settings] = await Promise.all([
-    query,
+  // Two selects, because migration 057 may not have reached this database yet
+  // and a log that refuses to load is worse than one missing a column. The
+  // second is the pre-057 shape.
+  function build(withDelivery: boolean) {
+    const q = supabase
+      .from('whatsapp_sends')
+      .select(withDelivery ? `${BASE_COLS}, ${DELIVERY_COLS}` : BASE_COLS)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (!errorsOnly) return q;
+    // A message Meta accepted and then failed to deliver is a failure too — and
+    // the only kind the sender itself never sees.
+    return withDelivery
+      ? q.or('status.eq.error,delivery_status.eq.failed')
+      : q.eq('status', 'error');
+  }
+
+  let { data: rows, error } = await build(true);
+  if (error) ({ data: rows, error } = await build(false));
+
+  const [{ data: members }, settings] = await Promise.all([
     supabase.from('members').select('display_name, name, phone'),
     getWhatsAppSettings(),
   ]);
@@ -60,6 +75,7 @@ export async function GET(req: NextRequest) {
     id: string; created_at: string; template_key: string | null;
     status: string; error: string | null; recipient: string | null;
     wa_message_id: string | null; meeting: { number: number } | null;
+    delivery_status?: string | null; delivery_error?: string | null; delivery_at?: string | null;
   };
 
   const entries = ((rows ?? []) as unknown as Row[]).map((r) => ({
@@ -75,6 +91,12 @@ export async function GET(req: NextRequest) {
     memberName: r.recipient ? nameByNumber.get(r.recipient) ?? null : null,
     meetingNumber: r.meeting?.number ?? null,
     waMessageId: r.wa_message_id,
+    // Null until Meta calls the webhook back — which it only does once the
+    // callback URL is configured. Shown as "awaiting confirmation" rather than
+    // silently as success.
+    deliveryStatus: r.delivery_status ?? null,
+    deliveryError: r.delivery_error ?? null,
+    deliveryAt: r.delivery_at ?? null,
   }));
 
   // Counts over the last 24 hours, so an admin opening the tab after a cron run
@@ -86,7 +108,9 @@ export async function GET(req: NextRequest) {
     entries,
     last24h: {
       sent: recent.filter((e) => e.status === 'sent').length,
-      failed: recent.filter((e) => e.status === 'error').length,
+      // Rejected at the door, plus accepted and then dropped on the way.
+      failed: recent.filter((e) => e.status === 'error' || e.deliveryStatus === 'failed').length,
+      delivered: recent.filter((e) => e.deliveryStatus === 'delivered' || e.deliveryStatus === 'read').length,
     },
   });
 }

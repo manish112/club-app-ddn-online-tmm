@@ -76,20 +76,6 @@ export const WA_PLACEHOLDERS: Record<WaTemplateKey, string[]> = {
   meeting_starting: [...COMMON, 'meeting_number', 'meeting_start', 'meeting_time', 'meeting_theme', 'meeting_link', 'roles_taken', 'roles_open'],
 };
 
-// The order our variables map onto Meta's positional body parameters, for each
-// body's own placeholders — matching the order they appear in it, so a template
-// submitted verbatim from the admin panel lines up with no further configuration.
-// The sign-off's parameters are appended below.
-const BODY_PARAM_VARS: Record<WaTemplateKey, string[]> = {
-  welcome:          ['full_name', 'vp_education_name', 'app_url'],
-  meeting_created:  ['full_name', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'app_url'],
-  role_assigned:    ['full_name', 'role_label', 'meeting_number', 'meeting_date', 'meeting_time', 'actor_line', 'app_url'],
-  role_removed:     ['full_name', 'role_label', 'meeting_number', 'meeting_date', 'actor_line', 'app_url'],
-  role_reminder:    ['full_name', 'role_label', 'meeting_number', 'meeting_date', 'meeting_time', 'app_url'],
-  no_role_nudge:    ['full_name', 'meeting_number', 'meeting_date', 'open_roles_count', 'open_roles_list', 'app_url'],
-  meeting_starting: ['full_name', 'meeting_number', 'meeting_start', 'roles_taken', 'roles_open', 'meeting_link'],
-};
-
 // Every message signs off from the VP Education, by name. The name is a
 // parameter so it follows whoever holds the office; the title and club line are
 // fixed text, which keeps the parameter count down and the sign-off constant.
@@ -122,17 +108,24 @@ const SIGN_OFF_PARAM_VARS: string[] =
 //
 // *Single asterisks* are WhatsApp's bold syntax and render as bold on the phone.
 const BODIES: Record<WaTemplateKey, string> = {
+  // Deliberately flat, and it costs the message some warmth. Meta assigns a
+  // template's category from its copy, and the friendlier draft this replaces —
+  // "I will not crowd your phone", "See you at the lectern 🎤" — was read as
+  // Marketing. Marketing templates are paced per recipient: Meta accepts them
+  // with a message id and then quietly declines to deliver, which is exactly how
+  // this club's first welcome vanished. A notice about the member's own record
+  // and the settings attached to it is Utility, and Utility arrives.
   welcome:
     'Dear TM {{full_name}} 👋\n\n'
-    + 'This is your *Dehradun Online Toastmasters* club system.\n\n'
-    + 'From here on I will drop you a line on WhatsApp now and then — when a new meeting is '
-    + 'announced, when a role comes your way or leaves it, a nudge the day before, and a hello '
-    + 'on meeting day.\n\n'
-    + 'That is the whole list. I will not crowd your phone, and I will only nudge when it '
-    + 'actually helps.\n\n'
-    + 'Would rather not? Have a word with TM {{vp_education_name}}, or switch it off in your '
-    + 'profile:\n{{app_url}}\n\n'
-    + 'See you at the lectern 🎤',
+    + 'Your membership record with *Dehradun Online Toastmasters* is active, and WhatsApp '
+    + 'updates are now switched on for this number.\n\n'
+    + 'You will receive:\n'
+    + '• New meeting announcements\n'
+    + '• Roles assigned to or removed from you\n'
+    + '• A reminder the day before your role\n'
+    + '• A note on meeting day\n\n'
+    + 'To change or stop these updates, open your profile:\n{{app_url}}\n\n'
+    + 'For anything else, contact TM {{vp_education_name}}.',
 
   meeting_created:
     'Dear TM {{full_name}} 👋\n\n'
@@ -173,13 +166,17 @@ const BODIES: Record<WaTemplateKey, string> = {
     + 'A few minutes of prep goes a long way:\n{{app_url}}\n\n'
     + 'See you there 🎤',
 
+  // Same reasoning as the welcome above: this one was categorised Marketing too,
+  // and a nudge that Meta declines to deliver is worse than no nudge at all. A
+  // statement of the member's agenda status is Utility; "every one of them is a
+  // chance to grow" was the sentence that made it a promotion.
   no_role_nudge:
     'Dear TM {{full_name}} 👋\n\n'
-    + '*Meeting #{{meeting_number}}* is tomorrow, {{meeting_date}} — and your name is not on '
-    + 'the agenda yet.\n\n'
-    + '🙌 *{{open_roles_count}} roles still open*\n'
+    + 'Reminder: *Meeting #{{meeting_number}}* is tomorrow, {{meeting_date}}.\n\n'
+    + '📋 Your agenda status: *no role assigned*\n\n'
+    + '🙌 *Open slots ({{open_roles_count}})*\n'
     + '{{open_roles_list}}\n\n'
-    + 'Every one of them is a chance to grow. Claim yours in a tap:\n{{app_url}}',
+    + 'To take one, open the agenda:\n{{app_url}}',
 
   meeting_starting:
     'Dear TM {{full_name}} 👋\n\n'
@@ -196,8 +193,21 @@ export const WA_DEFAULT_TEMPLATES: Record<WaTemplateKey, string> = Object.fromEn
   WA_TEMPLATE_KEYS.map((key) => [key, BODIES[key] + SIGN_OFF]),
 ) as Record<WaTemplateKey, string>;
 
+// The order our variables map onto Meta's positional body parameters: exactly
+// the order the placeholders appear in the body, so a template submitted
+// verbatim from the admin panel lines up with no further configuration.
+//
+// Read out of the body rather than listed separately, for the same reason
+// SIGN_OFF_PARAM_VARS is. The two must agree perfectly — Meta rejects a send
+// whose parameter count differs from the approved template by even one — and a
+// hand-kept list silently stops agreeing the first time anybody rewrites a
+// sentence. That is a rejection on every message at once, discovered only when
+// a reminder fails to go out.
+const placeholdersIn = (body: string): string[] =>
+  [...body.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+
 export const WA_PARAM_VARS: Record<WaTemplateKey, string[]> = Object.fromEntries(
-  WA_TEMPLATE_KEYS.map((key) => [key, [...BODY_PARAM_VARS[key], ...SIGN_OFF_PARAM_VARS]]),
+  WA_TEMPLATE_KEYS.map((key) => [key, [...placeholdersIn(BODIES[key]), ...SIGN_OFF_PARAM_VARS]]),
 ) as Record<WaTemplateKey, string[]>;
 
 export function waDefaultBody(key: WaTemplateKey): string {

@@ -417,6 +417,13 @@ export async function buildWaPreviewVars(adminId?: string): Promise<TemplateVars
   const fallbackName = admin?.name || admin?.display_name || '[Member name]';
   const meeting = pickUpcomingMeeting((meetings ?? []) as MeetingRow[]);
 
+  // The admin running the test *is* the actor, and their row is already loaded —
+  // so name them, the way a real assignment does. These vars are not only drawn
+  // on screen: the test send posts them to Meta as body parameters, and a
+  // bracketed "[Admin name]" arrives on a real phone looking like a broken
+  // message. Matches waNotifyRoleChange in preferring display_name.
+  const actorLine = `This was done by Admin TM ${admin?.display_name || admin?.name || 'your club admin'}.`;
+
   if (!meeting) {
     return {
       ...(await signOffVars()),
@@ -425,7 +432,7 @@ export async function buildWaPreviewVars(adminId?: string): Promise<TemplateVars
       meeting_time: 'a time yet to be set', meeting_start: 'a time yet to be set',
       meeting_theme: 'To be decided', meeting_link: appUrl,
       full_name: fallbackName, role_label: 'Timer',
-      actor_line: 'This was done by Admin TM [Admin name].',
+      actor_line: actorLine,
       open_roles_count: '0', open_roles_list: 'none',
       roles_taken: 'No meeting scheduled, so there is no role sheet yet.',
       roles_open: 'No meeting scheduled, so there is no role sheet yet.',
@@ -437,7 +444,7 @@ export async function buildWaPreviewVars(adminId?: string): Promise<TemplateVars
     ...(await baseVars(meeting, appUrl)),
     full_name: fallbackName,
     role_label: 'Timer',
-    actor_line: 'This was done by Admin TM [Admin name].',
+    actor_line: actorLine,
     open_roles_count: String(open.roles.length),
     open_roles_list: open.roles.map(({ roleKey, slot }) => roleLabel(roleKey, slot)).join(LIST_SEP) || 'none',
     roles_taken: sheet.taken,

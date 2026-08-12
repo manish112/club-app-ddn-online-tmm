@@ -259,8 +259,13 @@ export async function deliverWhatsApp(opts: DeliverOpts): Promise<WaSendResult> 
 
 // ── One-off sends (admin test) ──────────────────────────────────────────────
 
-// Send to an arbitrary number using the given settings, bypassing templates and
-// the send log. `override` lets an admin verify credentials before saving them.
+// Send to an arbitrary number using the given settings, bypassing the dedupe
+// guard and the per-notification toggles. `override` lets an admin verify
+// credentials before saving them.
+//
+// The result *is* written to the send log. A test send is the one an admin is
+// actively watching, so it is the one whose delivery callback matters most —
+// and a callback for a message with no row to attach to is thrown away.
 export async function sendWhatsAppTest(params: {
   to: string;
   mode: 'text' | 'template';
@@ -278,16 +283,27 @@ export async function sendWhatsAppTest(params: {
   const to = normalizePhone(params.to, settings.default_country_code);
   if (!to) return { error: 'That does not look like a valid phone number' };
 
+  let result: WaSendResult;
   if (params.mode === 'text') {
     const body = (params.text ?? '').trim();
     if (!body) return { error: 'Message text is required' };
-    return sendTextMessage(settings, to, body);
+    result = await sendTextMessage(settings, to, body);
+  } else {
+    if (!params.templateKey) return { error: 'Pick a template to send' };
+    const tpl = await resolveWaTemplate(params.templateKey);
+    if (!tpl.template_name) return { error: 'No approved template name is set for this message' };
+    result = await sendTemplateMessage(
+      settings, to, tpl.template_name, tpl.language_code, buildParams(tpl, params.vars ?? {}),
+    );
   }
 
-  if (!params.templateKey) return { error: 'Pick a template to send' };
-  const tpl = await resolveWaTemplate(params.templateKey);
-  if (!tpl.template_name) return { error: 'No approved template name is set for this message' };
-  return sendTemplateMessage(
-    settings, to, tpl.template_name, tpl.language_code, buildParams(tpl, params.vars ?? {}),
-  );
+  await createServiceClient().from('whatsapp_sends').insert({
+    template_key: params.templateKey ?? null,
+    recipient: to,
+    wa_message_id: 'ok' in result ? result.messageId ?? null : null,
+    status: 'error' in result ? 'error' : 'sent',
+    error: 'error' in result ? result.error : null,
+  });
+
+  return result;
 }
