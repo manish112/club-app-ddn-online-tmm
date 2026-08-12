@@ -138,6 +138,7 @@ export interface Member {
   avatar_url: string | null;
   show_phone_in_contact: boolean;
   email_notifications?: boolean;   // opt-out flag; undefined/true = receives emails
+  whatsapp_notifications?: boolean; // opt-out flag; undefined/true = receives WhatsApp
   // Admin-set; undefined when the column hasn't been read (see participationMode).
   participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;
