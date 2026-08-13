@@ -42,6 +42,22 @@ export const WA_MANUAL_SEND_KEYS: WaTemplateKey[] = [
 // need one scheduled.
 export const WA_MEETINGLESS_KEYS: WaTemplateKey[] = ['welcome'];
 
+// The messages an admin can send to ONE member from the members tab. Same list
+// as the club-wide sends — `role_removed` is out of both, because a removal
+// means something only to the person it happened to, and telling them again
+// later would be baffling.
+export const WA_MEMBER_SEND_KEYS: WaTemplateKey[] = WA_MANUAL_SEND_KEYS;
+
+// Of those, the ones that name a specific role: sendable only when the member
+// actually holds one at the meeting, since the role is real data and not
+// something a manual send gets to invent.
+export const WA_MEMBER_ROLE_KEYS: WaTemplateKey[] = ['role_assigned', 'role_reminder'];
+
+// Free text typed by an admin, rather than one of the templates above. Recorded
+// in the send log under its own key so a direct message is distinguishable from
+// a notification the app decided to send.
+export const WA_DIRECT_KEY = 'custom';
+
 export const WA_TEMPLATE_LABELS: Record<WaTemplateKey, string> = {
   welcome:          'Welcome / introducing WhatsApp (to a member)',
   meeting_created:  'New meeting announced (to all members)',
@@ -60,6 +76,13 @@ export const WA_TEMPLATE_HINTS: Record<WaTemplateKey, string> = {
   role_reminder:    'Fires the day before, once per role a member holds.',
   no_role_nudge:    'Fires the day before, only to members with no role at that meeting, and only while roles are still open.',
   meeting_starting: 'Fires on meeting day, within the lead-time window set above. Lists who has which role and what is still vacant.',
+};
+
+// Labels for the send log, which also has to name rows written by the direct
+// send — a key that is deliberately not a template.
+export const WA_LOG_LABELS: Record<string, string> = {
+  ...WA_TEMPLATE_LABELS,
+  [WA_DIRECT_KEY]: 'Direct message from an admin',
 };
 
 // Every placeholder a kind may use. The admin editor lists these, and the

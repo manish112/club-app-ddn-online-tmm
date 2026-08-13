@@ -569,10 +569,15 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
 
   const mode = participationMode(member);
 
-  // Both preferences are opt-OUT: a column that's null, or absent because the
-  // migration hasn't run, means the member still receives notifications.
+  // Email is opt-OUT: a column that's null, or absent because the migration
+  // hasn't run, means the member still receives it.
   const emailPrefOn = member.email_notifications !== false;
-  const waPrefOn = member.whatsapp_notifications !== false;
+  // WhatsApp is not, and this is the whole point of migration 058. It costs the
+  // club per message, so it is opt-IN and the admin's to grant: only an explicit
+  // true sends anything. `waMuted` is the member's own switch, shown here but
+  // not an admin's to flip — a member who asked for silence keeps it.
+  const waEnabled = member.whatsapp_enabled === true;
+  const waMuted = member.whatsapp_notifications === false;
   const contactDirty = email.trim() !== (member.email ?? '') || phone.trim() !== (member.phone ?? '');
   // The same rule the sender applies, so "on but unreachable" is visible here
   // rather than discovered as silence.
@@ -717,11 +722,13 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     if (!error) onUpdated();
   }
 
-  // Each preference is written on its own: the WhatsApp column arrived in
-  // migration 055, so on a database without it the email toggle must still work.
+  // Each channel is written on its own: the WhatsApp columns arrived in
+  // migrations 055 and 058, so on a database without them the email toggle must
+  // still work. The WhatsApp switch writes the admin gate, never the member's own
+  // preference — those are two different decisions by two different people.
   async function togglePref(channel: 'email' | 'whatsapp') {
-    const column = channel === 'email' ? 'email_notifications' : 'whatsapp_notifications';
-    const next = !(channel === 'email' ? emailPrefOn : waPrefOn);
+    const column = channel === 'email' ? 'email_notifications' : 'whatsapp_enabled';
+    const next = !(channel === 'email' ? emailPrefOn : waEnabled);
     setTogglingPref(channel);
     const { error } = await supabase.from('members').update({ [column]: next }).eq('id', member.id);
     setTogglingPref(null);
@@ -889,13 +896,15 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             {togglingPref === 'email' ? '…' : `✉️ Email ${emailPrefOn ? 'on' : 'off'}`}
           </button>
           <button onClick={() => togglePref('whatsapp')} disabled={togglingPref === 'whatsapp'}
-            title={waPrefOn ? 'Receiving WhatsApp — click to stop' : 'Not receiving WhatsApp — click to resume'}
+            title={waEnabled
+              ? 'WhatsApp is enabled for this member — click to stop sending (and stop paying) for them'
+              : 'No WhatsApp is sent to this member — click to enable it'}
             className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all active:scale-95 disabled:opacity-40 ${
-              waPrefOn
+              waEnabled
                 ? 'bg-emerald-600 border-emerald-600 text-white'
                 : 'border-slate-200 dark:border-slate-700/60 text-slate-400 dark:text-slate-500'
             }`}>
-            {togglingPref === 'whatsapp' ? '…' : `💬 WhatsApp ${waPrefOn ? 'on' : 'off'}`}
+            {togglingPref === 'whatsapp' ? '…' : `💬 WhatsApp ${waEnabled ? 'on' : 'off'}`}
           </button>
         </div>
 
@@ -906,9 +915,29 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             Email is on, but there&apos;s no valid address — nothing will reach them.
           </p>
         )}
-        {waPrefOn && !phoneUsable && (
+        {waEnabled && !phoneUsable && (
           <p className="text-[10px] text-amber-600 dark:text-amber-400 pl-14">
             WhatsApp is on, but the phone number {phone.trim() ? 'is not usable' : 'is missing'} — nothing will reach them.
+          </p>
+        )}
+        {waEnabled && waMuted && (
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 pl-14">
+            They&apos;ve turned WhatsApp off in their own profile, so nothing is sent. That&apos;s their
+            choice to reverse, not yours.
+          </p>
+        )}
+        {!waEnabled && (
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 pl-14">
+            No WhatsApp is sent to this member, and they can&apos;t switch it on themselves.
+          </p>
+        )}
+        {/* Sending a one-off message lives on the WhatsApp tab, next to the
+            club-wide sends and the message log — the same decision, one
+            recipient rather than all of them. */}
+        {waEnabled && phoneUsable && !waMuted && (
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 pl-14">
+            To message them on their own, use <strong className="text-slate-500 dark:text-slate-400">Send
+            to one member</strong> on the WhatsApp tab.
           </p>
         )}
       </div>
@@ -997,10 +1026,16 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
 
 // ─── Add member form ──────────────────────────────────────────────────────────
 
-function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string, phone: string) => void }) {
+function AddMemberForm({ onAdd }: {
+  onAdd: (name: string, email: string, phone: string, whatsappEnabled: boolean) => void;
+}) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  // Off by default, and it stays off unless an admin ticks it: every WhatsApp
+  // message costs the club money, so a new member is added silently and is
+  // switched on deliberately, one decision at a time.
+  const [waEnabled, setWaEnabled] = useState(false);
 
   // Warn before the member is created, not after: a number typed wrong here is
   // one nobody looks at again until the reminders quietly fail to arrive.
@@ -1009,8 +1044,8 @@ function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string, phone: 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    onAdd(name.trim(), email.trim(), phone.trim());
-    setName(''); setEmail(''); setPhone('');
+    onAdd(name.trim(), email.trim(), phone.trim(), waEnabled);
+    setName(''); setEmail(''); setPhone(''); setWaEnabled(false);
   }
   return (
     <form onSubmit={submit} className="space-y-2">
@@ -1018,12 +1053,31 @@ function AddMemberForm({ onAdd }: { onAdd: (name: string, email: string, phone: 
       <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (sends a welcome email)" className={inputCls} />
       <div className="flex gap-2">
         <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-          placeholder="Phone (sends a welcome on WhatsApp)" className={inputCls} />
+          placeholder="Phone (for WhatsApp, if you enable it below)" className={inputCls} />
         <button type="submit" disabled={!name.trim()} className={`shrink-0 ${primaryBtn}`}>Add</button>
       </div>
+
+      <label className="flex items-start gap-2 cursor-pointer select-none rounded-xl border border-slate-200 dark:border-slate-700/60 bg-slate-50/60 dark:bg-slate-800/30 px-3 py-2">
+        <input type="checkbox" checked={waEnabled} onChange={e => setWaEnabled(e.target.checked)}
+          className="w-4 h-4 mt-0.5 accent-emerald-600 rounded shrink-0" />
+        <span className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+          Send WhatsApp messages to this member
+          <span className="block text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+            Off by default — WhatsApp costs the club per message. Leave it off and they still get every
+            email; nothing is sent to their phone, not even the welcome. You can switch it on later from
+            their row.
+          </span>
+        </span>
+      </label>
+
       {phoneBad && (
         <p className="text-[11px] text-amber-600 dark:text-amber-400">
           That does not look like a usable number — it will be saved, but WhatsApp will not reach them.
+        </p>
+      )}
+      {waEnabled && !phone.trim() && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          WhatsApp is on but there is no phone number, so nothing can be sent until one is added.
         </p>
       )}
     </form>
@@ -2503,7 +2557,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     fetchAll();
   }
 
-  async function addMember(name: string, email: string, phone: string) {
+  async function addMember(name: string, email: string, phone: string, whatsappEnabled: boolean) {
     const { data: created, error } = await supabase.from('members')
       .insert({
         membership_no: `MANUAL-${Date.now()}`, name, display_name: name, active: true,
@@ -2514,10 +2568,21 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       })
       .select('id').single();
     if (error) { alert(`Failed: ${error.message}`); return; }
-    // Welcome the new member (best-effort). The route decides per channel —
-    // a member with no email may still be reachable on WhatsApp once they fill
-    // in a phone number, and gating here would rule that out for both.
+
     if (created?.id) {
+      // The WhatsApp permission is written on its own, and awaited: on its own
+      // because a database still missing migration 058 must not lose the whole
+      // member over an unknown column, and awaited because the welcome below
+      // reads this exact flag to decide whether to message their phone.
+      if (whatsappEnabled) {
+        const { error: waErr } = await supabase.from('members')
+          .update({ whatsapp_enabled: true }).eq('id', created.id);
+        if (waErr) alert(`Member added, but WhatsApp could not be enabled: ${waErr.message}`);
+      }
+      // Welcome the new member (best-effort). The route decides per channel —
+      // a member with no email may still be reachable on WhatsApp once they fill
+      // in a phone number, and gating here would rule that out for both. The
+      // WhatsApp half is skipped unless the box above was ticked.
       fetch('/api/notify-welcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

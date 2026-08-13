@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
         .select('id, number, date, start_time, end_time, theme, meeting_link')
         .eq('id', meetingId).single(),
       supabase.from('members')
-        .select('id, name, display_name, email, phone, active, whatsapp_notifications')
+        .select('id, name, display_name, email, phone, active, whatsapp_enabled, whatsapp_notifications')
         .eq('id', targetMemberId).single(),
     ]);
 

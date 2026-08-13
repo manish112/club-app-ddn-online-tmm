@@ -51,15 +51,22 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [saving, setSaving] = useState(false);
   const [emailPref, setEmailPref] = useState(member.email_notifications !== false);
   const [waPref, setWaPref] = useState(member.whatsapp_notifications !== false);
+  // Whether the club sends this member WhatsApp at all — an admin's decision, not
+  // theirs, because each message is billed to the club. When it's off the switch
+  // below is shown locked rather than hidden: a member who wonders why no
+  // reminders arrive deserves to see why, and who can change it.
+  const [waAllowed, setWaAllowed] = useState(member.whatsapp_enabled === true);
 
   // Read the saved preferences on their own (isolated so a not-yet-migrated
-  // column can never break the profile card). Kept as two reads for the same
+  // column can never break the profile card). Kept as separate reads for the same
   // reason: a database with 046 but not 055 must still load the email one.
   useEffect(() => {
     supabase.from('members').select('email_notifications').eq('id', member.id).maybeSingle()
       .then(({ data }) => { if (data && typeof data.email_notifications === 'boolean') setEmailPref(data.email_notifications); });
     supabase.from('members').select('whatsapp_notifications').eq('id', member.id).maybeSingle()
       .then(({ data }) => { if (data && typeof data.whatsapp_notifications === 'boolean') setWaPref(data.whatsapp_notifications); });
+    supabase.from('members').select('whatsapp_enabled').eq('id', member.id).maybeSingle()
+      .then(({ data }) => { if (data && typeof data.whatsapp_enabled === 'boolean') setWaAllowed(data.whatsapp_enabled); });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -99,7 +106,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     // Save each notification preference separately (best-effort — an unmigrated
     // column must never block the profile save, nor take the other one down).
     await supabase.from('members').update({ email_notifications: emailPref }).eq('id', member.id);
-    await supabase.from('members').update({ whatsapp_notifications: waPref }).eq('id', member.id);
+    // Only written while the club allows WhatsApp for this member. Not merely
+    // because the switch is disabled in that case — saving would overwrite the
+    // preference they had before the admin switched the channel off, so turning
+    // it back on later would silently forget what they had asked for.
+    if (waAllowed) {
+      await supabase.from('members').update({ whatsapp_notifications: waPref }).eq('id', member.id);
+    }
     setSaving(false);
     setEditing(false);
     onUpdated();
@@ -172,10 +185,20 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
                 </span>
               </label>
             )}
-            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
-              <input type="checkbox" checked={waPref} onChange={(e) => setWaPref(e.target.checked)}
-                className="w-4 h-4 accent-maroon-700 rounded" />
-              <span className="text-xs text-slate-500 dark:text-slate-400">Send me WhatsApp reminders</span>
+            <label className={`flex items-start gap-2 mt-2 select-none ${waAllowed ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+              <input type="checkbox" checked={waAllowed && waPref} disabled={!waAllowed}
+                onChange={(e) => setWaPref(e.target.checked)}
+                className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0 disabled:opacity-50" />
+              <span className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                Send me WhatsApp reminders
+                {!waAllowed && (
+                  <span className="block text-[11px] text-slate-400 dark:text-slate-500">
+                    WhatsApp is not switched on for you. Only a club admin can turn it on — ask the VP
+                    Education if you would like reminders on your phone. Your email notifications are
+                    unaffected.
+                  </span>
+                )}
+              </span>
             </label>
           </div>
 

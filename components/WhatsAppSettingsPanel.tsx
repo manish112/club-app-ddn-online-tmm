@@ -63,7 +63,13 @@ interface TargetMeeting {
 }
 interface SendTarget {
   meeting: TargetMeeting | null;
-  audience: { active: number; reachable: number; noPhone: number; optedOut: number };
+  /** Set when the members table couldn't be read — a missing migration, usually. */
+  warning?: string | null;
+  audience: {
+    active: number; reachable: number; noPhone: number; optedOut: number;
+    /** Active members an admin has not switched WhatsApp on for (migration 058). */
+    notEnabled?: number;
+  };
   openRoles: number;
   withRole: number;
 }
@@ -121,8 +127,9 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
       <div className="rounded-2xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
         <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">{loadError}</p>
         <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-          Apply <code>055_whatsapp_notifications.sql</code> and <code>056_whatsapp_welcome_role_change.sql</code>{' '}
-          from <code>supabase/migrations</code> to this database, then reload.
+          Apply <code>055_whatsapp_notifications.sql</code> through{' '}
+          <code>058_whatsapp_per_member_enable.sql</code> from <code>supabase/migrations</code> to this
+          database, then reload.
         </p>
       </div>
     );
@@ -233,6 +240,9 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
       {/* ── Send one now ── */}
       <SendNowCard currentAdminId={currentAdminId} labels={tpl?.labels ?? {}}
         keys={tpl?.manualKeys ?? []} meetinglessKeys={tpl?.meetinglessKeys ?? []} />
+
+      {/* ── Send to one member ── */}
+      <MemberSendCard currentAdminId={currentAdminId} />
 
       {/* ── What actually went out ── */}
       <MessageLogCard currentAdminId={currentAdminId} />
@@ -392,6 +402,12 @@ function SendNowCard({ currentAdminId, keys, meetinglessKeys, labels }: {
         <p className="text-xs text-slate-500">Fires a message for the upcoming meeting straight away, outside the schedule.</p>
       </div>
 
+      {target?.warning && (
+        <div className="rounded-xl border border-red-300 dark:border-red-800/60 bg-red-50 dark:bg-red-900/20 px-3 py-2">
+          <p className="text-xs text-red-700 dark:text-red-300 leading-relaxed">{target.warning}</p>
+        </div>
+      )}
+
       {!loaded ? (
         <p className="text-xs text-slate-400">Checking which meeting will be used…</p>
       ) : !target?.meeting ? (
@@ -408,6 +424,7 @@ function SendNowCard({ currentAdminId, keys, meetinglessKeys, labels }: {
           </p>
           <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
             {target.audience.reachable} of {target.audience.active} active members reachable
+            {!!target.audience.notEnabled && ` · ${target.audience.notEnabled} not enabled for WhatsApp`}
             {target.audience.noPhone > 0 && ` · ${target.audience.noPhone} without a usable phone number`}
             {target.audience.optedOut > 0 && ` · ${target.audience.optedOut} opted out`}
             {' · '}{target.openRoles} role{target.openRoles === 1 ? '' : 's'} still open
@@ -427,6 +444,209 @@ function SendNowCard({ currentAdminId, keys, meetinglessKeys, labels }: {
         ))}
       </div>
       {msg && <p className="text-sm text-slate-500">{msg}</p>}
+    </div>
+  );
+}
+
+// ── Send to one member ──────────────────────────────────────────────────────
+// The single-recipient counterpart to the card above. The club pays per message,
+// so the useful unit is often one person: switch WhatsApp on for a member, send
+// them the welcome, and spend nothing on the other forty.
+//
+// Both the recipient list and the message list come from the server with their
+// own reasons attached — who can't be messaged and why, which message can't be
+// sent and why. Nothing here is greyed out without saying what would change it.
+
+const CUSTOM_CHOICE = '__custom';
+
+interface SendCandidate { id: string; name: string; unavailable: string | null }
+interface SendOption { key: string; unavailable: string | null }
+
+interface MemberSendInfo {
+  reason: string | null;                                 // why nothing can be sent at all
+  meeting: { number: number; date: string } | null;
+  roles: string[];
+  options: SendOption[];
+  labels: Record<string, string>;
+}
+
+function MemberSendCard({ currentAdminId }: { currentAdminId: string }) {
+  const [roster, setRoster] = useState<SendCandidate[] | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [targetId, setTargetId] = useState('');
+  const [info, setInfo] = useState<MemberSendInfo | null>(null);
+  const [choice, setChoice] = useState('');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch(`/api/admin/whatsapp-member?memberId=${currentAdminId}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setRosterError(data.error ?? 'Could not load the members list'); return; }
+      setRosterError(data.error ?? null);
+      setRoster(data.members ?? []);
+    })();
+  }, [currentAdminId]);
+
+  // Reloaded per recipient: which messages make sense depends on the member —
+  // a role reminder needs a role they actually hold.
+  useEffect(() => {
+    if (!targetId) { setInfo(null); return; }
+    setInfo(null); setMsg(null);
+    (async () => {
+      const res = await fetch(
+        `/api/admin/whatsapp-member?memberId=${currentAdminId}&targetId=${targetId}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setInfo(null); setMsg(`✗ ${data.error ?? 'Could not load the messages'}`); return; }
+      setInfo(data);
+      setChoice((data.options as SendOption[]).find((o) => !o.unavailable)?.key ?? CUSTOM_CHOICE);
+    })();
+  }, [currentAdminId, targetId]);
+
+  const sendable = (roster ?? []).filter((m) => !m.unavailable);
+  const target = (roster ?? []).find((m) => m.id === targetId) ?? null;
+  const blocked = info?.reason ?? null;
+  const canSend = !!targetId && !blocked && !busy
+    && (choice === CUSTOM_CHOICE ? !!text.trim() : !!choice);
+
+  async function send() {
+    const label = choice === CUSTOM_CHOICE ? 'your own message' : info?.labels[choice] ?? choice;
+    if (!confirm(`Send "${label}" to TM ${target?.name ?? 'this member'} on WhatsApp now?`)) return;
+
+    setBusy(true); setMsg(null);
+    const res = await fetch('/api/admin/whatsapp-member', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        memberId: currentAdminId,
+        targetMemberId: targetId,
+        ...(choice === CUSTOM_CHOICE ? { text } : { key: choice }),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok)      { setMsg(`✗ ${data.error ?? 'Could not send'}`); return; }
+    if (data.skipped) { setMsg(`Nothing sent — ${data.skipped}`); return; }
+    if (data.failed)  { setMsg(`✗ Not sent — ${data.reason ?? 'Meta rejected the message'}`); return; }
+    setMsg(`✓ Sent ${data.sent} message${data.sent === 1 ? '' : 's'} — the log below shows whether it arrived`);
+  }
+
+  return (
+    <div className={`${cardCls} p-5 space-y-3`}>
+      <div>
+        <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Send to one member</h3>
+        <p className="text-xs text-slate-500">
+          One member, one message — nobody else is messaged, and nobody else is billed.
+        </p>
+      </div>
+
+      {rosterError && (
+        <div className="rounded-xl border border-red-300 dark:border-red-800/60 bg-red-50 dark:bg-red-900/20 px-3 py-2">
+          <p className="text-xs text-red-700 dark:text-red-300 leading-relaxed">{rosterError}</p>
+        </div>
+      )}
+
+      {!roster ? (
+        <p className="text-xs text-slate-400">Loading members…</p>
+      ) : (
+        <>
+          <label><span className={labelCls}>Member</span>
+            <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={inputCls}>
+              <option value="">— Pick a member —</option>
+              {roster.map((m) => (
+                <option key={m.id} value={m.id} disabled={!!m.unavailable}>
+                  TM {m.name}{m.unavailable ? ` — ${m.unavailable}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-[11px] text-slate-400">
+            {sendable.length === 0
+              ? 'Nobody can be messaged yet. WhatsApp is off for every member — switch it on for '
+                + 'somebody in the Members tab first.'
+              : `${sendable.length} of ${roster.length} active members can be messaged. The rest carry `
+                + 'their reason above: WhatsApp not enabled for them, their own opt-out, or no usable number.'}
+          </p>
+        </>
+      )}
+
+      {targetId && !info && !msg && <p className="text-xs text-slate-400">Checking what can be sent…</p>}
+
+      {info && (
+        <>
+          {blocked && (
+            <div className="rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 px-3 py-2">
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Nothing can be sent: {blocked}.</p>
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-400">
+            {info.meeting
+              ? `Using Meeting #${info.meeting.number}, ${formatMeetingDate(info.meeting.date)}`
+              : 'No meeting is scheduled, so only the welcome can go out.'}
+            {info.roles.length > 0 && ` · their roles: ${info.roles.join(' · ')}`}
+          </p>
+
+          <div className="space-y-1.5">
+            {info.options.map((o) => (
+              <label key={o.key}
+                className={`flex items-start gap-2 rounded-xl border px-3 py-2 ${
+                  o.unavailable
+                    ? 'border-slate-100 dark:border-slate-800 opacity-55 cursor-not-allowed'
+                    : `cursor-pointer ${choice === o.key
+                        ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-900/20'
+                        : 'border-slate-200 dark:border-slate-700/60'}`
+                }`}>
+                <input type="radio" name="wa-member-choice" value={o.key} checked={choice === o.key}
+                  disabled={!!o.unavailable || !!blocked} onChange={() => setChoice(o.key)}
+                  className="w-4 h-4 mt-0.5 accent-emerald-600 shrink-0" />
+                <span className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                  {info.labels[o.key] ?? o.key}
+                  {o.unavailable && (
+                    <span className="block text-[11px] text-slate-400 dark:text-slate-500">
+                      Can&apos;t send — {o.unavailable}.
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+
+            <label className={`flex items-start gap-2 rounded-xl border px-3 py-2 cursor-pointer ${
+              choice === CUSTOM_CHOICE
+                ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-900/20'
+                : 'border-slate-200 dark:border-slate-700/60'
+            }`}>
+              <input type="radio" name="wa-member-choice" value={CUSTOM_CHOICE} checked={choice === CUSTOM_CHOICE}
+                disabled={!!blocked} onChange={() => setChoice(CUSTOM_CHOICE)}
+                className="w-4 h-4 mt-0.5 accent-emerald-600 shrink-0" />
+              <span className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                Write my own message
+                <span className="block text-[11px] text-amber-600 dark:text-amber-400">
+                  Only reaches them if they messaged your WhatsApp number in the last 24 hours — Meta
+                  refuses free text outside that window, and says so as an error.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {choice === CUSTOM_CHOICE && (
+            <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} maxLength={900}
+              placeholder={`Dear TM ${target?.name ?? ''},`}
+              className={`${inputCls} font-mono text-xs`} />
+          )}
+
+          <div className="flex items-center gap-3">
+            <button onClick={send} disabled={!canSend} className={primaryBtn}>
+              {busy ? 'Sending…' : 'Send on WhatsApp'}
+            </button>
+            {msg && <span className="text-sm text-slate-500">{msg}</span>}
+          </div>
+        </>
+      )}
+
+      {!info && msg && <p className="text-sm text-slate-500">{msg}</p>}
     </div>
   );
 }

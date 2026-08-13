@@ -11,8 +11,13 @@ import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime } from '@/lib/email/format';
 import { getAppUrl, getVpEducationName } from '@/lib/email/mailer';
 import { pickUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
-import { deliverWhatsApp, getWhatsAppSettings, normalizePhone } from './client';
-import type { WaTemplateKey } from './defaults';
+import {
+  deliverWhatsApp, getWhatsAppSettings, normalizePhone, sendTextMessage, type WaSendResult,
+} from './client';
+import {
+  WA_DIRECT_KEY, WA_MEETINGLESS_KEYS, WA_MEMBER_ROLE_KEYS, WA_MEMBER_SEND_KEYS,
+  type WaTemplateKey,
+} from './defaults';
 import type { TemplateVars } from '@/lib/email/render';
 
 const CLUB_NAME = 'Dehradun Online Toastmasters';
@@ -25,18 +30,37 @@ interface WaMemberLite {
   display_name: string;
   phone: string | null;
   active: boolean;
+  /** Admin gate (migration 058). Required, not optional: a caller that forgets
+   *  to select it must be a type error, not a silent charge to the club. */
+  whatsapp_enabled: boolean | null;
   whatsapp_notifications?: boolean;
 }
 
-const MEMBER_COLS = 'id, name, display_name, phone, active, whatsapp_notifications';
+const MEMBER_COLS =
+  'id, name, display_name, phone, active, whatsapp_enabled, whatsapp_notifications';
 
-// Everyone who can and wants to be messaged. The opt-out column may be absent on
-// a database that hasn't run migration 055, so treat undefined as opted in.
+// Why this member cannot be messaged, or null when they can. Every 1:1 send
+// reports this verbatim, because "nothing happened" is the least useful thing an
+// admin can be told about a WhatsApp message.
+//
+// The two flags are asymmetric on purpose. The admin gate must be an explicit
+// true — it decides whether the club pays for this member at all, so anything
+// unknown counts as "not authorised". The member's own opt-out is only a
+// preference, so undefined (a column not yet migrated) counts as opted in.
+export function waMemberSkipReason(
+  m: Pick<WaMemberLite, 'active' | 'phone' | 'whatsapp_enabled' | 'whatsapp_notifications'>,
+  countryCode: string,
+): string | null {
+  if (!m.active) return 'member is not active';
+  if (m.whatsapp_enabled !== true) return 'WhatsApp is not enabled for this member';
+  if (m.whatsapp_notifications === false) return 'the member has turned WhatsApp off in their profile';
+  if (!normalizePhone(m.phone, countryCode)) return 'no usable phone number';
+  return null;
+}
+
+// Everyone the club may message and who still wants to hear from it.
 function reachable(members: WaMemberLite[] | null | undefined, countryCode: string): WaMemberLite[] {
-  return (members ?? []).filter((m) =>
-    m.active
-    && m.whatsapp_notifications !== false
-    && !!normalizePhone(m.phone, countryCode));
+  return (members ?? []).filter((m) => !waMemberSkipReason(m, countryCode));
 }
 
 // Every message signs off from the VP Education by name, so every send needs it.
@@ -238,7 +262,7 @@ export async function waSendMeetingStarting(
 
 // ── Role assigned / removed (1:1, the moment it happens) ────────────────────
 export async function waNotifyRoleChange(params: {
-  target: { id: string; name: string; display_name: string; phone: string | null; active: boolean; whatsapp_notifications?: boolean };
+  target: { id: string; name: string; display_name: string; phone: string | null; active: boolean; whatsapp_enabled: boolean | null; whatsapp_notifications?: boolean };
   actor: { id: string; display_name: string } | null;
   actorIsAdmin: boolean;
   meeting: MeetingRow;
@@ -251,9 +275,8 @@ export async function waNotifyRoleChange(params: {
   if (!settings.role_change_enabled) return { skipped: 'role change messages off' };
 
   const { target, actor, actorIsAdmin, meeting, roleKey, action } = params;
-  if (reachable([target], settings.default_country_code).length === 0) {
-    return { skipped: 'member not reachable on whatsapp' };
-  }
+  const blocked = waMemberSkipReason(target, settings.default_country_code);
+  if (blocked) return { skipped: blocked };
 
   const isAssign = action === 'claimed' || action === 'assigned';
 
@@ -289,11 +312,15 @@ export async function waSendWelcome(
   if (!settings.welcome_enabled) return { skipped: 'welcome message off' };
 
   const supabase = createServiceClient();
-  const { data: member } = await supabase.from('members').select(MEMBER_COLS).eq('id', memberId).single();
+  const { data: member, error } = await supabase
+    .from('members').select(MEMBER_COLS).eq('id', memberId).single();
+  if (error) return { skipped: `this member could not be read — ${error.message}` };
   if (!member) return { skipped: 'member not found' };
-  if (reachable([member as WaMemberLite], settings.default_country_code).length === 0) {
-    return { skipped: 'member not reachable on whatsapp' };
-  }
+  // The commonest outcome now, and deliberately so: a member added without the
+  // WhatsApp box ticked is not messaged, so nobody costs the club anything until
+  // an admin decides they should.
+  const blocked = waMemberSkipReason(member as WaMemberLite, settings.default_country_code);
+  if (blocked) return { skipped: blocked };
 
   const res = await deliverWhatsApp({
     key: 'welcome',
@@ -373,6 +400,293 @@ export async function waBroadcastRoleAssigned(
   }
   if (sent === 0 && reasons.length === 0) return { skipped: 'no role holders to message' };
   return summarize(sent, failed, reasons);
+}
+
+// ── One member, one message, on demand ──────────────────────────────────────
+// The counterpart to the club-wide sends: an admin looking at a single member's
+// row can message that member and nobody else. What this is for is the club that
+// pays per message — enable WhatsApp for one person, send them the welcome, and
+// spend nothing on the other forty.
+//
+// The per-notification schedule toggles are deliberately NOT consulted (the
+// broadcast sends behave the same way): an admin pressing a button has already
+// decided, and "the welcome is off in settings" is a statement about the
+// automatic send, not about this one. The connection switch, the per-member gate,
+// the member's own opt-out and the template's own on/off all still apply.
+
+export interface WaMemberSendOption {
+  key: WaTemplateKey;
+  /** Why it can't be sent right now, or null when it can. */
+  unavailable: string | null;
+}
+
+async function upcomingMeetingRow(): Promise<MeetingRow | undefined> {
+  const supabase = createServiceClient();
+  const { data } = await supabase.from('meetings')
+    .select('id, number, date, start_time, end_time, theme, meeting_link')
+    .order('date', { ascending: true });
+  return pickUpcomingMeeting((data ?? []) as MeetingRow[]);
+}
+
+// The roles this member holds at a meeting, as (role, slot) pairs. Both
+// role-specific messages need them, and neither may be sent without one — the
+// role label is real data, not something a manual send invents.
+async function memberRolesAt(meetingId: string, memberId: string): Promise<{ roleKey: RoleKey; slot: number }[]> {
+  const supabase = createServiceClient();
+  const { data } = await supabase.from('role_claims')
+    .select('role_key, slot_index').eq('meeting_id', meetingId).eq('member_id', memberId);
+  return (data ?? [])
+    .filter((c) => ROLE_META[c.role_key as RoleKey])
+    .map((c) => ({ roleKey: c.role_key as RoleKey, slot: c.slot_index as number }));
+}
+
+export interface WaMemberSendCandidate {
+  id: string;
+  name: string;
+  /** Why this member can't be messaged, or null when they can. */
+  unavailable: string | null;
+}
+
+/**
+ * Everyone who could be picked as the recipient of a one-off message, each
+ * carrying the reason they can't be — so the picker can list the whole active
+ * roster and still refuse the ones the club hasn't enabled. An admin wondering
+ * why somebody is missing gets an answer in the list instead of an absence.
+ */
+export async function waMemberSendRoster(): Promise<{
+  members: WaMemberSendCandidate[];
+  error: string | null;
+}> {
+  const settings = await getWhatsAppSettings();
+  const cc = settings?.default_country_code ?? '91';
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.from('members').select(MEMBER_COLS).order('name');
+  if (error) return { members: [], error: `the members table could not be read — ${error.message}` };
+
+  // Inactive members are left out rather than listed as unavailable: they are
+  // absent from every other picker in the app, and "not active" is not a reason
+  // an admin would be looking to fix here.
+  const members = ((data ?? []) as WaMemberLite[])
+    .filter((m) => m.active)
+    .map((m) => ({
+      id: m.id,
+      name: m.display_name || m.name,
+      unavailable: waMemberSkipReason(m, cc),
+    }));
+
+  return { members, error: null };
+}
+
+/**
+ * What an admin may send to this one member, and why anything missing is
+ * missing — worked out before the send so the panel can grey out a button and
+ * say what would need to change, rather than reporting a failure afterwards.
+ */
+export async function waMemberSendOptions(memberId: string): Promise<{
+  reason: string | null;                 // why this member can't be messaged at all
+  meeting: MeetingRow | null;
+  roles: string[];                       // role labels held at that meeting
+  options: WaMemberSendOption[];
+}> {
+  const settings = await getWhatsAppSettings();
+  const supabase = createServiceClient();
+  // The error is reported rather than folded into "member not found": on a
+  // database still missing migration 058 this select names a column that isn't
+  // there, and its message says so — which is the fix, not a missing member.
+  const { data: member, error } = await supabase
+    .from('members').select(MEMBER_COLS).eq('id', memberId).single();
+
+  const reason = !settings?.enabled
+    ? 'WhatsApp notifications are turned off for the whole club'
+    : error
+      ? `this member could not be read — ${error.message}`
+      : !member
+        ? 'member not found'
+        : waMemberSkipReason(member as WaMemberLite, settings.default_country_code);
+
+  const meeting = await upcomingMeetingRow();
+  const roles = meeting ? await memberRolesAt(meeting.id, memberId) : [];
+  const open = meeting ? await openRoleSlots(meeting.id) : null;
+
+  const options = WA_MEMBER_SEND_KEYS.map((key) => ({
+    key,
+    unavailable:
+      WA_MEETINGLESS_KEYS.includes(key) ? null
+      : !meeting ? 'no meeting is scheduled'
+      : WA_MEMBER_ROLE_KEYS.includes(key) && roles.length === 0
+        ? 'they hold no role at this meeting'
+      : key === 'no_role_nudge' && roles.length > 0
+        ? 'they already have a role at this meeting'
+      : key === 'no_role_nudge' && open?.roles.length === 0
+        ? 'every role at this meeting is taken'
+        : null,
+  }));
+
+  return {
+    reason,
+    meeting: meeting ?? null,
+    roles: roles.map((r) => roleLabel(r.roleKey, r.slot)),
+    options,
+  };
+}
+
+/** Send one of the templates to one member, with real data. */
+export async function waSendToMember(params: {
+  memberId: string;
+  key: WaTemplateKey;
+  /** The admin doing it, named in the role messages' "who did this" line. */
+  actor?: { display_name: string } | null;
+}): Promise<WaRunResult | { skipped: string }> {
+  const { memberId, key } = params;
+  if (!WA_MEMBER_SEND_KEYS.includes(key)) return { skipped: 'that message cannot be sent to one member' };
+
+  const settings = await getWhatsAppSettings();
+  if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.from('members').select(MEMBER_COLS).eq('id', memberId).single();
+  if (error) return { skipped: `this member could not be read — ${error.message}` };
+  if (!data) return { skipped: 'member not found' };
+  const member = data as WaMemberLite;
+  const blocked = waMemberSkipReason(member, settings.default_country_code);
+  if (blocked) return { skipped: blocked };
+
+  const appUrl = await getAppUrl();
+  const fullName = member.name || member.display_name;
+
+  // The welcome is the one message that isn't about a meeting — which is exactly
+  // when it gets sent: an admin has just switched WhatsApp on for someone.
+  if (key === 'welcome') {
+    const res = await deliverWhatsApp({
+      key,
+      phone: member.phone as string,
+      vars: { ...(await signOffVars()), app_url: appUrl, full_name: fullName },
+    });
+    return oneResult(res);
+  }
+
+  const meeting = await upcomingMeetingRow();
+  if (!meeting) return { skipped: 'no meeting scheduled' };
+  const base = await baseVars(meeting, appUrl);
+
+  if (WA_MEMBER_ROLE_KEYS.includes(key)) {
+    const roles = await memberRolesAt(meeting.id, memberId);
+    if (roles.length === 0) return { skipped: 'they hold no role at this meeting' };
+
+    // One message per role, for the same reason the day-before reminder sends
+    // one each: somebody down as both Timer and Ah-Counter needs both.
+    let sent = 0, failed = 0;
+    const reasons: string[] = [];
+    for (const r of roles) {
+      const res = await deliverWhatsApp({
+        key,
+        phone: member.phone as string,
+        meetingId: meeting.id,
+        vars: {
+          ...base,
+          full_name: fullName,
+          role_label: roleLabel(r.roleKey, r.slot),
+          actor_line: params.actor
+            ? `This was done by Admin TM ${params.actor.display_name}.`
+            : 'You are on the agenda for this meeting.',
+        },
+      });
+      if ('ok' in res) sent++;
+      else { failed += 'error' in res ? 1 : 0; reasons.push('skipped' in res ? res.skipped : res.error); }
+    }
+    return summarize(sent, failed, reasons);
+  }
+
+  if (key === 'no_role_nudge') {
+    const open = await openRoleSlots(meeting.id);
+    if (open.roles.length === 0) return { skipped: 'every role at this meeting is taken' };
+    if (open.claimedBy.has(memberId)) return { skipped: 'they already have a role at this meeting' };
+    const res = await deliverWhatsApp({
+      key,
+      phone: member.phone as string,
+      meetingId: meeting.id,
+      vars: {
+        ...base,
+        full_name: fullName,
+        open_roles_count: String(open.roles.length),
+        open_roles_list: open.roles.map(({ roleKey, slot }) => roleLabel(roleKey, slot)).join(LIST_SEP),
+      },
+    });
+    return oneResult(res);
+  }
+
+  if (key === 'meeting_starting') {
+    const sheet = await roleSheetLines(meeting.id);
+    const res = await deliverWhatsApp({
+      key,
+      phone: member.phone as string,
+      meetingId: meeting.id,
+      vars: { ...base, full_name: fullName, roles_taken: sheet.taken, roles_open: sheet.open },
+    });
+    return oneResult(res);
+  }
+
+  // meeting_created — the announcement, to this member alone.
+  const res = await deliverWhatsApp({
+    key,
+    phone: member.phone as string,
+    meetingId: meeting.id,
+    vars: { ...base, full_name: fullName },
+  });
+  return oneResult(res);
+}
+
+function oneResult(res: WaSendResult): WaRunResult | { skipped: string } {
+  if ('ok' in res) return { ok: true, sent: 1, failed: 0, reason: null };
+  if ('skipped' in res) return { skipped: res.skipped };
+  return { ok: true, sent: 0, failed: 1, reason: res.error };
+}
+
+/**
+ * Free text to one member, outside the templates entirely.
+ *
+ * Meta only delivers this inside the 24-hour customer-service window — i.e. to
+ * someone who has messaged the club's number recently. Outside it the send comes
+ * back as error 131047, which is reported as-is rather than dressed up: the
+ * message genuinely did not arrive, and an admin needs to know that before they
+ * assume the member has been told.
+ */
+export async function waSendDirectText(params: {
+  memberId: string;
+  text: string;
+}): Promise<WaRunResult | { skipped: string }> {
+  const text = params.text.trim();
+  if (!text) return { skipped: 'nothing to send' };
+
+  const settings = await getWhatsAppSettings();
+  if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
+  if (!settings.access_token || !settings.phone_number_id) return { skipped: 'whatsapp not configured' };
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from('members').select(MEMBER_COLS).eq('id', params.memberId).single();
+  if (error) return { skipped: `this member could not be read — ${error.message}` };
+  if (!data) return { skipped: 'member not found' };
+  const member = data as WaMemberLite;
+  const blocked = waMemberSkipReason(member, settings.default_country_code);
+  if (blocked) return { skipped: blocked };
+
+  const to = normalizePhone(member.phone, settings.default_country_code) as string;
+  const result = await sendTextMessage(settings, to, text);
+
+  // Logged like any other send: a direct message is the one most likely to be
+  // rejected (the 24-hour window), so it is the one whose failure must be
+  // visible in the log rather than only in the admin's own screen.
+  await supabase.from('whatsapp_sends').insert({
+    template_key: WA_DIRECT_KEY,
+    recipient: to,
+    wa_message_id: 'ok' in result ? result.messageId ?? null : null,
+    status: 'error' in result ? 'error' : 'sent',
+    error: 'error' in result ? result.error : null,
+  });
+
+  return oneResult(result);
 }
 
 // Shared loop for the three "one message per member" sends.

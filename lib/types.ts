@@ -138,7 +138,12 @@ export interface Member {
   avatar_url: string | null;
   show_phone_in_contact: boolean;
   email_notifications?: boolean;   // opt-out flag; undefined/true = receives emails
-  whatsapp_notifications?: boolean; // opt-out flag; undefined/true = receives WhatsApp
+  // The two WhatsApp bits, and the order matters: the admin gate decides whether
+  // the club is willing to pay to message this member at all (off for anyone
+  // newly added, and not editable by the member), and the opt-out below is the
+  // member's own choice within it. Both must allow it for anything to be sent.
+  whatsapp_enabled?: boolean;       // admin gate; only an explicit true permits sending
+  whatsapp_notifications?: boolean; // member's opt-out; undefined/true = wants WhatsApp
   // Admin-set; undefined when the column hasn't been read (see participationMode).
   participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;
