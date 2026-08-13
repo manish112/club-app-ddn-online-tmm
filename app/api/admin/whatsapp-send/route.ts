@@ -31,24 +31,40 @@ export async function GET(req: NextRequest) {
   const cc = settings?.default_country_code ?? '91';
 
   const supabase = createServiceClient();
-  const { data: members } = await supabase
-    .from('members').select('id, active, phone, whatsapp_notifications');
+  const { data: members, error: membersError } = await supabase
+    .from('members').select('id, active, phone, whatsapp_enabled, whatsapp_notifications');
 
+  // A read that fails here means the per-member permission column is missing, and
+  // every send is about to skip every member. Left unsaid, that shows up as
+  // "0 of 0 members reachable" — which reads like an empty club rather than an
+  // unapplied migration.
+  const warning = membersError
+    ? `Could not read the members table (${membersError.message}). `
+      + 'Apply migration 058_whatsapp_per_member_enable.sql — until then no WhatsApp can be sent.'
+    : null;
+
+  // The same three reasons a member is unreachable, counted separately, because
+  // they call for three different fixes: switch WhatsApp on for them, respect
+  // their opt-out, or correct the phone number.
   const activeMembers = (members ?? []).filter((m) => m.active);
-  const reachable = activeMembers.filter(
+  const notEnabled = activeMembers.filter((m) => m.whatsapp_enabled !== true).length;
+  const enabled = activeMembers.filter((m) => m.whatsapp_enabled === true);
+  const reachable = enabled.filter(
     (m) => m.whatsapp_notifications !== false && !!normalizePhone(m.phone, cc));
-  const optedOut = activeMembers.filter((m) => m.whatsapp_notifications === false).length;
+  const optedOut = enabled.filter((m) => m.whatsapp_notifications === false).length;
 
   const meeting = await upcomingMeeting();
   const open = meeting ? await openRoleSlots(meeting.id) : null;
 
   return NextResponse.json({
     meeting: meeting ?? null,
+    warning,
     audience: {
       active: activeMembers.length,
       reachable: reachable.length,
-      noPhone: activeMembers.length - optedOut - reachable.length,
+      noPhone: enabled.length - optedOut - reachable.length,
       optedOut,
+      notEnabled,
     },
     openRoles: open ? open.roles.length : 0,
     withRole: open ? open.claimedBy.size : 0,

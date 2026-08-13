@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   if (error || !data) {
     // Almost always means the migrations haven't been applied to this database —
     // say so rather than showing an empty form that silently fails to save.
-    return NextResponse.json({ error: 'WhatsApp settings not found — run migrations 055 and 056.' }, { status: 404 });
+    return NextResponse.json({ error: 'WhatsApp settings not found — run migrations 055 to 058.' }, { status: 404 });
   }
 
   const { access_token, ...rest } = data;

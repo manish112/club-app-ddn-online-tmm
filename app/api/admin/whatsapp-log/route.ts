@@ -3,7 +3,7 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { isAdminMember } from '@/lib/admin-auth';
 import { getWhatsAppSettings } from '@/lib/whatsapp/client';
 import { normalizePhone } from '@/lib/phone';
-import { WA_TEMPLATE_LABELS, type WaTemplateKey } from '@/lib/whatsapp/defaults';
+import { WA_LOG_LABELS } from '@/lib/whatsapp/defaults';
 
 // Every WhatsApp send is written to whatsapp_sends — this reads it back.
 //
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
     at: r.created_at,
     templateKey: r.template_key,
     templateLabel: r.template_key
-      ? WA_TEMPLATE_LABELS[r.template_key as WaTemplateKey] ?? r.template_key
+      ? WA_LOG_LABELS[r.template_key] ?? r.template_key
       : 'Unknown',
     status: r.status,
     error: r.error,
