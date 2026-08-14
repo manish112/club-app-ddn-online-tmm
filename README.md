@@ -72,21 +72,25 @@ npm install
 
 **Fresh install (recommended):** open the Supabase SQL editor, paste the contents of `supabase/schema.sql`, and run. This single file creates every table, RLS policy, function, and realtime publication the app needs.
 
-**Upgrading an existing deployment:** apply only the un-run migrations from `supabase/migrations/`, in numeric order. The migration history is preserved for this purpose:
+**Upgrading an existing deployment:** run the same `supabase/schema.sql`. It is
+idempotent — every table, column, index and policy is created only if missing,
+and policies are dropped before being recreated — so it brings a database built
+from any older migration set up to current without touching data. Verified by
+replaying all 59 historical migrations into a Postgres 16 database and then
+applying `schema.sql`: the result is schema-identical to a fresh install.
 
-```
-001_schema.sql              — core tables: members, meetings, role_claims + RLS
-002_voting.sql              — ballots, votes, results aggregator function
-003_voter_count.sql         — voter cap on ballots
-004_ballot_v2.sql           — 5-category voting + Table Topics speakers + guest votees
-005_vote_unique.sql         — one-vote-per-device constraint
-006_delete_votes_rpc.sql    — admin-only vote deletion via SECURITY DEFINER
-007_guest_announce.sql      — guest registrations + announcements
-008_speech_details.sql      — Pathways Path/Level/Project/Title on speaker claims
-009_members_anon_write.sql  — anon insert/update policy for members (admin panel)
+One caveat before running it on a live database: the final section normalizes
+`meetings.meeting_link` (adds a missing `https://`, and clears values that
+cannot be a URL, such as "to be decided"). It is the only part that edits
+existing rows. To preview what it would touch:
+
+```sql
+select number, date, meeting_link from meetings
+ where meeting_link is not null and meeting_link !~* '^https?://';
 ```
 
-All migrations are idempotent (`if not exists` / `or replace`), so re-running is safe.
+The historical migrations 001–058 are kept in `supabase/migrations-archive/`
+for reference only. Nothing needs to run them.
 
 ### 4. Configure environment variables
 
@@ -205,8 +209,8 @@ lib/
   utils.ts              — role-pair rules, meeting lifecycle, WhatsApp builder
 scripts/
   import-from-excel.ts  — one-time member roster importer
-supabase/schema.sql     — consolidated schema for fresh installs
-supabase/migrations/    — historical migrations (run in order to upgrade existing DBs)
+supabase/schema.sql          — the whole database, for fresh installs and upgrades alike
+supabase/migrations-archive/ — historical migrations 001–058, reference only
 utils/supabase/         — typed client wrapper
 ```
 
@@ -217,7 +221,7 @@ utils/supabase/         — typed client wrapper
 Issues and pull requests are welcome. A few guidelines:
 
 - Run `npx tsc --noEmit && npm run lint` before submitting.
-- New schema changes go in a new numbered migration file (`010_*.sql`, `011_*.sql`, …) — never edit migrations that have already shipped.
+- Schema changes are edited straight into `supabase/schema.sql`, keeping every statement idempotent (`if not exists`, `create or replace`, drop-then-create for policies) so the file stays safe to re-run on a live database.
 - Keep the UI mobile-first; most members access this from WhatsApp on a phone.
 
 ---

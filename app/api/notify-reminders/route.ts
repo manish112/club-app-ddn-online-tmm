@@ -97,7 +97,8 @@ export async function GET(req: NextRequest) {
       actions[`meeting_reminder:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
     }
 
-    // 1 day before → per-role reminders to each role holder (deduped per member).
+    // 1 day before → one reminder per role holder, naming every role they hold
+    // (deduped per member).
     if (emailOn && settings!.day_before_enabled && m.date === tomorrowIst) {
       const res = await sendRoleReminders(m);
       actions[`role_reminders:${m.number}`] = `sent ${res.sent}`;
@@ -115,7 +116,7 @@ export async function GET(req: NextRequest) {
     if (waOn) {
       const wa = waSettings!;
 
-      // 1 day before → the role you agreed to play, to each role holder.
+      // 1 day before → the role(s) you agreed to play, to each role holder.
       if (wa.role_reminder_enabled && m.date === tomorrowIst) {
         const res = await waSendRoleReminders(m);
         actions[`wa_role_reminder:${m.number}`] = describe(res);

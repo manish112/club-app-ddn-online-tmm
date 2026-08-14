@@ -127,9 +127,8 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
       <div className="rounded-2xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
         <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">{loadError}</p>
         <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-          Apply <code>055_whatsapp_notifications.sql</code> through{' '}
-          <code>058_whatsapp_per_member_enable.sql</code> from <code>supabase/migrations</code> to this
-          database, then reload.
+          Run <code>supabase/schema.sql</code> against this database — it creates the
+          WhatsApp tables and columns if they are missing — then reload.
         </p>
       </div>
     );
@@ -206,7 +205,7 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
             checked={settings.meeting_created_enabled} onChange={(v) => set('meeting_created_enabled', v)} />
           <Toggle label="Role assigned or removed" hint="The moment a role is claimed, assigned, released or removed — whoever did it."
             checked={settings.role_change_enabled} onChange={(v) => set('role_change_enabled', v)} />
-          <Toggle label="Role reminder, 1 day before" hint="To each member holding a role, one message per role."
+          <Toggle label="Role reminder, 1 day before" hint="One message to each member holding a role, naming every role they hold."
             checked={settings.role_reminder_enabled} onChange={(v) => set('role_reminder_enabled', v)} />
           <Toggle label="Pick a role, 1 day before" hint="Only to members without a role, and only while roles are still open."
             checked={settings.no_role_nudge_enabled} onChange={(v) => set('no_role_nudge_enabled', v)} />
@@ -697,23 +696,34 @@ function timeAgo(iso: string): string {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
+interface LogTally { total: number; sent: number; delivered: number; failed: number }
+
+const WINDOWS: { days: number; label: string }[] = [
+  { days: 1,  label: '24 hours' },
+  { days: 7,  label: '7 days' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+];
+
+// The panel shows only the headline numbers; the rows themselves open in a
+// modal. A month of sends is hundreds of lines, and inlining that pushed every
+// setting below it off the screen.
 function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [counts, setCounts] = useState<{ sent: number; failed: number; delivered?: number } | null>(null);
-  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState<LogTally | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  // Headline only — one row is enough to get the 24-hour tally back, so opening
+  // the settings tab never pulls a month of history it might not display.
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
-    const res = await fetch(
-      `/api/admin/whatsapp-log?memberId=${currentAdminId}&errorsOnly=${errorsOnly ? 1 : 0}`);
+    const res = await fetch(`/api/admin/whatsapp-log?memberId=${currentAdminId}&days=1`);
     const data = await res.json().catch(() => ({}));
     setLoading(false);
     if (!res.ok) { setErr(data.error ?? 'Could not load the log'); return; }
-    setEntries(data.entries ?? []);
     setCounts(data.last24h ?? null);
-  }, [currentAdminId, errorsOnly]);
+  }, [currentAdminId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -722,77 +732,205 @@ function MessageLogCard({ currentAdminId }: { currentAdminId: string }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Message log</h3>
-          <p className="text-xs text-slate-500">
-            Every WhatsApp message sent, and to which number.
-            {counts && (
+          {err ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400">{err}</p>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Every WhatsApp message sent, and whether it arrived.
               <span className="block mt-0.5">
-                Last 24 hours: <strong className="text-emerald-600 dark:text-emerald-400">{counts.sent} sent</strong>
-                {!!counts.delivered && <> · <strong className="text-emerald-600 dark:text-emerald-400">{counts.delivered} delivered</strong></>}
-                {counts.failed > 0 && <> · <strong className="text-red-600 dark:text-red-400">{counts.failed} failed</strong></>}
+                {loading ? 'Loading…' : !counts || counts.total === 0 ? (
+                  'Nothing sent in the last 24 hours.'
+                ) : (
+                  <>
+                    Last 24 hours: <strong className="text-emerald-600 dark:text-emerald-400">{counts.sent} sent</strong>
+                    {counts.delivered > 0 && <> · <strong className="text-emerald-600 dark:text-emerald-400">{counts.delivered} delivered</strong></>}
+                    {counts.failed > 0 && <> · <strong className="text-red-600 dark:text-red-400">{counts.failed} failed</strong></>}
+                  </>
+                )}
               </span>
-            )}
-          </p>
+            </p>
+          )}
         </div>
-        <button onClick={load} disabled={loading} className={`${ghostBtn} shrink-0 !px-3 !py-1.5 !text-xs`}>
-          {loading ? '…' : 'Refresh'}
+        <button onClick={() => setOpen(true)} className={`${ghostBtn} shrink-0 !px-3 !py-1.5 !text-xs`}>
+          View log
         </button>
       </div>
 
-      <div className="flex gap-2">
-        {([false, true] as const).map((only) => (
-          <button key={String(only)} onClick={() => setErrorsOnly(only)}
-            className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-              errorsOnly === only
-                ? 'bg-emerald-600 text-white'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-            }`}>
-            {only ? 'Failures only' : 'Everything'}
-          </button>
-        ))}
-      </div>
-
-      {err ? (
-        <p className="text-xs text-amber-600 dark:text-amber-400">{err}</p>
-      ) : entries.length === 0 ? (
-        <p className="text-xs text-slate-400">
-          {loading ? 'Loading…' : errorsOnly ? 'No failures recorded 🎉' : 'Nothing sent yet.'}
-        </p>
-      ) : (
-        <div className="divide-y divide-slate-100 dark:divide-slate-800 -mx-1">
-          {entries.map((e) => {
-            const badge = deliveryBadge(e);
-            return (
-              <div key={e.id} className="px-1 py-2">
-                <div className="flex items-baseline gap-2">
-                  <span title={badge.label} className={`shrink-0 text-[10px] ${badge.cls}`}>{badge.mark}</span>
-                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
-                    {e.memberName ? `TM ${e.memberName}` : e.recipient ?? 'Unknown recipient'}
-                  </span>
-                  <span className="ml-auto shrink-0 text-[10px] text-slate-400">{timeAgo(e.at)}</span>
-                </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
-                  {badge.label}
-                  {' · '}{e.templateLabel}
-                  {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
-                  {e.memberName && e.recipient && ` · +${e.recipient}`}
-                </p>
-                {(e.error || e.deliveryError) && (
-                  <p className="text-[11px] text-red-600 dark:text-red-400 pl-4 mt-0.5 leading-relaxed">
-                    {e.error ?? e.deliveryError}
-                  </p>
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {open && (
+        <MessageLogModal
+          currentAdminId={currentAdminId}
+          onClose={() => { setOpen(false); load(); }}
+        />
       )}
-      <p className="text-[11px] text-slate-400 leading-relaxed">
-        Meta accepts a message before it delivers one, so &quot;sent&quot; is not &quot;arrived&quot;.
-        The mark on the left is what actually happened: ● delivered or read, ◐ on its way,
-        ✕ never arrived, ○ no word back yet. That last one means the delivery webhook is not
-        configured — set <code>WHATSAPP_VERIFY_TOKEN</code> and <code>WHATSAPP_APP_SECRET</code>, then
-        point Meta at <code>/api/whatsapp-webhook</code>.
-      </p>
+    </div>
+  );
+}
+
+function MessageLogModal({ currentAdminId, onClose }: {
+  currentAdminId: string; onClose: () => void;
+}) {
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [summary, setSummary] = useState<LogTally | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [days, setDays] = useState(30);
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [shown, setShown] = useState(50);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    const res = await fetch(
+      `/api/admin/whatsapp-log?memberId=${currentAdminId}&days=${days}&errorsOnly=${errorsOnly ? 1 : 0}`);
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+    if (!res.ok) { setErr(data.error ?? 'Could not load the log'); return; }
+    setEntries(data.entries ?? []);
+    setSummary(data.summary ?? null);
+    setTruncated(data.truncated === true);
+    setShown(50);
+  }, [currentAdminId, days, errorsOnly]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Escape closes it, like every other modal in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const visible = entries.slice(0, shown);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white dark:bg-slate-900 w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl shadow-modal-dark
+                   max-h-[92vh] sm:max-h-[85vh] flex flex-col"
+      >
+        {/* Header — stays put while the rows scroll under it. */}
+        <div className="p-5 pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
+          <div className="w-10 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto mb-4 sm:hidden" />
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="font-serif text-lg font-semibold text-slate-900 dark:text-white">Message log</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {loading ? 'Loading…' : summary && summary.total > 0 ? (
+                  <>
+                    <strong className="text-slate-700 dark:text-slate-300">{summary.total}</strong>
+                    {' '}message{summary.total === 1 ? '' : 's'} ·{' '}
+                    <strong className="text-emerald-600 dark:text-emerald-400">{summary.delivered} delivered</strong>
+                    {summary.failed > 0 && <> · <strong className="text-red-600 dark:text-red-400">{summary.failed} failed</strong></>}
+                  </>
+                ) : 'Nothing in this period.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={load} disabled={loading}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 px-2 py-1 min-h-[32px] disabled:opacity-40">
+                {loading ? '…' : 'Refresh'}
+              </button>
+              <button onClick={onClose} aria-label="Close"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 text-xl leading-none px-2 min-h-[32px]">
+                ×
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {WINDOWS.map((w) => (
+              <button key={w.days} onClick={() => setDays(w.days)}
+                className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-lg transition-colors ${
+                  days === w.days
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}>
+                {w.label}
+              </button>
+            ))}
+            <span className="w-px bg-slate-200 dark:bg-slate-700 mx-1 self-stretch" />
+            {([false, true] as const).map((only) => (
+              <button key={String(only)} onClick={() => setErrorsOnly(only)}
+                className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-lg transition-colors ${
+                  errorsOnly === only
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}>
+                {only ? 'Failures only' : 'Everything'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Rows — the only scrolling region, so the page behind never grows. */}
+        <div className="flex-1 overflow-y-auto px-5 py-2">
+          {err ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400 py-3">{err}</p>
+          ) : entries.length === 0 ? (
+            <p className="text-xs text-slate-400 py-3">
+              {loading ? 'Loading…'
+                : errorsOnly ? 'No failures in this period 🎉'
+                : 'Nothing sent in this period.'}
+            </p>
+          ) : (
+            <>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {visible.map((e) => {
+                  const badge = deliveryBadge(e);
+                  return (
+                    <div key={e.id} className="py-2">
+                      <div className="flex items-baseline gap-2">
+                        <span title={badge.label} className={`shrink-0 text-[10px] ${badge.cls}`}>{badge.mark}</span>
+                        <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
+                          {e.memberName ? `TM ${e.memberName}` : e.recipient ?? 'Unknown recipient'}
+                        </span>
+                        <span className="ml-auto shrink-0 text-[10px] text-slate-400">{timeAgo(e.at)}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
+                        {badge.label}
+                        {' · '}{e.templateLabel}
+                        {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
+                        {e.memberName && e.recipient && ` · +${e.recipient}`}
+                      </p>
+                      {(e.error || e.deliveryError) && (
+                        <p className="text-[11px] text-red-600 dark:text-red-400 pl-4 mt-0.5 leading-relaxed">
+                          {e.error ?? e.deliveryError}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {shown < entries.length && (
+                <button onClick={() => setShown((n) => n + 200)}
+                  className="w-full text-xs font-semibold text-emerald-700 dark:text-emerald-400 py-3 hover:underline">
+                  Show more ({entries.length - shown} older)
+                </button>
+              )}
+              {truncated && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 py-2">
+                  Only the most recent {entries.length} are shown, so the totals above count those.
+                  Pick a shorter period for an exact figure.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 shrink-0">
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Meta accepts a message before it delivers one, so &quot;sent&quot; is not &quot;arrived&quot;.
+            The mark on the left is what actually happened: ● delivered or read, ◐ on its way,
+            ✕ never arrived, ○ no word back yet. That last one means the delivery webhook is not
+            configured — set <code>WHATSAPP_VERIFY_TOKEN</code> and <code>WHATSAPP_APP_SECRET</code>, then
+            point Meta at <code>/api/whatsapp-webhook</code>.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

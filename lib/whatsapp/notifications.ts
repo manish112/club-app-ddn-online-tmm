@@ -96,6 +96,48 @@ function roleLabel(roleKey: RoleKey, slotIndex: number): string {
   return label + (MULTI_SLOT_ROLES.includes(roleKey) ? ` ${slotIndex}` : '');
 }
 
+// Agenda order, so a member holding two roles always reads them in the same
+// order the meeting runs in rather than in whatever order the rows came back.
+const ROLE_ORDER = Object.keys(ROLE_META) as RoleKey[];
+
+interface HeldRole { roleKey: RoleKey; slot: number }
+
+function sortRoles(roles: HeldRole[]): HeldRole[] {
+  return [...roles].sort((a, b) =>
+    ROLE_ORDER.indexOf(a.roleKey) - ROLE_ORDER.indexOf(b.roleKey) || a.slot - b.slot);
+}
+
+/**
+ * The roles a member holds, as one body parameter: "Timer", "Timer &
+ * Ah-Counter", "TMoD, Timer & Ah-Counter".
+ *
+ * One line, because Meta rejects a body parameter containing newlines — the same
+ * constraint `open_roles_list` lives under. The "&" before the last one is what
+ * makes it read as a sentence: the templates say "you are our *{{role_label}}*",
+ * and a trailing comma there would read as a truncated list.
+ */
+function joinRoleLabels(roles: HeldRole[]): string {
+  const labels = sortRoles(roles).map((r) => roleLabel(r.roleKey, r.slot));
+  if (labels.length <= 1) return labels[0] ?? '';
+  return `${labels.slice(0, -1).join(', ')} & ${labels[labels.length - 1]}`;
+}
+
+// Claims folded down to one entry per member. Guest slots (member_id null) and
+// role keys the app no longer knows about drop out — neither can be messaged or
+// named.
+function rolesByMember(
+  claims: { role_key: string; slot_index: number; member_id: string | null }[] | null,
+): Map<string, HeldRole[]> {
+  const byMember = new Map<string, HeldRole[]>();
+  for (const c of claims ?? []) {
+    if (!c.member_id || !ROLE_META[c.role_key as RoleKey]) continue;
+    const held = byMember.get(c.member_id) ?? [];
+    held.push({ roleKey: c.role_key as RoleKey, slot: c.slot_index });
+    byMember.set(c.member_id, held);
+  }
+  return byMember;
+}
+
 export interface WaRunResult {
   ok: true;
   sent: number;
@@ -126,8 +168,10 @@ export async function waNotifyMeetingCreated(
 }
 
 // ── 1 day before: reminder to each role holder ──────────────────────────────
-// One message per role: someone playing both Timer and Ah-Counter needs both
-// reminders, and merging them into a list loses the "this is yours" directness.
+// One message per *member*, naming every role they hold: someone down as both
+// Timer and Ah-Counter reads "you are our Timer & Ah-Counter" once. Two messages
+// a second apart would bill the club twice for the same reminder and read on the
+// phone as a glitch rather than as thoroughness.
 export async function waSendRoleReminders(
   meeting: MeetingRow, opts?: { dedupe?: boolean },
 ): Promise<WaRunResult | { skipped: string }> {
@@ -146,19 +190,18 @@ export async function waSendRoleReminders(
   let sent = 0, failed = 0;
   const reasons: string[] = [];
 
-  for (const c of claims ?? []) {
-    if (!c.member_id) continue;   // an admin-filled guest slot has no member to message
-    const m = byId.get(c.member_id);
+  for (const [memberId, held] of rolesByMember(claims)) {
+    const m = byId.get(memberId);
     if (!m || reachable([m], settings.default_country_code).length === 0) continue;
 
     const res = await deliverWhatsApp({
       key: 'role_reminder',
       phone: m.phone as string,
       meetingId: meeting.id,
-      vars: { ...base, full_name: m.name || m.display_name, role_label: roleLabel(c.role_key as RoleKey, c.slot_index) },
-      dedupeKey: opts?.dedupe === false
-        ? undefined
-        : `wa_role_reminder:${meeting.id}:${c.member_id}:${c.role_key}:${c.slot_index}`,
+      vars: { ...base, full_name: m.name || m.display_name, role_label: joinRoleLabels(held) },
+      // Keyed on the member, not the role: one message now covers all of them, so
+      // a per-role key would let the same reminder go out once per role again.
+      dedupeKey: opts?.dedupe === false ? undefined : `wa_role_reminder:${meeting.id}:${memberId}`,
     });
     if ('ok' in res) sent++;
     else { failed += 'error' in res ? 1 : 0; reasons.push('skipped' in res ? res.skipped : res.error); }
@@ -574,8 +617,19 @@ export async function waSendToMember(params: {
     const roles = await memberRolesAt(meeting.id, memberId);
     if (roles.length === 0) return { skipped: 'they hold no role at this meeting' };
 
-    // One message per role, for the same reason the day-before reminder sends
-    // one each: somebody down as both Timer and Ah-Counter needs both.
+    // The reminder names every role in one message, matching the day-before
+    // send. `role_assigned` stays one per role: it is about a single role
+    // appearing on the agenda, and a list would say something different.
+    if (key === 'role_reminder') {
+      const res = await deliverWhatsApp({
+        key,
+        phone: member.phone as string,
+        meetingId: meeting.id,
+        vars: { ...base, full_name: fullName, role_label: joinRoleLabels(roles) },
+      });
+      return oneResult(res);
+    }
+
     let sent = 0, failed = 0;
     const reasons: string[] = [];
     for (const r of roles) {

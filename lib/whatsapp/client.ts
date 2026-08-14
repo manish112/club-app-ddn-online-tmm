@@ -220,7 +220,15 @@ export async function deliverWhatsApp(opts: DeliverOpts): Promise<WaSendResult> 
       dedupe_key: opts.dedupeKey, template_key: opts.key,
       meeting_id: opts.meetingId ?? null, recipient: to, status: 'sent',
     });
-    if (error) return { skipped: 'duplicate' };
+    // 23505 is the unique violation on dedupe_key — the only error that actually
+    // means "already sent". Everything else (a missing column, a permission
+    // problem) used to be reported as a duplicate too, which reads in the log as
+    // a quiet, correct-looking skip while in truth nothing was sent and nobody
+    // was told. Sending stops either way, because without the claim there is no
+    // guard against messaging the whole club twice — but the reason is now the
+    // real one, and it reaches the cron summary and the admin panel verbatim.
+    if (error?.code === '23505') return { skipped: 'already sent for this meeting' };
+    if (error) return { error: `could not write the send log — ${error.message}` };
   }
 
   const result = settings.text_mode

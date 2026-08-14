@@ -249,9 +249,9 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
     subject: '⏰ Reminder: you\'re {{role_label}} tomorrow — Meeting #{{meeting_number}}',
     body_html: shell('Role Reminder ⏰', `
       <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
-      <p style="${P}">This is a friendly reminder that you are performing the following role at tomorrow's meeting.</p>
+      <p style="${P}">This is a friendly reminder of what you are performing at tomorrow's meeting.</p>
       ${CARD_OPEN}
-        <p style="${KICKER}">Your Role</p>
+        <p style="${KICKER}">Your Role(s)</p>
         <p style="margin:0 0 16px;color:#1e293b;font-size:20px;font-weight:800;">{{role_emoji}} {{role_label}}</p>
         <p style="${KICKER}">Meeting</p>
         <p style="margin:0;color:#1e293b;font-size:16px;font-weight:700;">Meeting #{{meeting_number}}</p>

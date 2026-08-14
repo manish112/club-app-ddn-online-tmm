@@ -290,6 +290,31 @@ export function reservationBlocked(
   return `Reserved for online members only till ${formatShortDate(reservation.reservedThrough)}`;
 }
 
+// ── Meeting (video) link ─────────────────────────────────────────────────────
+// A TMoD pastes whatever their conferencing tool handed them, which is often
+// bare ("meet.google.com/abc-defg-hij"). Rendered straight into an href a bare
+// host reads as a *relative* path, so the "Join meeting" link 404s inside the
+// app instead of opening the call — hence the scheme is filled in here rather
+// than trusted from the paste.
+//
+// Returns null for empty input (the column's "not set yet" value) and undefined
+// when the text can't be a URL at all, so a caller can tell "cleared" from
+// "rejected" and show an error for the second.
+export function normalizeMeetingLink(raw: string): string | null | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    // A host with no dot ("https://meet") is a typo, not a link. Rejecting it
+    // here is what stops it reaching a WhatsApp reminder as a dead join link.
+    if (!url.hostname.includes('.')) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 // Format "2026-08-09" → "9 Aug"
 export function formatShortDate(dateStr: string): string {
   const [y, mo, d] = dateStr.split('-').map(Number);

@@ -19,8 +19,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const limitParam = Number(req.nextUrl.searchParams.get('limit'));
-  const limit = Number.isFinite(limitParam) ? Math.min(200, Math.max(1, limitParam)) : 60;
+  // A missing query parameter reads as null, and `Number(null)` is 0 — which is
+  // finite, so an `isFinite ? clamp : default` test silently takes the clamp
+  // branch and yields the minimum instead of the default. That is exactly how
+  // this endpoint came to return ONE row for every caller that omitted `limit`,
+  // which is every caller. Absent and unparseable both have to fall through to
+  // the default here.
+  function intParam(name: string, fallback: number, min: number, max: number): number {
+    const raw = req.nextUrl.searchParams.get(name);
+    if (raw === null || raw.trim() === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(n)));
+  }
+
+  // The window is a number of DAYS, not a row count: "did everyone get last
+  // Saturday's reminder" is a question about a period, and a fixed row cap
+  // answers it differently depending on how big the club got.
+  const days = intParam('days', 30, 1, 90);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  // Generous, because the counts are computed from these rows — a truncated
+  // fetch would under-report the summary, so `truncated` is returned too and the
+  // panel says so rather than quietly showing a wrong total.
+  const limit = intParam('limit', 1000, 1, 2000);
   const errorsOnly = req.nextUrl.searchParams.get('errorsOnly') === '1';
 
   const supabase = createServiceClient();
@@ -35,6 +57,7 @@ export async function GET(req: NextRequest) {
     const q = supabase
       .from('whatsapp_sends')
       .select(withDelivery ? `${BASE_COLS}, ${DELIVERY_COLS}` : BASE_COLS)
+      .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(limit);
     if (!errorsOnly) return q;
@@ -99,18 +122,26 @@ export async function GET(req: NextRequest) {
     deliveryAt: r.delivery_at ?? null,
   }));
 
-  // Counts over the last 24 hours, so an admin opening the tab after a cron run
-  // sees at a glance whether it went out — without reading every row.
+  const tally = (list: typeof entries) => ({
+    total: list.length,
+    sent: list.filter((e) => e.status === 'sent').length,
+    // Rejected at the door, plus accepted and then dropped on the way.
+    failed: list.filter((e) => e.status === 'error' || e.deliveryStatus === 'failed').length,
+    delivered: list.filter((e) => e.deliveryStatus === 'delivered' || e.deliveryStatus === 'read').length,
+  });
+
+  // Two tallies: the whole window, and the last 24 hours inside it. The second
+  // answers "did last night's cron actually go out", which is the question an
+  // admin opens this tab with; the first is the month-level view.
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const recent = entries.filter((e) => new Date(e.at).getTime() >= dayAgo);
 
   return NextResponse.json({
     entries,
-    last24h: {
-      sent: recent.filter((e) => e.status === 'sent').length,
-      // Rejected at the door, plus accepted and then dropped on the way.
-      failed: recent.filter((e) => e.status === 'error' || e.deliveryStatus === 'failed').length,
-      delivered: recent.filter((e) => e.deliveryStatus === 'delivered' || e.deliveryStatus === 'read').length,
-    },
+    days,
+    // The fetch hit its cap, so the counts below are of what was read, not of
+    // everything in the window. Narrow the window to get an exact figure.
+    truncated: entries.length >= limit,
+    summary: tally(entries),
+    last24h: tally(entries.filter((e) => new Date(e.at).getTime() >= dayAgo)),
   });
 }
