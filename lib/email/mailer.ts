@@ -45,6 +45,20 @@ export async function getVpEducationName(): Promise<string> {
   }
 }
 
+// Same idea, for the officer who fields questions from people outside the
+// club — the WhatsApp auto-reply points a stranger here rather than at the
+// VP Education, who handles members' own agenda questions.
+export async function getVpMembershipName(): Promise<string> {
+  try {
+    const supabase = createServiceClient();
+    const { data } = await supabase.from('members').select('display_name, leadership_roles, active');
+    const vp = (data ?? []).find((m) => m.active && (m.leadership_roles ?? []).includes('vp_membership'));
+    return vp?.display_name ?? '';
+  } catch {
+    return '';
+  }
+}
+
 // Everyone who reviews member requests: Club President, VP Education and any
 // member flagged as an admin. De-duplicated, active members only. Best-effort —
 // an empty list just means nobody gets the "needs approval" mail.

@@ -22,12 +22,14 @@ interface Settings {
   no_role_nudge_enabled: boolean;
   meeting_starting_enabled: boolean;
   meeting_starting_lead_minutes: number;
+  auto_reply_enabled: boolean;
   hasToken?: boolean;
 }
 
 const EMPTY: Settings = {
   enabled: false, access_token: '', phone_number_id: '',
   api_version: 'v25.0', default_country_code: '91', text_mode: false,
+  auto_reply_enabled: true,
   welcome_enabled: true, meeting_created_enabled: true, role_change_enabled: true,
   role_reminder_enabled: true, no_role_nudge_enabled: true, meeting_starting_enabled: true,
   meeting_starting_lead_minutes: 70,
@@ -220,6 +222,8 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
               <span className="text-xs text-slate-500 dark:text-slate-400">minutes of the start time</span>
             </label>
           )}
+          <Toggle label="Reply automatically to texts" hint="Someone who texts the club's number gets the next meeting's details back — theme, join link, and who has which role. Once per number per day."
+            checked={settings.auto_reply_enabled} onChange={(v) => set('auto_reply_enabled', v)} />
           <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed pt-1">
             The reminders ride the same daily cron as the emails, so the actual lead time depends on when it
             lands inside the window. Each member is messaged once per meeting per reminder — a repeated or
@@ -666,6 +670,32 @@ interface LogEntry {
   meetingNumber: number | null;
   deliveryStatus: string | null;
   deliveryError: string | null;
+  /** When Meta reported the latest status — the moment it was read, for a read message. */
+  deliveryAt: string | null;
+}
+
+// "5:52 PM", or "14 Aug, 5:52 PM" once it isn't today — a bare clock time is
+// ambiguous in a log that now spans a month.
+function statusClock(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const today = new Date();
+  const sameDay = d.getDate() === today.getDate()
+    && d.getMonth() === today.getMonth()
+    && d.getFullYear() === today.getFullYear();
+  return sameDay ? time : `${d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+// How long after the send the status landed — "+40s", "+3 min". Says something
+// the timestamp alone doesn't: whether members read reminders straight away.
+function gapAfterSend(sentIso: string, statusIso: string): string {
+  const secs = Math.round((new Date(statusIso).getTime() - new Date(sentIso).getTime()) / 1000);
+  if (!Number.isFinite(secs) || secs < 0) return '';
+  if (secs < 60) return `+${secs}s`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `+${mins} min`;
+  const hrs = Math.round(mins / 60);
+  return `+${hrs} hr${hrs === 1 ? '' : 's'}`;
 }
 
 // Two separate facts, and the distinction is the whole point of the log: `status`
@@ -892,6 +922,14 @@ function MessageLogModal({ currentAdminId, onClose }: {
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-4 truncate">
                         {badge.label}
+                        {/* Meta timestamps the status, so for a read message this
+                            is the moment the member actually opened it. */}
+                        {e.deliveryAt && (
+                          <span className="font-medium text-slate-600 dark:text-slate-300">
+                            {' at '}{statusClock(e.deliveryAt)}
+                            {' ('}{gapAfterSend(e.at, e.deliveryAt)}{')'}
+                          </span>
+                        )}
                         {' · '}{e.templateLabel}
                         {e.meetingNumber != null && ` · Meeting #${e.meetingNumber}`}
                         {e.memberName && e.recipient && ` · +${e.recipient}`}

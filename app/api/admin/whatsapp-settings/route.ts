@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
     role_reminder_enabled: !!s.role_reminder_enabled,
     no_role_nudge_enabled: !!s.no_role_nudge_enabled,
     meeting_starting_enabled: !!s.meeting_starting_enabled,
+    auto_reply_enabled: !!s.auto_reply_enabled,
     // Clamped to a sane window: below the cron's own cadence the message would
     // never fire, and beyond a few hours it stops meaning "starting soon".
     meeting_starting_lead_minutes: Number.isFinite(leadMinutes)

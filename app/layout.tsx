@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Montserrat, Source_Sans_3 } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 const montserrat = Montserrat({
@@ -78,6 +79,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </a>
         {children}
+        {/* Vercel Analytics — page views and visitors. Injects nothing in dev
+            and no-ops off-Vercel, so it costs local development nothing. */}
+        <Analytics />
       </body>
     </html>
   );

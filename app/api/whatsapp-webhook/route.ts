@@ -1,4 +1,4 @@
-// Meta's delivery callbacks for WhatsApp.
+// Meta's callbacks for WhatsApp: delivery statuses, and inbound messages.
 //
 // The POST to Meta returns HTTP 200 and a message id the moment Meta accepts a
 // message — not when it arrives. Delivery, and every way it can fail, is
@@ -6,16 +6,29 @@
 // the sender, a marketing-category template Meta decided to pace. Without this
 // route a send that vanished and a send that landed look identical in the log.
 //
+// The same `messages` field also carries INBOUND messages — anyone who texts
+// the club's number — which get an automatic reply with the next meeting's
+// details (see waAutoReplyToInboundMessage).
+//
 // Setup (once):
 //   1. Set WHATSAPP_VERIFY_TOKEN and WHATSAPP_APP_SECRET in Vercel.
 //   2. Meta App Dashboard → WhatsApp → Configuration → Webhook → Edit:
 //        Callback URL   https://ddn.toastmasters.in/api/whatsapp-webhook
 //        Verify token   the same value as WHATSAPP_VERIFY_TOKEN
 //   3. Subscribe the WABA to the `messages` field (the button below the URL).
-//      Statuses arrive on `messages` too — there is no separate field for them.
+//      Statuses AND inbound messages both arrive on `messages` — there is no
+//      separate field for either.
+//   4. Subscribe the app itself to the club's WhatsApp Business Account
+//      (WABA), not just its own `messages` field — the two are different
+//      switches. The field says "this app wants these events"; the WABA
+//      subscription says "this app may receive them". Missing the second one
+//      looks identical to missing the first: Meta's own webhook Test button
+//      still returns 200 either way, because Test bypasses WABA routing and
+//      posts straight to the callback URL.
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServiceClient } from '@/utils/supabase/server';
+import { waAutoReplyToInboundMessage } from '@/lib/whatsapp/notifications';
 
 // createHmac needs the Node runtime; the Edge runtime has no node:crypto.
 export const runtime = 'nodejs';
@@ -106,21 +119,41 @@ export async function POST(req: NextRequest) {
   // future callback is a far worse outcome than dropping one malformed payload.
   try {
     const body = JSON.parse(raw) as {
-      entry?: { changes?: { value?: { statuses?: MetaStatus[] } }[] }[];
+      entry?: { changes?: { value?: { statuses?: MetaStatus[]; messages?: MetaInboundMessage[] } }[] }[];
     };
+    const values = (body.entry ?? []).flatMap((e) => e.changes ?? []).map((c) => c.value);
 
-    const statuses = (body.entry ?? [])
-      .flatMap((e) => e.changes ?? [])
-      .flatMap((c) => c.value?.statuses ?? [])
-      .filter((s) => s.id && s.status);
-
+    const statuses = values.flatMap((v) => v?.statuses ?? []).filter((s) => s.id && s.status);
     if (statuses.length) await recordStatuses(statuses);
-  } catch {
-    // Inbound messages, template-quality events and account updates all arrive
-    // on this same subscription. Nothing here handles them, and that is fine.
+
+    const messages = values.flatMap((v) => v?.messages ?? [])
+      .filter((m): m is MetaInboundMessage & { from: string } => !!m.from);
+    if (messages.length) await replyToInboundMessages(messages);
+  } catch (err) {
+    // Template-quality events and account updates also arrive on this same
+    // subscription and are deliberately not handled — only a genuine parse or
+    // handler failure is worth a log line here.
+    console.error('[whatsapp-webhook] failed to process callback:', err instanceof Error ? err.message : err);
   }
 
   return NextResponse.json({ ok: true });
+}
+
+interface MetaInboundMessage {
+  from?: string;   // sender's WhatsApp ID — Meta's own E.164 digits, no '+'
+  id?: string;
+}
+
+// One reply per distinct sender in the batch — waAutoReplyToInboundMessage's
+// own per-phone-per-day dedupe is what actually stops a burst of texts from
+// producing a burst of replies; this just avoids firing that check twice for
+// two messages that arrived in the same webhook delivery.
+async function replyToInboundMessages(messages: MetaInboundMessage[]) {
+  const senders = [...new Set(messages.map((m) => m.from as string))];
+  for (const from of senders) {
+    const res = await waAutoReplyToInboundMessage({ from });
+    if ('error' in res) console.error('[whatsapp-webhook] auto-reply failed:', res.error);
+  }
 }
 
 async function recordStatuses(statuses: MetaStatus[]) {
@@ -137,10 +170,27 @@ async function recordStatuses(statuses: MetaStatus[]) {
   }
 
   const ids = [...latest.keys()];
-  const { data: rows } = await supabase
+  const { data: rows, error } = await supabase
     .from('whatsapp_sends')
     .select('id, wa_message_id, delivery_status')
     .in('wa_message_id', ids);
+
+  // Discarding this error once cost an afternoon: on a database missing the
+  // delivery columns the select fails with 42703, `rows` comes back null, the
+  // loop below runs zero times, and Meta is still answered 200 — so callbacks
+  // kept arriving and nothing was ever recorded, at any layer, in silence.
+  // Every failure here is now visible in the platform logs.
+  if (error) {
+    console.error('[whatsapp-webhook] could not read whatsapp_sends:', error.message,
+      error.code === '42703'
+        ? '— the delivery_status/delivery_error/delivery_at columns are missing from this database'
+        : '');
+    return;
+  }
+
+  // One line per callback batch, so "is Meta calling at all" is answerable from
+  // the logs without a database round trip.
+  console.log(`[whatsapp-webhook] ${ids.length} status(es) received, ${(rows ?? []).length} matched a send`);
 
   for (const row of rows ?? []) {
     const s = latest.get(row.wa_message_id as string);
@@ -150,13 +200,17 @@ async function recordStatuses(statuses: MetaStatus[]) {
     const current = RANK[(row.delivery_status as string) ?? ''] ?? 0;
     if (incoming <= current) continue;   // an out-of-order or replayed callback
 
-    await supabase.from('whatsapp_sends').update({
+    const { error: updateError } = await supabase.from('whatsapp_sends').update({
       delivery_status: s.status,
       delivery_error: describe(s),
       delivery_at: s.timestamp
         ? new Date(Number(s.timestamp) * 1000).toISOString()
         : new Date().toISOString(),
     }).eq('id', row.id);
+
+    if (updateError) {
+      console.error('[whatsapp-webhook] could not record delivery status:', updateError.message);
+    }
   }
 
   // A status for a message we have no row for is normal — the admin test box

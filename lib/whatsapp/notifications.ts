@@ -9,18 +9,23 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { ROLE_META, type RoleKey } from '@/lib/types';
 import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime } from '@/lib/email/format';
-import { getAppUrl, getVpEducationName } from '@/lib/email/mailer';
+import { getAppUrl, getVpEducationName, getVpMembershipName } from '@/lib/email/mailer';
 import { pickUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
 import {
   deliverWhatsApp, getWhatsAppSettings, normalizePhone, sendTextMessage, type WaSendResult,
 } from './client';
 import {
-  WA_DIRECT_KEY, WA_MEETINGLESS_KEYS, WA_MEMBER_ROLE_KEYS, WA_MEMBER_SEND_KEYS,
+  WA_AUTO_REPLY_KEY, WA_DIRECT_KEY, WA_MEETINGLESS_KEYS, WA_MEMBER_ROLE_KEYS, WA_MEMBER_SEND_KEYS,
   type WaTemplateKey,
 } from './defaults';
 import type { TemplateVars } from '@/lib/email/render';
 
 const CLUB_NAME = 'Dehradun Online Toastmasters';
+
+// Toastmasters International's own club page — where a stranger who has
+// texted the number can find the club and how to visit, independent of
+// anything this app hosts.
+const CLUB_FINDER_URL = 'https://www.toastmasters.org/Find-a-Club/28680307-dehradun-online-toastmasters-club';
 
 const MULTI_SLOT_ROLES = ['speaker', 'evaluator', 'jury'];
 
@@ -279,6 +284,123 @@ async function roleSheetLines(meetingId: string): Promise<{ taken: string; open:
       ? openSlots.roles.map(({ roleKey, slot }) => roleLabel(roleKey, slot)).join(LIST_SEP)
       : 'None — every role is filled 🎉',
   };
+}
+
+// ── Auto-reply to an inbound WhatsApp message ───────────────────────────────
+// Anyone who texts the club's number gets an answer. A member's own phone
+// gets the next meeting's details — theme, join link, who has which role; a
+// number that matches nobody gets pointed at VP Membership and the club's
+// public page instead, since the agenda is for members and a stranger texting
+// in is far more likely asking how to join.
+//
+// This is free text, not a template: Meta only allows business-initiated
+// messages through an approved template, but a reply inside the 24-hour
+// window the inbound message itself just opened may say anything, in any
+// shape, including the multi-line layout Meta's body-parameter rule forbids
+// elsewhere in this file.
+//
+// Deduped once per phone per (UTC) calendar day — reusing the day as the
+// dedupe scope is what stops a burst of messages from the same person
+// producing a burst of identical replies, and also absorbs a webhook retry of
+// the same delivery for free, the same way every scheduled send in this file
+// already relies on a claimed key rather than checking-then-sending.
+async function buildAutoReplyText(fromE164: string, countryCode: string): Promise<string> {
+  const supabase = createServiceClient();
+  const [{ data: members }, meeting] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, phone, active'),
+    upcomingMeetingRow(),
+  ]);
+
+  // Best-effort name match, same rule the message log uses to turn a bare
+  // number back into a member: normalise every stored phone the same way and
+  // compare digits.
+  const match = (members ?? []).find(
+    (m) => m.active && normalizePhone(m.phone as string | null, countryCode) === fromE164,
+  );
+
+  // A number that doesn't match anyone isn't shown the agenda — meeting links
+  // and who holds which role are for members, not for whoever has the club's
+  // number. They're pointed at the person who can actually help them, and at
+  // the club's own public page, instead.
+  if (!match) {
+    const vpName = await getVpMembershipName();
+    return 'Hi there,\n\n'
+      + `Please reach out to the club VP Membership, TM ${vpName || '(see the club page below)'}, `
+      + 'to know more about the club, or visit our website:\n'
+      + `${CLUB_FINDER_URL}`;
+  }
+
+  const greeting = `Hi TM ${match.name || match.display_name} 👋`;
+  const appUrl = await getAppUrl();
+
+  if (!meeting) {
+    return `${greeting}\n\nThere's no meeting on the calendar right now. Check back soon, or see `
+      + `everything the club is up to in the app:\n${appUrl}`;
+  }
+
+  const sheet = await roleSheetLines(meeting.id);
+  return [
+    greeting,
+    '',
+    'Here are the next meeting’s details:',
+    '',
+    `📅 *Meeting #${meeting.number}* · ${formatDate(meeting.date)}`,
+    `⏰ ${formatTime(meeting.start_time)}–${formatTime(meeting.end_time)} IST`,
+    `🌐 Theme: ${meeting.theme && meeting.theme !== 'TBD' ? meeting.theme : 'To be decided'}`,
+    `🔗 Join: ${meeting.meeting_link?.trim() || 'To be set'}`,
+    '',
+    '✅ *Roles taken*',
+    sheet.taken,
+    '',
+    '🟡 *Roles open*',
+    sheet.open,
+    '',
+    'To see the full agenda, claim or change a role, visit our club app:',
+    appUrl,
+  ].join('\n');
+}
+
+export async function waAutoReplyToInboundMessage(params: {
+  from: string;   // Meta's own E.164 digits, no '+'
+}): Promise<{ ok: true } | { skipped: string } | { error: string }> {
+  const settings = await getWhatsAppSettings();
+  if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
+  if (!settings.auto_reply_enabled) return { skipped: 'auto-reply off' };
+  if (!settings.access_token || !settings.phone_number_id) return { skipped: 'whatsapp not configured' };
+
+  const supabase = createServiceClient();
+  const day = new Date().toISOString().slice(0, 10);
+  const dedupeKey = `wa_auto_reply:${params.from}:${day}`;
+
+  // Claim the day before doing any work — a second callback for the same
+  // delivery (Meta's own retry, or two texts a second apart) hits the unique
+  // constraint and stops here rather than sending twice.
+  const { data: claimed, error: claimError } = await supabase
+    .from('whatsapp_sends')
+    .insert({ dedupe_key: dedupeKey, template_key: WA_AUTO_REPLY_KEY, recipient: params.from, status: 'sent' })
+    .select('id').single();
+  if (claimError) {
+    if (claimError.code === '23505') return { skipped: 'already replied to this number today' };
+    return { error: `could not write the send log — ${claimError.message}` };
+  }
+
+  const text = await buildAutoReplyText(params.from, settings.default_country_code);
+  const result = await sendTextMessage(settings, params.from, text);
+
+  if ('ok' in result) {
+    await supabase.from('whatsapp_sends')
+      .update({ wa_message_id: result.messageId ?? null })
+      .eq('id', claimed.id);
+    return { ok: true };
+  }
+
+  // Clear the dedupe key on failure, matching deliverWhatsApp: a transient API
+  // error shouldn't cost the member their one reply for the day.
+  const reason = 'error' in result ? result.error : result.skipped;
+  await supabase.from('whatsapp_sends')
+    .update({ dedupe_key: null, status: 'error', error: reason })
+    .eq('id', claimed.id);
+  return 'error' in result ? { error: reason } : { skipped: reason };
 }
 
 // ── Meeting day: starting soon, with the full role sheet ────────────────────

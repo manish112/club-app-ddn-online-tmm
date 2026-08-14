@@ -641,12 +641,18 @@ create table if not exists whatsapp_settings (
   -- Width of the "starting soon" window, not an exact lead time: the cron only
   -- runs so often, so the real lead depends on where in the window it lands.
   meeting_starting_lead_minutes integer     not null default 70,
+  -- Reply automatically when someone texts the club's number, with the next
+  -- meeting's details. Free text inside the 24-hour window the inbound
+  -- message itself opens, so — unlike everything else in this table — it
+  -- needs no Meta-approved template.
+  auto_reply_enabled            boolean     not null default true,
   updated_at                    timestamptz not null default now()
 );
 
 alter table whatsapp_settings add column if not exists welcome_enabled     boolean not null default true;
 alter table whatsapp_settings add column if not exists role_change_enabled boolean not null default true;
 alter table whatsapp_settings add column if not exists business_account_id text    not null default '';
+alter table whatsapp_settings add column if not exists auto_reply_enabled  boolean not null default true;
 alter table whatsapp_settings alter column api_version set default 'v25.0';
 -- Only a row still on the version that shipped by mistake; a version an admin
 -- pinned deliberately is left alone.
