@@ -4,7 +4,7 @@ import { useMeetings } from '@/hooks/useMeetings';
 import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
-import { ThemeReminderModal } from '@/components/ThemeReminderModal';
+import { TmodReminderModal } from '@/components/TmodReminderModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims, Member, ParticipationMode } from '@/lib/types';
 import { isClubOfficer, hasLeadershipRole, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
@@ -117,8 +117,10 @@ export default function Home() {
   }, []);
   const [announceDismissed, setAnnounceDismissed] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [themeReminderMeeting, setThemeReminderMeeting] = useState<MeetingWithClaims | null>(null);
-  const themeReminderShown = useRef(false);
+  const [tmodReminder, setTmodReminder] = useState<
+    { meeting: MeetingWithClaims; needs: { theme: boolean; link: boolean } } | null
+  >(null);
+  const tmodReminderShown = useRef(false);
 
   useEffect(() => {
     if (!announcement) { setAnnounceDismissed(true); return; }
@@ -143,23 +145,30 @@ export default function Home() {
       .then(({ data }) => setParticipationMode(readParticipationMode(data ?? {})));
   }, [currentMember?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // What a TMoD still owes the club on their earliest upcoming meeting: the
+  // theme, the join link, or both. Shown once per sign-in — `handleSelect`
+  // clears the ref, so signing in again asks again until it's done.
+  //
+  // Runs off `meetings`, which refetches after every claim, so claiming TMoD
+  // pops the same prompt immediately rather than waiting for the next login.
   useEffect(() => {
     if (!loaded || loading || !currentMember || meetings.length === 0) return;
-    if (themeReminderShown.current) return;
-    const needsTheme = meetings
+    if (tmodReminderShown.current) return;
+    const upcoming = meetings
       .filter((m) => !isMeetingPast(m))
-      .sort((a, b) => a.number - b.number)
-      .find((m) => {
-        const isTMoD = m.role_claims.some(
-          (c) => c.role_key === 'tmod' && c.member_id === currentMember.id
-        );
-        if (!isTMoD) return false;
-        const t = (m.theme ?? '').trim().toLowerCase();
-        return !t || t === 'tbd';
-      });
-    if (!needsTheme) return;
-    themeReminderShown.current = true;
-    setThemeReminderMeeting(needsTheme);
+      .sort((a, b) => a.number - b.number);
+    for (const meeting of upcoming) {
+      const isTMoD = meeting.role_claims.some(
+        (c) => c.role_key === 'tmod' && c.member_id === currentMember.id
+      );
+      if (!isTMoD) continue;
+      const theme = (meeting.theme ?? '').trim().toLowerCase();
+      const needs = { theme: !theme || theme === 'tbd', link: !meeting.meeting_link?.trim() };
+      if (!needs.theme && !needs.link) continue;
+      tmodReminderShown.current = true;
+      setTmodReminder({ meeting, needs });
+      return;
+    }
   }, [loaded, loading, currentMember?.id, meetings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -182,7 +191,7 @@ export default function Home() {
   }, [currentMember?.id, currentMember?.theme_preference]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSelect(id: string) {
-    themeReminderShown.current = false;
+    tmodReminderShown.current = false;
     identify(id);
   }
 
@@ -490,11 +499,12 @@ export default function Home() {
 
 
 
-      {themeReminderMeeting && (
-        <ThemeReminderModal
-          meeting={themeReminderMeeting}
-          onSaved={() => { setThemeReminderMeeting(null); refetch(); }}
-          onLater={() => setThemeReminderMeeting(null)}
+      {tmodReminder && (
+        <TmodReminderModal
+          meeting={tmodReminder.meeting}
+          needs={tmodReminder.needs}
+          onSaved={() => { setTmodReminder(null); refetch(); }}
+          onLater={() => setTmodReminder(null)}
         />
       )}
     </div>

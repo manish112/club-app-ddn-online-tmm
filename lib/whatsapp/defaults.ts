@@ -73,7 +73,7 @@ export const WA_TEMPLATE_HINTS: Record<WaTemplateKey, string> = {
   meeting_created:  'Fires when an admin announces a newly created meeting.',
   role_assigned:    'Fires the moment a role is claimed or assigned, whoever did it.',
   role_removed:     'Fires when a role is released or removed by an admin.',
-  role_reminder:    'Fires the day before, once per role a member holds.',
+  role_reminder:    'Fires the day before, once per role holder — naming every role they hold, so nobody gets two messages.',
   no_role_nudge:    'Fires the day before, only to members with no role at that meeting, and only while roles are still open.',
   meeting_starting: 'Fires on meeting day, within the lead-time window set above. Lists who has which role and what is still vacant.',
 };

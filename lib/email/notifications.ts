@@ -73,6 +73,32 @@ function slotLabel(roleKey: RoleKey, slotIndex: number): string {
   return meta.label + (MULTI_SLOT_ROLES.includes(roleKey) ? ` ${slotIndex}` : '');
 }
 
+// Agenda order, so someone holding two roles reads them in the order the meeting
+// runs in rather than in whatever order the claim rows came back.
+const ROLE_ORDER = Object.keys(ROLE_META) as RoleKey[];
+
+/**
+ * Everything a member is down for at one meeting, as the {{role_label}} and
+ * {{role_emoji}} the role reminder prints — "Timer" for one, "TMoD, Timer &
+ * Ah-Counter" for three. The slot number is what keeps two evaluator seats from
+ * arriving as "Evaluator & Evaluator".
+ *
+ * The emoji is the role's own when there is one role, and all of them (deduped,
+ * agenda order) when there are several — so the card still marks the line
+ * without the mail having to invent a symbol for "several roles".
+ */
+function heldRoleVars(roles: { roleKey: RoleKey; slot: number }[]): { role_label: string; role_emoji: string } {
+  const sorted = [...roles].sort((a, b) =>
+    ROLE_ORDER.indexOf(a.roleKey) - ROLE_ORDER.indexOf(b.roleKey) || a.slot - b.slot);
+  const labels = sorted.map((r) => slotLabel(r.roleKey, r.slot));
+  return {
+    role_label: labels.length <= 1
+      ? labels[0] ?? ''
+      : `${labels.slice(0, -1).join(', ')} & ${labels[labels.length - 1]}`,
+    role_emoji: [...new Set(sorted.map((r) => ROLE_META[r.roleKey].emoji))].join(''),
+  };
+}
+
 function summaryRow(emoji: string, label: string, right: string, open: boolean): string {
   return `<tr><td style="padding:5px 0;color:#64748b;font-size:13px;">${emoji} ${label}</td>
     <td style="padding:5px 0;font-size:13px;font-weight:600;text-align:right;color:${open ? '#94a3b8' : '#1e293b'};">${right}</td></tr>`;
@@ -529,7 +555,10 @@ function monthLabel(ym: string): string {
     .toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
-// ── 1-day-before per-role reminders (1:1, deduped per member) ───────────────
+// ── 1-day-before role reminder (1:1, one mail per member) ───────────────────
+// One mail naming every role the member holds, not one mail per role: two
+// near-identical reminders in an inbox look like a bug, and "you are Timer &
+// Ah-Counter" is the thing they actually need to know.
 export async function sendRoleReminders(meeting: MeetingRow, opts?: { dedupe?: boolean }) {
   const supabase = createServiceClient();
   const [{ data: members }, { data: claims }] = await Promise.all([
@@ -538,22 +567,32 @@ export async function sendRoleReminders(meeting: MeetingRow, opts?: { dedupe?: b
   ]);
   const byId = new Map((members ?? []).map((m) => [m.id, m as MemberLite]));
 
+  // Guest slots (no member_id) and role keys the app no longer knows about drop
+  // out — neither can be emailed or named.
+  const byMember = new Map<string, { roleKey: RoleKey; slot: number }[]>();
+  for (const c of (claims ?? []) as ClaimLite[]) {
+    if (!c.member_id || !ROLE_META[c.role_key]) continue;
+    const held = byMember.get(c.member_id) ?? [];
+    held.push({ roleKey: c.role_key, slot: c.slot_index });
+    byMember.set(c.member_id, held);
+  }
+
   const appUrl = await getAppUrl();
   let sent = 0;
-  for (const c of (claims ?? []) as ClaimLite[]) {
-    const m = byId.get(c.member_id);
+  for (const [memberId, held] of byMember) {
+    const m = byId.get(memberId);
     if (!m?.email) continue;
-    const meta = ROLE_META[c.role_key];
     const vars = {
       ...baseMeetingVars(meeting, appUrl),
       full_name: m.name || m.display_name,
-      role_label: meta?.label ?? c.role_key,
-      role_emoji: meta?.emoji ?? '',
+      ...heldRoleVars(held),
     };
     const res = opts?.dedupe === false
       ? await sendOne('role_reminder', m.email, vars, meeting.id)
       : await sendOneDeduped('role_reminder', m.email, vars, {
-          dedupeKey: `role_reminder:${meeting.id}:${c.member_id}:${c.role_key}:${c.slot_index}`, meetingId: meeting.id,
+          // Keyed on the member, not the role: one mail now covers all of them, so
+          // a per-role key would let the same reminder go out once per role again.
+          dedupeKey: `role_reminder:${meeting.id}:${memberId}`, meetingId: meeting.id,
         });
     if ('ok' in res) sent++;
   }

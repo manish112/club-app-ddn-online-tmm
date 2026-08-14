@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, EvaluatorRequest, MeetingWithClaims, Member, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerGroup, SpeakerSlotRequest } from '@/lib/types';
 import { ASSIGN_ONLY_ROLES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, getMeetingRoles, isRoleEnabled } from '@/lib/types';
-import { roleClaimBlocked, consecutiveRoleBlocked } from '@/lib/utils';
+import { roleClaimBlocked, consecutiveRoleBlocked, normalizeMeetingLink } from '@/lib/utils';
 import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, speakerBuckets, groupIdForSlot, orderedSpeakerSlots, hasSpeakerGroups, roleReservation, offlineClaimWindow, reservationCountdown, formatMeetingDate } from '@/lib/utils';
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
@@ -41,6 +41,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [editingLink, setEditingLink] = useState(false);
   const [linkInput, setLinkInput] = useState(meeting.meeting_link ?? '');
   const [savingLink, setSavingLink] = useState(false);
+  const [linkError, setLinkError] = useState(false);
   const [slotRequest, setSlotRequest] = useState<SpeakerSlotRequest | null>(null);
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [requestNote, setRequestNote] = useState('');
@@ -177,8 +178,13 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const needsLinkPrompt = isTMoD && !meeting.meeting_link && !past;
 
   async function saveLink() {
+    // undefined = typed something that can't be a URL; keep them in the editor
+    // rather than saving a link nobody can join on.
+    const normalized = normalizeMeetingLink(linkInput);
+    if (normalized === undefined) { setLinkError(true); return; }
+    setLinkError(false);
     setSavingLink(true);
-    await supabase.from('meetings').update({ meeting_link: linkInput.trim() || null }).eq('id', meeting.id);
+    await supabase.from('meetings').update({ meeting_link: normalized }).eq('id', meeting.id);
     setSavingLink(false);
     setEditingLink(false);
     onChanged();
@@ -682,27 +688,34 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           <span className="text-lg leading-none shrink-0">🔗</span>
           <div className="min-w-0 flex-1">
             {editingLink ? (
-              <div className="flex items-center gap-2">
-                <input
-                  value={linkInput}
-                  onChange={(e) => setLinkInput(e.target.value)}
-                  type="url"
-                  placeholder="Paste Zoom / Google Meet URL…"
-                  autoFocus
-                  onKeyDown={(e) => { if (e.key === 'Enter') saveLink(); if (e.key === 'Escape') setEditingLink(false); }}
-                  className="flex-1 min-w-0 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-sm
-                             text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800
-                             focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500"
-                />
-                <button onClick={saveLink} disabled={savingLink}
-                  className="text-xs font-semibold text-maroon-700 dark:text-maroon-400 hover:text-maroon-900 min-h-[36px] disabled:opacity-40 shrink-0">
-                  {savingLink ? '…' : 'Save'}
-                </button>
-                <button
-                  onClick={() => { setEditingLink(false); setLinkInput(meeting.meeting_link ?? ''); }}
-                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 min-h-[36px] shrink-0">
-                  Cancel
-                </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={linkInput}
+                    onChange={(e) => { setLinkInput(e.target.value); setLinkError(false); }}
+                    type="url"
+                    placeholder="Paste Zoom / Google Meet URL…"
+                    autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveLink(); if (e.key === 'Escape') setEditingLink(false); }}
+                    className="flex-1 min-w-0 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-sm
+                               text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800
+                               focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500"
+                  />
+                  <button onClick={saveLink} disabled={savingLink}
+                    className="text-xs font-semibold text-maroon-700 dark:text-maroon-400 hover:text-maroon-900 min-h-[36px] disabled:opacity-40 shrink-0">
+                    {savingLink ? '…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setEditingLink(false); setLinkError(false); setLinkInput(meeting.meeting_link ?? ''); }}
+                    className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 min-h-[36px] shrink-0">
+                    Cancel
+                  </button>
+                </div>
+                {linkError && (
+                  <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mt-1">
+                    That doesn&apos;t look like a link.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-2">

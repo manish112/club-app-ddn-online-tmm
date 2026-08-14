@@ -6,6 +6,9 @@ import { ASSIGN_ONLY_ROLES, LEVELS, PATHS, ROLE_META } from '@/lib/types';
 import type { RoleReservation } from '@/lib/utils';
 import { roleClaimBlocked, consecutiveRoleBlocked, reservationBlocked, speechTimeRange, claimHolderName, claimHolderShortName } from '@/lib/utils';
 
+// Roles with more than one seat, whose slot number is part of the name.
+const MULTI_SLOT_ROLES: RoleKey[] = ['speaker', 'evaluator', 'jury'];
+
 interface Props {
   meetingId: string;
   meetingNumber: number;
@@ -152,6 +155,7 @@ export function RoleSlot({
 }: Props) {
   const [busy, setBusy] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [confirmingRelease, setConfirmingRelease] = useState(false);
   const [justClaimed, setJustClaimed] = useState(false);
   const [editingDetails, setEditingDetails] = useState(false);
   const [choosingEvaluator, setChoosingEvaluator] = useState(false);
@@ -164,6 +168,13 @@ export function RoleSlot({
   // them, and only an admin can remove them (members can't drop themselves).
   const assignOnly = ASSIGN_ONLY_ROLES.includes(roleKey);
   const canRelease = claim && (isAdmin || (isOwn && !assignOnly)) && (!isLocked || isAdmin);
+
+  // What the ✕ and the tile tap now do: ask, rather than delete. The modal
+  // itself is built further down, once claimantName is in scope.
+  const requestRelease = () => {
+    if (!claim || !canRelease || busy) return;
+    setConfirmingRelease(true);
+  };
 
   const blockReason = (!claim && memberId && !isGuest && !isAdmin && !assignOnly)
     ? roleClaimBlocked(roleKey, memberExistingRoles)
@@ -247,6 +258,7 @@ export function RoleSlot({
   async function handleRelease() {
     if (!claim || !canRelease || busy) return;
     setBusy(true);
+    setConfirmingRelease(false);
     await supabase.from('role_claims').delete().eq('id', claim.id);
     // Releasing a speaker vacates the whole pair: drop the paired evaluator (there's
     // no one to evaluate) and cancel any pending evaluator request, then trim any
@@ -355,6 +367,33 @@ export function RoleSlot({
 
   const shortName = claim ? (claimHolderShortName(claim, claim.member ?? null) || '…') : '…';
 
+  // Multi-slot roles are numbered so "Evaluator 2" is unambiguous in the
+  // confirmation — "Evaluator" alone wouldn't say which seat is being given up.
+  const slotLabel = meta.label + (MULTI_SLOT_ROLES.includes(roleKey) ? ` ${slotIndex}` : '');
+
+  // Releasing some roles takes more with it than the one slot, and the member
+  // deserves to know that before confirming rather than discover it after.
+  const releaseConsequence =
+    roleKey === 'speaker'
+      ? 'Your evaluator is released along with you, and any pending evaluator request is cancelled.'
+      : roleKey === 'tmod'
+        ? 'The meeting theme resets to TBD, since the theme belongs to the Toastmaster of the Day.'
+        : null;
+
+  // Rendered inside whichever variant is on screen — only one ever is, and the
+  // modal is fixed-position so it covers the page from wherever it is mounted.
+  const releaseModal = confirmingRelease && claim ? (
+    <ReleaseConfirmModal
+      roleLabel={slotLabel}
+      holderName={claimantName}
+      isOwn={isOwn}
+      consequence={releaseConsequence}
+      busy={busy}
+      onConfirm={handleRelease}
+      onCancel={() => setConfirmingRelease(false)}
+    />
+  ) : null;
+
   // ── CHIP VARIANT ─────────────────────────────────────────────────────────
   if (variant === 'chip') {
     const readOnly = (isPast || isLocked) && !isAdmin;
@@ -383,13 +422,14 @@ export function RoleSlot({
 
       return (
         <div className={chipCls}>
+          {releaseModal}
           <div className="flex items-center justify-between gap-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
               {meta.emoji} {meta.label}
             </span>
             {canRelease && !readOnly && (
               <button
-                onClick={handleRelease}
+                onClick={requestRelease}
                 disabled={busy}
                 className="text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 text-xs leading-none p-0.5 transition-colors shrink-0"
                 aria-label="Release"
@@ -547,7 +587,7 @@ export function RoleSlot({
 
     const handleMiniClick = !filled
       ? isAdmin ? () => setAssigning(true) : canClaim ? handleClaim : undefined
-      : canRelease ? handleRelease : undefined;
+      : canRelease ? requestRelease : undefined;
 
     if (assigning && isAdmin) {
       return (
@@ -569,6 +609,7 @@ export function RoleSlot({
 
     return (
       <div className={miniCls} onClick={handleMiniClick} role={handleMiniClick ? 'button' : undefined}>
+        {releaseModal}
         <span className="text-xl leading-none">{meta.emoji}</span>
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 leading-tight">
           {meta.label}
@@ -616,6 +657,7 @@ export function RoleSlot({
   if (claim) {
     return (
       <>
+        {releaseModal}
         <div className={`flex items-center gap-2 py-2.5 px-3 rounded-xl transition-colors
           ${justClaimed ? 'claim-anim' : ''}
           ${isOwn
@@ -631,7 +673,7 @@ export function RoleSlot({
           </span>
           {canRelease && (
             <button
-              onClick={handleRelease}
+              onClick={requestRelease}
               disabled={busy}
               className="shrink-0 ml-1 text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
                          min-h-[36px] px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
@@ -881,6 +923,79 @@ function SpeechEditorInline({
 
 // Shown when a member claims a Prepared Speaker slot: nominate a preferred
 // evaluator (→ officer approval) or opt out ("no preference" → slot stays open).
+// Giving up a role is one tap on a tile, and on a phone that tap is easy to make
+// by accident while scrolling the agenda. It is also not a private mistake: the
+// slot reopens for anyone to take, and the member gets a "role removed" message.
+// So it asks first.
+function ReleaseConfirmModal({
+  roleLabel, holderName, isOwn, consequence, busy, onConfirm, onCancel,
+}: {
+  roleLabel: string;
+  holderName: string;
+  isOwn: boolean;
+  /** Anything else this release takes with it, spelled out before it happens. */
+  consequence: string | null;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+      // Stops here as well as cancelling: in the mini variant this modal is
+      // mounted inside the tile, whose own onClick is what opens it — letting a
+      // backdrop tap bubble would close and immediately reopen the dialog.
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+    >
+      <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark p-6"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto mb-6 sm:hidden" />
+        <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-2">
+          {isOwn ? 'Remove your name?' : 'Remove this role?'}
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+          {isOwn ? (
+            <>Do you really want to remove your name from the role of{' '}
+              <strong className="text-slate-700 dark:text-slate-200">{roleLabel}</strong>?</>
+          ) : (
+            <>Remove <strong className="text-slate-700 dark:text-slate-200">{holderName}</strong> from the
+              role of <strong className="text-slate-700 dark:text-slate-200">{roleLabel}</strong>?</>
+          )}
+        </p>
+        {consequence && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30
+                        border border-amber-200 dark:border-amber-800/40 rounded-xl px-3 py-2 mb-4 leading-relaxed">
+            {consequence}
+          </p>
+        )}
+        <p className="text-xs text-slate-400 dark:text-slate-500 mb-5 leading-relaxed">
+          The slot opens up for anyone else to take.
+        </p>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="flex-1 bg-gradient-to-r from-red-700 to-red-600 hover:from-red-800 hover:to-red-700
+                       text-white rounded-xl py-3 text-sm font-semibold min-h-[44px]
+                       disabled:opacity-40 active:scale-95 transition-all shadow-sm"
+          >
+            {busy ? 'Removing…' : 'Remove'}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="px-6 py-3 text-sm font-medium text-slate-500 dark:text-slate-400
+                       hover:text-slate-700 dark:hover:text-slate-200 min-h-[44px] disabled:opacity-40"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EvaluatorPreferenceModal({
   members, excludeId, unavailableIds = [], busy, onConfirm, onCancel,
 }: {
