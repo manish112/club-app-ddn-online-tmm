@@ -58,6 +58,13 @@ export const WA_MEMBER_ROLE_KEYS: WaTemplateKey[] = ['role_assigned', 'role_remi
 // a notification the app decided to send.
 export const WA_DIRECT_KEY = 'custom';
 
+// The automatic reply sent when someone texts the club's number (see the
+// webhook route). Not one of the templates above: it is free text sent inside
+// the 24-hour window the inbound message itself opens, so it needs no Meta
+// approval and has no admin-editable body — only its on/off switch in settings.
+// Recorded under its own key so it reads as itself in the send log.
+export const WA_AUTO_REPLY_KEY = 'auto_reply';
+
 export const WA_TEMPLATE_LABELS: Record<WaTemplateKey, string> = {
   welcome:          'Welcome / introducing WhatsApp (to a member)',
   meeting_created:  'New meeting announced (to all members)',
@@ -74,7 +81,9 @@ export const WA_TEMPLATE_HINTS: Record<WaTemplateKey, string> = {
   role_assigned:    'Fires the moment a role is claimed or assigned, whoever did it.',
   role_removed:     'Fires when a role is released or removed by an admin.',
   role_reminder:    'Fires the day before, once per role holder — naming every role they hold, so nobody gets two messages.',
-  no_role_nudge:    'Fires the day before, only to members with no role at that meeting, and only while roles are still open.',
+  no_role_nudge:    'Fires the day before, only to members with no role at that meeting, and only while roles are still open. '
+    + 'Add a static "Visit website" button pointing at the app URL when you submit this template in WhatsApp Manager — '
+    + 'a fixed-URL button needs no code change here, Meta renders it from the approved template.',
   meeting_starting: 'Fires on meeting day, within the lead-time window set above. Lists who has which role and what is still vacant.',
 };
 
@@ -83,6 +92,7 @@ export const WA_TEMPLATE_HINTS: Record<WaTemplateKey, string> = {
 export const WA_LOG_LABELS: Record<string, string> = {
   ...WA_TEMPLATE_LABELS,
   [WA_DIRECT_KEY]: 'Direct message from an admin',
+  [WA_AUTO_REPLY_KEY]: 'Automatic reply (member texted the number)',
 };
 
 // Every placeholder a kind may use. The admin editor lists these, and the
@@ -95,7 +105,7 @@ export const WA_PLACEHOLDERS: Record<WaTemplateKey, string[]> = {
   role_assigned:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'actor_line'],
   role_removed:     [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'actor_line'],
   role_reminder:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label'],
-  no_role_nudge:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'open_roles_count', 'open_roles_list'],
+  no_role_nudge:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_start', 'meeting_time', 'open_roles_count', 'open_roles_list'],
   meeting_starting: [...COMMON, 'meeting_number', 'meeting_start', 'meeting_time', 'meeting_theme', 'meeting_link', 'roles_taken', 'roles_open'],
 };
 
@@ -195,11 +205,11 @@ const BODIES: Record<WaTemplateKey, string> = {
   // chance to grow" was the sentence that made it a promotion.
   no_role_nudge:
     'Dear TM {{full_name}} 👋\n\n'
-    + 'Reminder: *Meeting #{{meeting_number}}* is tomorrow, {{meeting_date}}.\n\n'
-    + '📋 Your agenda status: *no role assigned*\n\n'
-    + '🙌 *Open slots ({{open_roles_count}})*\n'
+    + 'We have a few roles lying vacant for tomorrow\'s meeting i.e. for *Meeting #{{meeting_number}}*, '
+    + '{{meeting_date}} starting at {{meeting_start}} IST — could you please help us fill one?\n\n'
+    + '🙌 *Open roles ({{open_roles_count}})*\n'
     + '{{open_roles_list}}\n\n'
-    + 'To take one, open the agenda:\n{{app_url}}',
+    + 'Please visit the club app to claim a role:\n{{app_url}}',
 
   meeting_starting:
     'Dear TM {{full_name}} 👋\n\n'

@@ -30,6 +30,8 @@ export interface WhatsAppSettings {
   no_role_nudge_enabled: boolean;
   meeting_starting_enabled: boolean;
   meeting_starting_lead_minutes: number;
+  /** Reply automatically when someone texts the club's number. */
+  auto_reply_enabled: boolean;
 }
 
 export async function getWhatsAppSettings(): Promise<WhatsAppSettings | null> {
