@@ -47,6 +47,7 @@ export function AgendaModal({ meeting, members, onClose }: Props) {
       .then(({ data }) => {
         if (!data) return;
         setConfig({
+          networkingMins:     data.networking_mins ?? 10,
           l1SpeechMins:       data.l1_speech_mins,
           otherSpeechMins:    data.other_speech_mins,
           ttSpeakerCountMin:  data.tt_speaker_count_min,

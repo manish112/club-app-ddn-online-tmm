@@ -486,6 +486,7 @@ create table if not exists club_survey_responses (
 create table if not exists agenda_config (
   id                              integer     primary key default 1 check (id = 1),
   -- Agenda timings, in minutes.
+  networking_mins                 integer     not null default 10,
   l1_speech_mins                  integer     not null default 6,
   other_speech_mins               integer     not null default 7,
   tt_speaker_count_min            integer     not null default 4,
@@ -519,6 +520,7 @@ create table if not exists agenda_config (
   updated_at                      timestamptz not null default now()
 );
 
+alter table agenda_config add column if not exists networking_mins                 integer not null default 10;
 alter table agenda_config add column if not exists schedule_weekday                integer not null default 6;
 -- An older database created this column defaulting to Wednesday and moved the
 -- single row to Saturday afterwards. Only the DEFAULT is corrected here — the
