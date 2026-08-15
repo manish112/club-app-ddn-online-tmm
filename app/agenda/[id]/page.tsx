@@ -7,6 +7,8 @@ import {
   buildAgendaSections,
   formatMeetingDate,
   formatTime,
+  DEFAULT_AGENDA_CONFIG,
+  type AgendaConfig,
   type AgendaSection,
 } from '@/lib/utils';
 
@@ -32,7 +34,26 @@ export default function AgendaPage() {
             if (c.member_id && c.member) byId.set(c.member_id, c.member as Member);
           }
           setMeeting(m);
-          setSections(buildAgendaSections(m, byId));
+          supabase
+            .from('agenda_config')
+            .select('*')
+            .single()
+            .then(({ data: cfg }) => {
+              const config: AgendaConfig = cfg
+                ? {
+                    networkingMins:     cfg.networking_mins ?? 10,
+                    l1SpeechMins:       cfg.l1_speech_mins,
+                    otherSpeechMins:    cfg.other_speech_mins,
+                    ttSpeakerCountMin:  cfg.tt_speaker_count_min,
+                    ttSpeakerCountMax:  cfg.tt_speaker_count_max,
+                    ttMinsPerSpeaker:   cfg.tt_mins_per_speaker,
+                    tmodConclusionMins: cfg.tmod_conclusion_mins,
+                    lockBeforeMins:     cfg.lock_before_mins ?? 60,
+                    maxSpeakerSlots:    cfg.max_speaker_slots ?? 2,
+                  }
+                : DEFAULT_AGENDA_CONFIG;
+              setSections(buildAgendaSections(m, byId, config));
+            });
         }
         setLoading(false);
       });

@@ -1780,6 +1780,7 @@ function reservationOpenDayOptions(meetingWeekday: number): { days: number; labe
 function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   const supabase = createClient();
   const [vals, setVals] = useState({
+    networking_mins: 10,
     l1_speech_mins: 6, other_speech_mins: 7, tt_speaker_count_min: 4,
     tt_speaker_count_max: 5, tt_mins_per_speaker: 2, tmod_conclusion_mins: 5, lock_before_mins: 60,
     max_speaker_slots: 2, online_reservation_days_before: DEFAULT_RESERVATION_DAYS_BEFORE,
@@ -1796,7 +1797,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
       if (data) {
-        setVals({ l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE, offline_reservation_days_before: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
+        setVals({ networking_mins: data.networking_mins ?? 10, l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE, offline_reservation_days_before: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
         setReservationEnabled(data.online_reservation_enabled === true);
         setOfflineReservationEnabled(data.offline_reservation_enabled === true);
         setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
@@ -1832,15 +1833,15 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
   }
 
-  function numField(key: keyof typeof vals, label: string, hint?: string) {
+  function numField(key: keyof typeof vals, label: string, hint?: string, min = 1) {
     return (
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{label}</p>
           {hint && <p className="text-xs text-slate-500">{hint}</p>}
         </div>
-        <input type="number" min={1} max={60} value={vals[key]}
-          onChange={e => setVals(v => ({ ...v, [key]: parseInt(e.target.value) || 1 }))}
+        <input type="number" min={min} max={60} value={vals[key]}
+          onChange={e => setVals(v => ({ ...v, [key]: parseInt(e.target.value) || min }))}
           className="w-16 shrink-0 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 text-sm text-center bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-maroon-600" />
       </div>
     );
@@ -1902,6 +1903,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
           <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Agenda Timing</h3>
           <p className="text-xs text-slate-500">Changes apply immediately to any agenda opened after saving.</p>
         </div>
+        <div className="space-y-1"><p className={labelCls}>Opening</p><div className="pt-1">{numField('networking_mins', 'Networking / Meet & Greet (mins)', 'Buffer before the meeting is called to order — set to 0 to skip', 0)}</div></div>
         <div className="space-y-1"><p className={labelCls}>Prepared Speeches</p><div className="space-y-3 pt-1">{numField('l1_speech_mins', 'L1 speech max (mins)', 'Pathways Level 1 — standard is 6')}{numField('other_speech_mins', 'Other speech max (mins)', 'Levels 2–5 — standard is 7')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Table Topics</p><div className="space-y-3 pt-1">{numField('tt_speaker_count_min', 'Min speakers')}{numField('tt_speaker_count_max', 'Max speakers')}{numField('tt_mins_per_speaker', 'Max mins per speaker', 'Standard TT is 1–2½ min each')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>

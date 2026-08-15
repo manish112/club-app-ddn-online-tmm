@@ -633,6 +633,7 @@ export interface AgendaSection {
 }
 
 export interface AgendaConfig {
+  networkingMins: number;
   l1SpeechMins: number;
   otherSpeechMins: number;
   ttSpeakerCountMin: number;
@@ -644,6 +645,7 @@ export interface AgendaConfig {
 }
 
 export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
+  networkingMins: 10,
   l1SpeechMins: 6,
   otherSpeechMins: 7,
   ttSpeakerCountMin: 4,
@@ -696,6 +698,10 @@ export function buildAgendaSections(
 
   // ── Section 1: Opening ───────────────────────────────────────────────────
   const s1: AgendaRow[] = [];
+
+  if (config.networkingMins > 0) {
+    s1.push(r(false, 'Networking / Meet & Greet'));                                              offset += config.networkingMins;
+  }
 
   // The chair is whichever officer presides on the day, decided by who turns up —
   // so the agenda says "Presiding Officer" and never names a person.
