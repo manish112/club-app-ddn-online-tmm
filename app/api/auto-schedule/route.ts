@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { notifyMeetingCreated, type MeetingRow } from '@/lib/email/notifications';
+import { getWhatsAppSettings } from '@/lib/whatsapp/client';
+import { waNotifyMeetingCreated } from '@/lib/whatsapp/notifications';
 
 function nextWeekdayAfter(from: Date, weekday: number): Date {
   const d = new Date(from);
@@ -98,9 +100,16 @@ export async function GET(req: NextRequest) {
     .select('id, number, date, start_time, end_time, theme, meeting_link');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Announce each auto-created meeting to all members (best-effort).
+  // Announce each auto-created meeting to all members (best-effort). WhatsApp
+  // rides alongside email here too, matching the manual "create meeting" path
+  // in /api/notify-meeting-created — otherwise a club running WhatsApp only
+  // gets announcements for meetings an admin created by hand.
+  const wa = await getWhatsAppSettings().catch(() => null);
   for (const m of inserted ?? []) {
     try { await notifyMeetingCreated(m as MeetingRow); } catch { /* ignore */ }
+    if (wa?.enabled && wa.meeting_created_enabled) {
+      try { await waNotifyMeetingCreated(m as MeetingRow, { dedupe: false }); } catch { /* ignore */ }
+    }
   }
 
   console.log(`[auto-schedule] Created ${rows.length} meetings: ${rows.map(r => r.date).join(', ')}`);
