@@ -3,8 +3,8 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { isAdminMember } from '@/lib/admin-auth';
 import {
   notifyMeetingCreated, sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders,
-  broadcastRoleAssigned, broadcastLeadershipAssigned, broadcastMentorAssigned, broadcastWelcome,
-  pickUpcomingMeeting, type MeetingRow,
+  sendOpenRolesNudge, broadcastRoleAssigned, broadcastLeadershipAssigned, broadcastMentorAssigned,
+  broadcastWelcome, pickUpcomingMeeting, type MeetingRow,
 } from '@/lib/email/notifications';
 
 // The meeting every "next meeting" email (broadcast or 1:1) is built from.
@@ -27,11 +27,11 @@ export async function GET(req: NextRequest) {
 
 // Templates that can be broadcast on demand. `meeting` ones need the next meeting.
 const BROADCAST_KEYS = [
-  'meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'role_reminder', 'role_assigned',
-  'leadership_assigned', 'mentor_assigned', 'welcome',
+  'meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'open_roles', 'role_reminder',
+  'role_assigned', 'leadership_assigned', 'mentor_assigned', 'welcome',
 ] as const;
 type BroadcastKey = typeof BROADCAST_KEYS[number];
-const NEEDS_MEETING: BroadcastKey[] = ['meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'role_reminder', 'role_assigned'];
+const NEEDS_MEETING: BroadcastKey[] = ['meeting_created', 'meeting_reminder', 'meeting_reminder_day_before', 'open_roles', 'role_reminder', 'role_assigned'];
 
 // Manually (re)send a broadcast email. Recipients are computed from the type
 // (and the next meeting, where relevant).
@@ -74,6 +74,17 @@ export async function POST(req: NextRequest) {
       if ('error' in result) return NextResponse.json(result, { status: 500 });
       // Report what actually went out — sends can be skipped per member (opt-out,
       // template disabled), so the member count would overstate it.
+      if ('skipped' in result) {
+        return NextResponse.json({ error: `Nothing sent — ${result.skipped}` }, { status: 400 });
+      }
+      if (result.sent === 0) {
+        return NextResponse.json({ error: `Nothing sent — ${result.reason ?? 'no recipients'}` }, { status: 400 });
+      }
+      recipients = result.sent;
+      break;
+    }
+    case 'open_roles': {
+      const result = await sendOpenRolesNudge(meeting!, { dedupe: false });
       if ('skipped' in result) {
         return NextResponse.json({ error: `Nothing sent — ${result.skipped}` }, { status: 400 });
       }
