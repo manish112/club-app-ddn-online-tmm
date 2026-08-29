@@ -49,6 +49,17 @@ function meetingLinkBlock(link: string | null | undefined): string {
     <a href="${safe}" style="display:inline-block;color:#0E2D6A;font-weight:700;font-size:14px;word-break:break-all;">🔗 Join the meeting</a>`;
 }
 
+// Why a meeting was cancelled — shown right under the meeting card. Absent
+// rather than "No reason given": an admin who skipped the prompt didn't
+// necessarily mean to say nothing, and the cancellation itself is the news.
+export function cancellationReasonBlock(reason: string | null | undefined): string {
+  if (!reason?.trim()) return '';
+  return `<table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:24px;"><tr><td style="padding:16px 20px;">
+    <p style="${KICKER}">Reason</p>
+    <p style="margin:0;color:#334155;font-size:14px;line-height:1.6;">${escapeHtml(reason.trim())}</p>
+  </td></tr></table>`;
+}
+
 function baseMeetingVars(meeting: MeetingRow, appUrl: string): Record<string, string> {
   return {
     club_name: CLUB_NAME,
@@ -754,6 +765,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
       leadership_role: leadershipRoleSample,
       actor_line: '', speaker_name: target?.display_name ?? '[Speaker]', evaluator_name: '[Evaluator]',
       status_title: 'Request approved 🎉', status_body: 'This is a sample status message shown in the preview.', review_comment_block: '',
+      cancellation_reason_block: cancellationReasonBlock('Sample reason shown in the preview.'),
       mentor_name: '[Mentor]', mentee_name: '[Mentee]',
       mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
       mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),
@@ -800,6 +812,7 @@ export async function buildPreviewVars(adminId?: string, targetId?: string): Pro
     speaker_name: subjectMember?.display_name ?? '[Speaker]',
     evaluator_name: admin?.display_name ?? '[Evaluator]',
     status_title: 'Request approved 🎉', status_body: 'This is a sample status message shown in the preview.', review_comment_block: '',
+    cancellation_reason_block: cancellationReasonBlock('Sample reason shown in the preview.'),
     mentor_name: subjectMember?.display_name ?? '[Mentor]', mentee_name: '[Mentee]',
     mentor_bio_block: bioBlock('Sample Mentor', 'An enthusiastic Toastmaster who loves mentoring new members.'),
     mentee_bio_block: bioBlock('Sample Mentee', 'A new member excited to begin their Toastmasters journey.'),

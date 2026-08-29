@@ -25,6 +25,7 @@ export interface WhatsAppSettings {
   text_mode: boolean;
   welcome_enabled: boolean;
   meeting_created_enabled: boolean;
+  meeting_cancelled_enabled: boolean;
   role_change_enabled: boolean;      // covers both role_assigned and role_removed
   role_reminder_enabled: boolean;
   no_role_nudge_enabled: boolean;
@@ -149,6 +150,10 @@ async function postToMeta(s: WhatsAppSettings, payload: Record<string, unknown>)
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ messaging_product: 'whatsapp', ...payload }),
+      // A stalled request here would otherwise hang until the serverless
+      // function's execution cap kills the whole invocation silently — see
+      // the matching timeout note on the email transport in lib/email/mailer.ts.
+      signal: AbortSignal.timeout(15_000),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {

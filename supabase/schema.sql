@@ -499,6 +499,9 @@ create table if not exists agenda_config (
   schedule_weekday                integer     not null default 6,
   schedule_start_time             text        not null default '19:30',
   schedule_end_time               text        not null default '21:00',
+  -- When true, /api/auto-schedule (the weekly cron) creates nothing — an admin
+  -- who wants a break between meetings sets this instead of racing the cron.
+  auto_schedule_paused            boolean     not null default false,
   -- Role categories a brand-new meeting opens with disabled.
   default_disabled_roles          text[]      not null default '{}',
   -- Role-reservation windows. The online gate holds roles for online-only
@@ -528,6 +531,7 @@ alter table agenda_config add column if not exists schedule_weekday             
 alter table agenda_config alter column schedule_weekday set default 6;
 alter table agenda_config add column if not exists schedule_start_time             text    not null default '19:30';
 alter table agenda_config add column if not exists schedule_end_time               text    not null default '21:00';
+alter table agenda_config add column if not exists auto_schedule_paused            boolean not null default false;
 alter table agenda_config add column if not exists max_speaker_slots               integer not null default 2;
 alter table agenda_config add column if not exists default_disabled_roles          text[]  not null default '{}';
 alter table agenda_config add column if not exists online_reservation_enabled      boolean not null default false;
@@ -635,6 +639,7 @@ create table if not exists whatsapp_settings (
   text_mode                     boolean     not null default false,
   -- Per-notification toggles, mirroring email_settings.
   meeting_created_enabled       boolean     not null default true,
+  meeting_cancelled_enabled     boolean     not null default true,
   role_reminder_enabled         boolean     not null default true,
   no_role_nudge_enabled         boolean     not null default true,
   meeting_starting_enabled      boolean     not null default true,
@@ -655,6 +660,7 @@ alter table whatsapp_settings add column if not exists welcome_enabled     boole
 alter table whatsapp_settings add column if not exists role_change_enabled boolean not null default true;
 alter table whatsapp_settings add column if not exists business_account_id text    not null default '';
 alter table whatsapp_settings add column if not exists auto_reply_enabled  boolean not null default true;
+alter table whatsapp_settings add column if not exists meeting_cancelled_enabled boolean not null default true;
 alter table whatsapp_settings alter column api_version set default 'v25.0';
 -- Only a row still on the version that shipped by mistake; a version an admin
 -- pinned deliberately is left alone.

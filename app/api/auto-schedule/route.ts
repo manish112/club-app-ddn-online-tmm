@@ -4,6 +4,13 @@ import { notifyMeetingCreated, type MeetingRow } from '@/lib/email/notifications
 import { getWhatsAppSettings } from '@/lib/whatsapp/client';
 import { waNotifyMeetingCreated } from '@/lib/whatsapp/notifications';
 
+// The meeting-created loop below sends one email + one WhatsApp message per
+// active member, sequentially. The platform default hasn't reliably been long
+// enough to cover that plus a slow/stalled SMTP or Graph API call, and a
+// killed invocation leaves zero trace (see the timeout notes in
+// lib/email/mailer.ts and lib/whatsapp/client.ts).
+export const maxDuration = 60;
+
 function nextWeekdayAfter(from: Date, weekday: number): Date {
   const d = new Date(from);
   d.setDate(d.getDate() + 1);
@@ -42,11 +49,12 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient();
 
   const [{ data: cfg }, { data: allMeetings }] = await Promise.all([
-    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles').single(),
+    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles, auto_schedule_paused').single(),
     supabase.from('meetings').select('id, number, date, start_time, end_time').order('number', { ascending: false }),
   ]);
 
   if (!cfg) return NextResponse.json({ skipped: 'no schedule config' });
+  if (cfg.auto_schedule_paused) return NextResponse.json({ skipped: 'auto-schedule paused' });
   if (!allMeetings) return NextResponse.json({ error: 'failed to load meetings' }, { status: 500 });
 
   const upcoming = allMeetings.filter(m => !isMeetingPast(m)).sort((a, b) => a.number - b.number);
@@ -106,9 +114,13 @@ export async function GET(req: NextRequest) {
   // gets announcements for meetings an admin created by hand.
   const wa = await getWhatsAppSettings().catch(() => null);
   for (const m of inserted ?? []) {
-    try { await notifyMeetingCreated(m as MeetingRow); } catch { /* ignore */ }
+    try { await notifyMeetingCreated(m as MeetingRow); } catch (err) {
+      console.error('[auto-schedule] meeting_created email failed', err);
+    }
     if (wa?.enabled && wa.meeting_created_enabled) {
-      try { await waNotifyMeetingCreated(m as MeetingRow, { dedupe: false }); } catch { /* ignore */ }
+      try { await waNotifyMeetingCreated(m as MeetingRow, { dedupe: false }); } catch (err) {
+        console.error('[auto-schedule] meeting_created whatsapp failed', err);
+      }
     }
   }
 

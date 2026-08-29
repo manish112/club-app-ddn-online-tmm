@@ -17,6 +17,7 @@ interface Settings {
   text_mode: boolean;
   welcome_enabled: boolean;
   meeting_created_enabled: boolean;
+  meeting_cancelled_enabled: boolean;
   role_change_enabled: boolean;
   role_reminder_enabled: boolean;
   no_role_nudge_enabled: boolean;
@@ -30,7 +31,7 @@ const EMPTY: Settings = {
   enabled: false, access_token: '', phone_number_id: '',
   api_version: 'v25.0', default_country_code: '91', text_mode: false,
   auto_reply_enabled: true,
-  welcome_enabled: true, meeting_created_enabled: true, role_change_enabled: true,
+  welcome_enabled: true, meeting_created_enabled: true, meeting_cancelled_enabled: true, role_change_enabled: true,
   role_reminder_enabled: true, no_role_nudge_enabled: true, meeting_starting_enabled: true,
   meeting_starting_lead_minutes: 70,
 };
@@ -205,6 +206,8 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
             checked={settings.welcome_enabled} onChange={(v) => set('welcome_enabled', v)} />
           <Toggle label="New meeting announced" hint="When an admin announces a newly created meeting."
             checked={settings.meeting_created_enabled} onChange={(v) => set('meeting_created_enabled', v)} />
+          <Toggle label="Meeting cancelled" hint="When an admin cancels a meeting, carrying the reason they gave."
+            checked={settings.meeting_cancelled_enabled} onChange={(v) => set('meeting_cancelled_enabled', v)} />
           <Toggle label="Role assigned or removed" hint="The moment a role is claimed, assigned, released or removed — whoever did it."
             checked={settings.role_change_enabled} onChange={(v) => set('role_change_enabled', v)} />
           <Toggle label="Role reminder, 1 day before" hint="One message to each member holding a role, naming every role they hold."

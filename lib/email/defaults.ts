@@ -123,7 +123,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   evaluator_request_approved: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   evaluator_request_declined: ['full_name', 'evaluator_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'review_comment_block'],
   evaluator_nominated: ['full_name', 'speaker_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time'],
-  meeting_cancelled: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme'],
+  meeting_cancelled: ['full_name', 'club_name', 'app_url', 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme', 'cancellation_reason_block'],
   mentor_assigned_to_mentee: ['full_name', 'mentor_name', 'mentor_bio_block', 'club_name', 'app_url'],
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
@@ -483,6 +483,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
         <p style="${KICKER}">Theme</p>
         <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{meeting_theme}}</p>
       ${CARD_CLOSE}
+      {{cancellation_reason_block}}
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">We're sorry for any inconvenience. Please watch for the next meeting announcement.</p>
       ${CTA('Open the App →')}`),
   },

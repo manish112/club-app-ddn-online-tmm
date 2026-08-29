@@ -106,6 +106,15 @@ function buildTransport(s: EmailSettings) {
     port: s.smtp_port,
     secure: s.smtp_secure,
     auth: s.smtp_user ? { user: s.smtp_user, pass: s.smtp_pass } : undefined,
+    // Nodemailer's own defaults (2min connect / 10min socket) can outlast the
+    // serverless function's execution cap. When that happens the platform kills
+    // the whole invocation mid-await — no exception, no email_sends row, nothing
+    // in the logs, and every send still queued behind this one (email and
+    // WhatsApp both) never runs. Fail fast instead so a bad SMTP connection
+    // surfaces as a real, caught, logged error.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   });
 }
 

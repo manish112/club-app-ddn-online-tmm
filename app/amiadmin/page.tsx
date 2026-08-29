@@ -1788,6 +1788,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   });
   const [reservationEnabled, setReservationEnabled] = useState(false);
   const [offlineReservationEnabled, setOfflineReservationEnabled] = useState(false);
+  const [autoSchedulePaused, setAutoSchedulePaused] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 6, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
@@ -1800,6 +1801,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
         setVals({ networking_mins: data.networking_mins ?? 10, l1_speech_mins: data.l1_speech_mins, other_speech_mins: data.other_speech_mins, tt_speaker_count_min: data.tt_speaker_count_min, tt_speaker_count_max: data.tt_speaker_count_max, tt_mins_per_speaker: data.tt_mins_per_speaker, tmod_conclusion_mins: data.tmod_conclusion_mins, lock_before_mins: data.lock_before_mins ?? 60, max_speaker_slots: data.max_speaker_slots ?? 2, online_reservation_days_before: data.online_reservation_days_before ?? DEFAULT_RESERVATION_DAYS_BEFORE, offline_reservation_days_before: data.offline_reservation_days_before ?? DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE });
         setReservationEnabled(data.online_reservation_enabled === true);
         setOfflineReservationEnabled(data.offline_reservation_enabled === true);
+        setAutoSchedulePaused(data.auto_schedule_paused === true);
         setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
         setTimerModes(normalizeModes(data.timer_modes));
@@ -1828,6 +1830,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
       timer_modes: timerModes,
       online_reservation_enabled: reservationEnabled,
       offline_reservation_enabled: offlineReservationEnabled,
+      auto_schedule_paused: autoSchedulePaused,
       updated_at: new Date().toISOString(),
     });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
@@ -1855,7 +1858,20 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
           <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Meeting Schedule</h3>
           <p className="text-xs text-slate-500">Used to auto-create upcoming meetings when fewer than 3 are scheduled.</p>
         </div>
-        <div className="space-y-3">
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input type="checkbox" checked={autoSchedulePaused} onChange={e => setAutoSchedulePaused(e.target.checked)}
+            className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">
+              Pause automatic scheduling
+            </span>
+            <span className="block text-xs text-slate-500">
+              Checked = the weekly cron creates nothing. Members see &ldquo;Our next meeting will be
+              scheduled soon&rdquo; until one is created — by you here, or by unchecking this.
+            </span>
+          </span>
+        </label>
+        <div className={autoSchedulePaused ? 'opacity-40 pointer-events-none space-y-3' : 'space-y-3'}>
           <div>
             <p className={labelCls}>Default day of week</p>
             <select value={schedule.weekday} onChange={e => setSchedule(s => ({ ...s, weekday: parseInt(e.target.value) }))}
@@ -1873,6 +1889,8 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
               <TimePicker value={schedule.endTime} onChange={v => setSchedule(s => ({ ...s, endTime: v }))} />
             </div>
           </div>
+        </div>
+        <div className="space-y-3">
           <div>
             <p className={labelCls}>Default roles for new meetings</p>
             <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 mb-1.5">New meetings (manual or auto-scheduled) open with these categories on. Tap to enable/disable. Greyed = off by default.</p>
@@ -2466,6 +2484,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   // roster by default and reveals them on request.
   const [showWicMembers, setShowWicMembers] = useState(false);
   const [scheduleConfig, setScheduleConfig] = useState<ScheduleConfig | null>(null);
+  const [autoSchedulePaused, setAutoSchedulePaused] = useState(false);
   const [autoFillStatus, setAutoFillStatus] = useState<string | null>(null);
   const [filling, setFilling] = useState(false);
   const autoFilledRef = useRef(false);
@@ -2477,7 +2496,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       supabase.from('ballots').select('*'),
       supabase.from('guest_registrations').select('*').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*').eq('active', true).order('created_at', { ascending: false }).limit(1),
-      supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time').single(),
+      supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, auto_schedule_paused').single(),
     ]);
     if (m)  setMeetings(m as MeetingWithClaims[]);
     if (mb) setMembers(mb as Member[]);
@@ -2485,6 +2504,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     if (gr) setGuestRegs(gr as GuestRegistration[]);
     setCurrentAnnouncement((ann as Announcement[] | null)?.[0] ?? null);
     if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 6, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00' });
+    setAutoSchedulePaused(cfg?.auto_schedule_paused === true);
     setLoading(false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2532,27 +2552,35 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     fetchAll();
   }
 
-  // Auto-fill once on load: create the next meeting only if none is upcoming.
+  // Auto-fill once on load: create the next meeting only if none is upcoming
+  // and scheduling isn't paused — otherwise merely opening this tab would
+  // silently defeat the pause toggle in Settings.
   useEffect(() => {
-    if (loading || !scheduleConfig || autoFilledRef.current) return;
+    if (loading || !scheduleConfig || autoFilledRef.current || autoSchedulePaused) return;
     autoFilledRef.current = true;
     const upcoming = meetings.filter(m => !isMeetingPast(m));
     if (upcoming.length === 0) fillMeetings(scheduleConfig, meetings, true);
-  }, [loading, scheduleConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loading, scheduleConfig, autoSchedulePaused]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function deleteMeeting(id: string) {
     if (!confirm('Delete this meeting and all its role claims? This cannot be undone.')) return;
     // Capture details BEFORE deletion so we can tell members it was cancelled.
     const m = meetings.find(mt => mt.id === id);
-    const notifyCancel = m && confirm(`Email all members that Meeting #${m.number} has been cancelled?`);
+    // One prompt does both jobs: Cancel skips notifying entirely (same as
+    // declining the old yes/no confirm), OK — even with blank text — notifies,
+    // with whatever reason was typed included in the email and WhatsApp message.
+    const reason = m
+      ? window.prompt(`Notify all members that Meeting #${m.number} has been cancelled?\n\nEnter a reason to include in the email/WhatsApp, or Cancel to skip notifying.`)
+      : null;
     await supabase.from('meetings').delete().eq('id', id);
-    if (m && notifyCancel) {
+    if (m && reason !== null) {
       fetch('/api/notify-meeting-cancelled', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           meetingNumber: m.number, meetingDate: m.date,
           startTime: m.start_time, endTime: m.end_time, meetingTheme: m.theme,
+          reason: reason.trim() || null,
         }),
       }).catch(() => {});
     }

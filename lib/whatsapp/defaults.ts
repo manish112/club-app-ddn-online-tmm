@@ -10,6 +10,7 @@
 export type WaTemplateKey =
   | 'welcome'
   | 'meeting_created'
+  | 'meeting_cancelled'
   | 'role_assigned'
   | 'role_removed'
   | 'role_reminder'
@@ -19,6 +20,7 @@ export type WaTemplateKey =
 export const WA_TEMPLATE_KEYS: WaTemplateKey[] = [
   'welcome',
   'meeting_created',
+  'meeting_cancelled',
   'role_assigned',
   'role_removed',
   'role_reminder',
@@ -68,6 +70,7 @@ export const WA_AUTO_REPLY_KEY = 'auto_reply';
 export const WA_TEMPLATE_LABELS: Record<WaTemplateKey, string> = {
   welcome:          'Welcome / introducing WhatsApp (to a member)',
   meeting_created:  'New meeting announced (to all members)',
+  meeting_cancelled: 'Meeting cancelled (to all members)',
   role_assigned:    'Role assigned (to the member)',
   role_removed:     'Role removed (to the member)',
   role_reminder:    'Role reminder — 1 day before (to each role holder)',
@@ -78,6 +81,7 @@ export const WA_TEMPLATE_LABELS: Record<WaTemplateKey, string> = {
 export const WA_TEMPLATE_HINTS: Record<WaTemplateKey, string> = {
   welcome:          'Sent when a member is added, and sendable to the whole club to introduce the channel.',
   meeting_created:  'Fires when an admin announces a newly created meeting.',
+  meeting_cancelled: 'Fires the moment an admin cancels a meeting, carrying the reason they gave. Not resendable — the meeting row is already gone by then.',
   role_assigned:    'Fires the moment a role is claimed or assigned, whoever did it.',
   role_removed:     'Fires when a role is released or removed by an admin.',
   role_reminder:    'Fires the day before, once per role holder — naming every role they hold, so nobody gets two messages.',
@@ -102,6 +106,7 @@ const COMMON = ['full_name', 'club_name', 'app_url', 'vp_education_name'];
 export const WA_PLACEHOLDERS: Record<WaTemplateKey, string[]> = {
   welcome:          [...COMMON],
   meeting_created:  [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'meeting_theme'],
+  meeting_cancelled: [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'cancellation_reason'],
   role_assigned:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'actor_line'],
   role_removed:     [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label', 'actor_line'],
   role_reminder:    [...COMMON, 'meeting_number', 'meeting_date', 'meeting_time', 'role_label'],
@@ -168,6 +173,12 @@ const BODIES: Record<WaTemplateKey, string> = {
     + '💡 Theme: {{meeting_theme}}\n\n'
     + 'The role sheet is open — first come, first served.\n'
     + 'Pick yours here:\n{{app_url}}',
+
+  meeting_cancelled:
+    'Dear TM {{full_name}} 👋\n\n'
+    + '😔 *Meeting #{{meeting_number}}* on {{meeting_date}} ({{meeting_time}} IST) has been cancelled.\n\n'
+    + '📝 Reason: {{cancellation_reason}}\n\n'
+    + 'Sorry for the inconvenience — we will announce the next meeting soon:\n{{app_url}}',
 
   // Both role messages lead with a labelled "Assigned role" / "Role removed"
   // line rather than burying the role in a sentence. It is the one thing the
