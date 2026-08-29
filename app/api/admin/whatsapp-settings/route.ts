@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
     text_mode: !!s.text_mode,
     welcome_enabled: !!s.welcome_enabled,
     meeting_created_enabled: !!s.meeting_created_enabled,
+    meeting_cancelled_enabled: !!s.meeting_cancelled_enabled,
     role_change_enabled: !!s.role_change_enabled,
     role_reminder_enabled: !!s.role_reminder_enabled,
     no_role_nudge_enabled: !!s.no_role_nudge_enabled,

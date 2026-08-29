@@ -172,6 +172,51 @@ export async function waNotifyMeetingCreated(
     opts?.dedupe === false ? null : (m) => `wa_meeting_created:${meeting.id}:${m.id}`);
 }
 
+// ── Meeting cancelled (to every reachable member) ───────────────────────────
+// Mirrors /api/notify-meeting-cancelled's email: the meeting's details are
+// passed in rather than read from a live row, because the meeting is already
+// deleted by the time the admin panel's cancel flow calls this. No dedupe and
+// no meetingId on the log, for the same reason — there is no meeting row left
+// to key either of them on, and an admin cancelling is a one-shot action.
+export async function waNotifyMeetingCancelled(params: {
+  meetingNumber: number;
+  meetingDate: string;
+  startTime?: string;
+  endTime?: string;
+  reason: string | null;
+}): Promise<WaRunResult | { skipped: string }> {
+  const settings = await getWhatsAppSettings();
+  if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
+
+  const supabase = createServiceClient();
+  const { data: members } = await supabase.from('members').select(MEMBER_COLS);
+  const audience = reachable(members as WaMemberLite[], settings.default_country_code);
+  if (audience.length === 0) return { skipped: 'no reachable members' };
+
+  const vars = {
+    ...(await signOffVars()),
+    app_url: await getAppUrl(),
+    meeting_number: String(params.meetingNumber),
+    meeting_date: formatDate(params.meetingDate),
+    meeting_time: params.startTime && params.endTime
+      ? `${formatTime(params.startTime)}–${formatTime(params.endTime)}` : '',
+    cancellation_reason: params.reason?.trim() || 'No reason given',
+  };
+
+  let sent = 0, failed = 0;
+  const reasons: string[] = [];
+  for (const m of audience) {
+    const res = await deliverWhatsApp({
+      key: 'meeting_cancelled',
+      phone: m.phone as string,
+      vars: { ...vars, full_name: m.name || m.display_name },
+    });
+    if ('ok' in res) sent++;
+    else { failed += 'error' in res ? 1 : 0; reasons.push('skipped' in res ? res.skipped : res.error); }
+  }
+  return summarize(sent, failed, reasons);
+}
+
 // ── 1 day before: reminder to each role holder ──────────────────────────────
 // One message per *member*, naming every role they hold: someone down as both
 // Timer and Ah-Counter reads "you are our Timer & Ah-Counter" once. Two messages
