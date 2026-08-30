@@ -1794,6 +1794,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState(false);
 
   useEffect(() => {
     supabase.from('agenda_config').select('*').single().then(({ data }) => {
@@ -1821,7 +1822,8 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
 
   async function save() {
     setSaving(true);
-    await supabase.from('agenda_config').upsert({
+    setSaveError(false);
+    const { error } = await supabase.from('agenda_config').upsert({
       id: 1, ...vals,
       schedule_weekday: schedule.weekday,
       schedule_start_time: schedule.startTime,
@@ -1833,7 +1835,14 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
       auto_schedule_paused: autoSchedulePaused,
       updated_at: new Date().toISOString(),
     });
-    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
+    setSaving(false);
+    if (error) {
+      console.error('[agenda_config] save failed', error);
+      setSaveError(true);
+      setTimeout(() => setSaveError(false), 4000);
+      return;
+    }
+    setSaved(true); setTimeout(() => setSaved(false), 2500);
   }
 
   function numField(key: keyof typeof vals, label: string, hint?: string, min = 1) {
@@ -1912,7 +1921,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
             </div>
           </div>
         </div>
-        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+        <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
 
       {/* Agenda timing */}
@@ -1927,7 +1936,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
         <div className="space-y-1"><p className={labelCls}>Closing</p><div className="pt-1">{numField('tmod_conclusion_mins', 'TMoD theme conclusion (mins)')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Speaker Slots</p><div className="pt-1">{numField('max_speaker_slots', 'Max speaker slots per meeting', 'Upper cap for extra-slot requests. Meetings start with 1.')}</div></div>
         <div className="space-y-1"><p className={labelCls}>Role Sign-up Lock</p><div className="pt-1">{numField('lock_before_mins', 'Lock roles before meeting (mins)', 'Roles become read-only this many minutes before start')}</div></div>
-        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+        <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
 
       {/* Role reservation for online-only members */}
@@ -1985,7 +1994,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
           })()}
         </div>
 
-        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+        <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
 
       {/* Role sign-up window for visiting WIC India club members */}
@@ -2045,7 +2054,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
           })()}
         </div>
 
-        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+        <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
 
       {/* Speech timer */}
@@ -2067,7 +2076,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
             </div>
           </div>
         ))}
-        <button onClick={save} disabled={saving} className={`w-full ${primaryBtn}`}>{saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
+        <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
       </div>
     </div>
   );
@@ -2545,9 +2554,29 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         base_speaker_slots: 1,
       });
     }
-    await supabase.from('meetings').insert(rows);
+    const { data: created } = await supabase.from('meetings').insert(rows).select('id');
     setFilling(false);
-    setAutoFillStatus(`✓ ${needed} meeting${needed > 1 ? 's' : ''} auto-scheduled (${rows.map(r => r.date).join(', ')})`);
+
+    // Announce like every other meeting-creation path does (manual "+ Add
+    // meeting" and the server cron both notify) — this used to just insert
+    // and return, so meetings created from here went out with zero email or
+    // WhatsApp announcement and no error to show for it.
+    let notifyIssue = '';
+    for (const m of created ?? []) {
+      try {
+        const res = await fetch('/api/notify-meeting-created', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meetingId: m.id }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) notifyIssue = ` — announcement failed: ${d.error ?? res.statusText}`;
+      } catch {
+        notifyIssue = ' — announcement could not be triggered (network error)';
+      }
+    }
+
+    setAutoFillStatus(`✓ ${needed} meeting${needed > 1 ? 's' : ''} auto-scheduled (${rows.map(r => r.date).join(', ')})${notifyIssue}`);
     setTimeout(() => setAutoFillStatus(null), 6000);
     fetchAll();
   }
@@ -2735,10 +2764,12 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                 {scheduleConfig && (
                   <button
                     onClick={() => fillMeetings(scheduleConfig, meetings)}
-                    disabled={filling}
-                    title={`Create the next ${WEEKDAY_LABELS[scheduleConfig.weekday]} meeting if none is upcoming`}
+                    disabled={filling || autoSchedulePaused}
+                    title={autoSchedulePaused
+                      ? 'Auto-scheduling is paused in Settings — unpause it there, or use "+ Add meeting" to create one manually'
+                      : `Create the next ${WEEKDAY_LABELS[scheduleConfig.weekday]} meeting if none is upcoming`}
                     className={`shrink-0 px-4 py-2 rounded-2xl border-2 border-dashed text-sm font-medium transition-colors disabled:opacity-40 ${
-                      filling
+                      filling || autoSchedulePaused
                         ? 'border-slate-300 dark:border-slate-700 text-slate-400'
                         : 'border-emerald-300 dark:border-emerald-800/60 text-emerald-600 dark:text-emerald-500 hover:border-emerald-400 dark:hover:border-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/20'
                     }`}>
