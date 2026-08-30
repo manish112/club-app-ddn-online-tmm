@@ -2554,9 +2554,29 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         base_speaker_slots: 1,
       });
     }
-    await supabase.from('meetings').insert(rows);
+    const { data: created } = await supabase.from('meetings').insert(rows).select('id');
     setFilling(false);
-    setAutoFillStatus(`✓ ${needed} meeting${needed > 1 ? 's' : ''} auto-scheduled (${rows.map(r => r.date).join(', ')})`);
+
+    // Announce like every other meeting-creation path does (manual "+ Add
+    // meeting" and the server cron both notify) — this used to just insert
+    // and return, so meetings created from here went out with zero email or
+    // WhatsApp announcement and no error to show for it.
+    let notifyIssue = '';
+    for (const m of created ?? []) {
+      try {
+        const res = await fetch('/api/notify-meeting-created', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meetingId: m.id }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) notifyIssue = ` — announcement failed: ${d.error ?? res.statusText}`;
+      } catch {
+        notifyIssue = ' — announcement could not be triggered (network error)';
+      }
+    }
+
+    setAutoFillStatus(`✓ ${needed} meeting${needed > 1 ? 's' : ''} auto-scheduled (${rows.map(r => r.date).join(', ')})${notifyIssue}`);
     setTimeout(() => setAutoFillStatus(null), 6000);
     fetchAll();
   }
