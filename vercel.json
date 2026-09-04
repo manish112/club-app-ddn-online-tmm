@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/auto-schedule",
-      "schedule": "35 15 * * 6"
+      "schedule": "30 6 * * 0"
     },
     {
       "path": "/api/notify-reminders",
