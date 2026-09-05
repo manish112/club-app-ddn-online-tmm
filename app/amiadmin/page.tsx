@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { MeetingCard } from '@/components/MeetingCard';
 import { EmailSettingsPanel } from '@/components/EmailSettingsPanel';
@@ -2496,7 +2496,6 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const [autoSchedulePaused, setAutoSchedulePaused] = useState(false);
   const [autoFillStatus, setAutoFillStatus] = useState<string | null>(null);
   const [filling, setFilling] = useState(false);
-  const autoFilledRef = useRef(false);
 
   const fetchAll = useCallback(async () => {
     const [{ data: m }, { data: mb }, { data: bl }, { data: gr }, { data: ann }, { data: cfg }] = await Promise.all([
@@ -2580,16 +2579,6 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     setTimeout(() => setAutoFillStatus(null), 6000);
     fetchAll();
   }
-
-  // Auto-fill once on load: create the next meeting only if none is upcoming
-  // and scheduling isn't paused — otherwise merely opening this tab would
-  // silently defeat the pause toggle in Settings.
-  useEffect(() => {
-    if (loading || !scheduleConfig || autoFilledRef.current || autoSchedulePaused) return;
-    autoFilledRef.current = true;
-    const upcoming = meetings.filter(m => !isMeetingPast(m));
-    if (upcoming.length === 0) fillMeetings(scheduleConfig, meetings, true);
-  }, [loading, scheduleConfig, autoSchedulePaused]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Same notification as delete, but the meeting row stays — marked
   // cancelled with a reason — so it shows under Past Meetings instead of
