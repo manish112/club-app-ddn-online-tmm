@@ -2591,6 +2591,31 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     if (upcoming.length === 0) fillMeetings(scheduleConfig, meetings, true);
   }, [loading, scheduleConfig, autoSchedulePaused]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Same notification as delete, but the meeting row stays — marked
+  // cancelled with a reason — so it shows under Past Meetings instead of
+  // vanishing. Aborting the prompt aborts the whole action (unlike delete,
+  // there's nothing left to do if we're not cancelling).
+  async function cancelMeeting(id: string) {
+    const m = meetings.find(mt => mt.id === id);
+    if (!m) return;
+    const reason = window.prompt(`Cancel Meeting #${m.number} and notify all members?\n\nEnter a reason to include in the email/WhatsApp, or Cancel to abort.`);
+    if (reason === null) return;
+    const { error } = await supabase.from('meetings')
+      .update({ cancelled: true, cancellation_reason: reason.trim() || null })
+      .eq('id', id);
+    if (error) { alert(`Failed: ${error.message}`); return; }
+    fetch('/api/notify-meeting-cancelled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        meetingNumber: m.number, meetingDate: m.date,
+        startTime: m.start_time, endTime: m.end_time, meetingTheme: m.theme,
+        reason: reason.trim() || null,
+      }),
+    }).catch(() => {});
+    fetchAll();
+  }
+
   async function deleteMeeting(id: string) {
     if (!confirm('Delete this meeting and all its role claims? This cannot be undone.')) return;
     // Capture details BEFORE deletion so we can tell members it was cancelled.
@@ -2799,6 +2824,9 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                         <MeetingCard meeting={m} allMembers={members} memberId={currentMember.id} isAdmin={true} onChanged={fetchAll} />
                         <div className="flex gap-1 mt-2 px-1 flex-wrap">
                           <button onClick={() => setEditingMeeting(m)} className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">Edit meeting</button>
+                          {!m.cancelled && (
+                            <button onClick={() => cancelMeeting(m.id)} className="text-xs text-slate-400 dark:text-slate-600 hover:text-amber-600 dark:hover:text-amber-400 px-3 py-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-950/20 transition-colors">Cancel meeting</button>
+                          )}
                           <button onClick={() => deleteMeeting(m.id)} className="text-xs text-slate-400 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">Delete</button>
                           {(m.jury_slots ?? 0) > 0 && (
                             <>

@@ -159,6 +159,11 @@ create table if not exists meetings (
   meeting_link         text,                      -- Zoom / Meet URL, set by the TMoD or an admin
   is_special_session   boolean not null default false,
   special_session_note text,
+  -- Cancelled meetings are kept (not deleted) so the reason stays visible
+  -- under Past Meetings; isMeetingPast() treats cancelled as past so a
+  -- replacement can be auto-scheduled in its place.
+  cancelled            boolean not null default false,
+  cancellation_reason  text,
   -- Speakathon layout: named heats, slot→heat mapping, and speaking order.
   speaker_groups       jsonb not null default '[]'::jsonb,   -- [{ id, name }]
   pair_groups          jsonb not null default '{}'::jsonb,   -- { "<slotIndex>": "<groupId>" }
@@ -182,6 +187,8 @@ alter table meetings add column if not exists contest_show_ranking boolean not n
 alter table meetings add column if not exists meeting_link         text;
 alter table meetings add column if not exists is_special_session   boolean not null default false;
 alter table meetings add column if not exists special_session_note text;
+alter table meetings add column if not exists cancelled            boolean not null default false;
+alter table meetings add column if not exists cancellation_reason  text;
 alter table meetings alter column speaker_slots set default 1;
 
 alter table meetings add column if not exists base_speaker_slots integer;

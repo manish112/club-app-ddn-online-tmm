@@ -353,6 +353,9 @@ export function getMeetingLockTimeIST(meeting: Meeting, lockBeforeMins = 60): st
 
 // Meeting becomes "past" once its end_time (IST) has passed on the meeting date.
 export function isMeetingPast(meeting: Meeting): boolean {
+  // Cancelled meetings are never "next/upcoming" — this both moves them into
+  // the Past Meetings list and lets auto-schedule create a replacement.
+  if (meeting.cancelled) return true;
   const [y, mo, d]  = meeting.date.split('-').map(Number);
   const [h, m]      = meeting.end_time.split(':').map(Number);
   const istOffsetMin = 5 * 60 + 30;
