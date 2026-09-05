@@ -176,6 +176,10 @@ export interface Meeting {
   // Optional: undefined until the columns exist / are read.
   is_special_session?: boolean;
   special_session_note?: string | null;    // free line of detail, admin-written
+  // Cancelled meetings stay in the DB (not deleted) so the reason is visible
+  // under Past Meetings. Optional: undefined until the columns exist / are read.
+  cancelled?: boolean;
+  cancellation_reason?: string | null;
   created_at: string;
 }
 

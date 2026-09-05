@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
   const [{ data: cfg }, { data: allMeetings }] = await Promise.all([
     supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles, auto_schedule_paused').single(),
-    supabase.from('meetings').select('id, number, date, start_time, end_time').order('number', { ascending: false }),
+    supabase.from('meetings').select('id, number, date, start_time, end_time, cancelled').order('number', { ascending: false }),
   ]);
 
   if (!cfg) return NextResponse.json({ skipped: 'no schedule config' });

@@ -9,8 +9,10 @@ import { waNotifyMeetingCancelled } from '@/lib/whatsapp/notifications';
 const CLUB_NAME = 'Dehradun Online Toastmasters';
 
 // Notify all members that a meeting was cancelled. Details (including the
-// admin's reason) are passed in because the meeting row is deleted at the
-// call site — there's no live row left here to read them back from.
+// admin's reason) are passed in rather than looked up: the delete-meeting
+// caller removes the row before calling this, so there'd be nothing left to
+// read back; the cancel-meeting caller keeps the row but passes the same
+// shape either way.
 export async function POST(req: NextRequest) {
   try {
     const { meetingNumber, meetingDate, startTime, endTime, meetingTheme, reason } = await req.json() as {

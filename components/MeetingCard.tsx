@@ -540,11 +540,19 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
             {/* Status chips */}
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               {past && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold
-                                 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400
-                                 px-2 py-0.5 rounded-full">
-                  ✓ Past
-                </span>
+                meeting.cancelled ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                   bg-red-50 dark:bg-red-950/30 text-red-500 dark:text-red-400
+                                   px-2 py-0.5 rounded-full">
+                    ✕ Cancelled
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold
+                                   bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400
+                                   px-2 py-0.5 rounded-full">
+                    ✓ Past
+                  </span>
+                )
               )}
               {!past && locked && !isAdmin && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold
@@ -613,6 +621,18 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           </div>
         </div>
       </div>
+
+      {/* ── Cancellation reason ── */}
+      {meeting.cancelled && (
+        <div className="px-4 py-2.5 border-b border-red-200 dark:border-red-800/40
+                        bg-gradient-to-r from-red-50 to-white dark:from-red-950/25 dark:to-slate-900
+                        flex items-start gap-3">
+          <span className="text-lg leading-none shrink-0">🚫</span>
+          <p className="text-xs text-red-800 dark:text-red-300 leading-relaxed flex-1">
+            <strong>Cancelled:</strong> {meeting.cancellation_reason?.trim() || 'No reason given.'}
+          </p>
+        </div>
+      )}
 
       {/* ── Special session note ── */}
       {meeting.is_special_session && meeting.special_session_note?.trim() && (
