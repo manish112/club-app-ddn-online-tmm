@@ -5,6 +5,7 @@ import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { TmodReminderModal } from '@/components/TmodReminderModal';
+import { ConsentGateModal, memberNeedsConsentGate } from '@/components/ConsentGateModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims, Member, ParticipationMode } from '@/lib/types';
 import { isClubOfficer, hasLeadershipRole, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
@@ -135,6 +136,12 @@ export default function Home() {
 
   const isGuest = memberId === 'guest';
   const currentMember = isGuest ? null : members.find((m) => m.id === memberId);
+
+  // Checked on every load, not just at sign-in — memberId is restored straight
+  // from localStorage on a refresh, which never goes back through
+  // MemberPicker's flow, so the gate can't live there alone or a returning
+  // member with a pending decision would never be asked again.
+  const needsConsent = !!currentMember && memberNeedsConsentGate(currentMember);
 
   // Read separately from the members list (which doesn't select this column) so
   // a missing migration degrades to the default rather than breaking sign-in.
@@ -499,7 +506,9 @@ export default function Home() {
 
 
 
-      {tmodReminder && (
+      {needsConsent && currentMember ? (
+        <ConsentGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
+      ) : tmodReminder && (
         <TmodReminderModal
           meeting={tmodReminder.meeting}
           needs={tmodReminder.needs}

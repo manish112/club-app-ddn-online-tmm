@@ -542,8 +542,27 @@ function MemberActionConfirm({
 
 // ─── Member row ────────────────────────────────────────────────────────────────
 
-function ConsentBadge({ label, status, at }: { label: string; status?: 'pending' | 'granted' | 'declined'; at?: string | null }) {
-  const dateStr = at ? new Date(at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : null;
+function deviceSummaryText(device?: Record<string, string | null> | null): string {
+  if (!device) return '';
+  const parts = [
+    device.ip,
+    [device.browser, device.browser_version].filter(Boolean).join(' '),
+    device.os,
+    device.device_type,
+    [device.city, device.country].filter(Boolean).join(', '),
+  ].filter((p): p is string => !!p && p.trim().length > 0);
+  return parts.join(' · ');
+}
+
+function ConsentBadge({ label, status, at, device }: {
+  label: string; status?: 'pending' | 'granted' | 'declined'; at?: string | null;
+  device?: Record<string, string | null> | null;
+}) {
+  // Explicit Asia/Kolkata rather than the viewer's own device timezone — an
+  // admin's browser isn't guaranteed to be set to IST.
+  const dateStr = at ? new Date(at).toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata',
+  }) : null;
   const cls = status === 'granted'
     ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
     : status === 'declined'
@@ -552,7 +571,13 @@ function ConsentBadge({ label, status, at }: { label: string; status?: 'pending'
   const text = status === 'granted' ? `✅ ${label} consented${dateStr ? ` ${dateStr}` : ''}`
     : status === 'declined' ? `❌ ${label} declined${dateStr ? ` ${dateStr}` : ''}`
     : `⏳ ${label} pending`;
-  return <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${cls}`}>{text}</span>;
+  const deviceText = deviceSummaryText(device);
+  return (
+    <div className="flex flex-col gap-0.5 max-w-full">
+      <span title={deviceText || undefined} className={`text-[10px] font-medium px-2 py-0.5 rounded-full border w-fit ${cls}`}>{text}</span>
+      {deviceText && <span className="text-[9px] text-slate-400 dark:text-slate-500 pl-1 truncate">{deviceText}</span>}
+    </div>
+  );
 }
 
 function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
@@ -757,6 +782,13 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   // migrations 055 and 058, so on a database without them the email toggle must
   // still work. The WhatsApp switch writes the admin gate, never the member's own
   // preference — those are two different decisions by two different people.
+  // Only ever writes the admin gate itself (whatsapp_enabled / email_notifications
+  // when this is the admin's own override) — never whatsapp_notifications.
+  // That column starts true by default and only ever becomes false through a
+  // deliberate action (the member muting it, declining consent, or a
+  // contact-info reset), so it's never an "untouched" false worth
+  // overriding — enabling the club-level gate must never clobber a
+  // preference the member actually set.
   async function togglePref(channel: 'email' | 'whatsapp') {
     const column = channel === 'email' ? 'email_notifications' : 'whatsapp_enabled';
     const next = !(channel === 'email' ? emailPrefOn : waEnabled);
@@ -943,8 +975,33 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             next sign-in) is the only one who can change it. A "Declined" badge
             IS the note this decline needed: nothing separate to build. */}
         <div className="flex items-center gap-2 flex-wrap pl-14">
-          {member.email && <ConsentBadge label="Email" status={member.email_consent_status} at={member.email_consent_at} />}
-          {member.phone && <ConsentBadge label="WhatsApp" status={member.whatsapp_consent_status} at={member.whatsapp_consent_at} />}
+          {member.email && <ConsentBadge label="Email" status={member.email_consent_status} at={member.email_consent_at} device={member.email_consent_device} />}
+          {member.phone && <ConsentBadge label="WhatsApp" status={member.whatsapp_consent_status} at={member.whatsapp_consent_at} device={member.whatsapp_consent_device} />}
+        </div>
+
+        {/* The member's OWN mute/unmute preference — distinct from both the
+            admin gate above (whatsapp_enabled — whether the club pays to
+            reach them at all) and consent (permanent once granted). This is
+            the only place WhatsApp's own preference is visible at all; for
+            email it duplicates the Notify button above (which already IS the
+            member's preference, admin-editable there), shown again here so
+            "member's own setting" reads the same way for both channels. */}
+        <div className="flex items-center gap-2 flex-wrap pl-14">
+          <span className="text-[9px] text-slate-400 dark:text-slate-500 uppercase tracking-wide">Their pref</span>
+          {member.email && (
+            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
+              emailPrefOn
+                ? 'bg-maroon-50 dark:bg-maroon-950/30 text-maroon-700 dark:text-maroon-400 border-maroon-200 dark:border-maroon-800/60'
+                : 'bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700'
+            }`}>✉️ {emailPrefOn ? 'On' : 'Off'}</span>
+          )}
+          {member.phone && (
+            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
+              !waMuted
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
+                : 'bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700'
+            }`}>💬 {waMuted ? 'Off' : 'On'}</span>
+          )}
         </div>
 
         {/* A channel switched on with nothing to reach them by sends nothing and

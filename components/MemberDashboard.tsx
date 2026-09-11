@@ -8,9 +8,10 @@ import { SurveyLinks } from '@/components/SurveyLinks';
 import { useWicMemberIds } from '@/hooks/useWicMemberIds';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
-import { getMemberRecentRoles, formatMeetingDate, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { getMemberRecentRoles, formatMeetingDate, formatTime, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
+import { ConsentGateModal } from '@/components/ConsentGateModal';
 import { hashPassword, generateSalt, verifyPassword } from '@/lib/crypto';
 
 interface Props {
@@ -49,6 +50,15 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Required before a changed email/phone can be saved — see the checkboxes
+  // near those fields below.
+  const [emailChangeAffirmed, setEmailChangeAffirmed] = useState(false);
+  const [phoneChangeAffirmed, setPhoneChangeAffirmed] = useState(false);
+  // Which channel's consent popup (the same ConsentGateModal shown at
+  // sign-in) is open — checking either notify box below opens it instead of
+  // flipping the flag directly, so turning a channel ON always goes through
+  // the one consent flow, not a second, different affirmation inline here.
+  const [consentModalChannel, setConsentModalChannel] = useState<'email' | 'whatsapp' | null>(null);
   const [emailPref, setEmailPref] = useState(member.email_notifications !== false);
   const [waPref, setWaPref] = useState(member.whatsapp_notifications !== false);
   // Last-known-saved value each toggle is compared against — save() only
@@ -65,6 +75,15 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   // Read the saved preferences on their own (isolated so a not-yet-migrated
   // column can never break the profile card). Kept as separate reads for the same
   // reason: a database with 046 but not 055 must still load the email one.
+  //
+  // Re-run every time the edit form opens (`editing`), not just on mount — the
+  // consent gate (components/ConsentGateModal.tsx) writes these columns
+  // directly, outside this component, and the parent `member` prop doesn't
+  // carry them at all (see the comment above); without this, opening "Edit
+  // Profile" after answering the gate showed stale values, and worse, made
+  // save() think a preference the member never touched here had "changed"
+  // (comparing a stale baseline to a stale current value that happened to
+  // differ from the real one), firing a consent record for the wrong channel.
   useEffect(() => {
     supabase.from('members').select('email_notifications').eq('id', member.id).maybeSingle()
       .then(({ data }) => {
@@ -76,7 +95,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
       });
     supabase.from('members').select('whatsapp_enabled').eq('id', member.id).maybeSingle()
       .then(({ data }) => { if (data && typeof data.whatsapp_enabled === 'boolean') setWaAllowed(data.whatsapp_enabled); });
-  }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [member.id, editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -101,21 +120,33 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     setUploading(false);
   }
 
-  async function recordConsentToggle(channel: 'email' | 'whatsapp', decision: 'granted' | 'declined') {
+  async function recordConsentToggle(channel: 'email' | 'whatsapp', decision: 'granted' | 'declined', retroactive = false) {
     await fetch('/api/member-consent', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memberId: member.id, channel, decision }),
+      body: JSON.stringify({ memberId: member.id, channel, decision, retroactive }),
+    }).catch(() => {});
+  }
+
+  async function affirmContactChange(channel: 'email' | 'whatsapp', oldValue: string, newValue: string) {
+    await fetch('/api/contact-change', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: member.id, channel, oldValue, newValue }),
     }).catch(() => {});
   }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
 
     const newEmail = email.trim() || null;
     const newPhone = phone.trim() || null;
     const emailChanged = newEmail !== (member.email ?? null);
     const phoneChanged = newPhone !== (member.phone ?? null);
+    // A changed address/number requires the member's own affirmation before
+    // it can be saved — enforced here too, not just by disabling Save, in
+    // case that check is ever bypassed.
+    if ((emailChanged && !emailChangeAffirmed) || (phoneChanged && !phoneChangeAffirmed)) return;
+
+    setSaving(true);
 
     const bulkUpdate: Record<string, unknown> = {
       introduction: intro.trim() || null,
@@ -143,18 +174,38 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     }
     await supabase.from('members').update(bulkUpdate).eq('id', member.id);
 
-    // Each toggle is its own consent decision, recorded (and confirmed by
-    // email) only when it actually moved from its last-known-saved value —
-    // re-saving the form without touching a toggle shouldn't re-fire a
-    // decision that already stands. Skipped when the address/number itself
-    // just changed above, since that already forced the flag off and reset
-    // to pending — there's nothing to "decide" yet on the new one.
+    if (emailChanged) {
+      await affirmContactChange('email', member.email ?? '', newEmail ?? '');
+      setEmailChangeAffirmed(false);
+    }
+    if (phoneChanged) {
+      await affirmContactChange('whatsapp', member.phone ?? '', newPhone ?? '');
+      setPhoneChangeAffirmed(false);
+    }
+
+    // Not-yet-granted + turning ON is handled entirely by the consent popup
+    // (checkbox onChange below opens it instead of setting emailPref/waPref
+    // directly), which persists and syncs both itself — so by the time Save
+    // runs, that case never has anything left to do here. What Save still
+    // handles directly: an already-granted channel being muted or unmuted
+    // (plain flag flip either way, the consent record itself never moves),
+    // and turning OFF before ever granting, which is a real decline. Skipped
+    // entirely when the address/number itself just changed above, since that
+    // already forced the flag off and reset to pending.
     if (!emailChanged && emailPref !== emailPrefBaseline) {
-      await recordConsentToggle('email', emailPref ? 'granted' : 'declined');
+      if (member.email_consent_status === 'granted') {
+        await supabase.from('members').update({ email_notifications: emailPref }).eq('id', member.id);
+      } else if (!emailPref) {
+        await recordConsentToggle('email', 'declined');
+      }
       setEmailPrefBaseline(emailPref);
     }
     if (waAllowed && !phoneChanged && waPref !== waPrefBaseline) {
-      await recordConsentToggle('whatsapp', waPref ? 'granted' : 'declined');
+      if (member.whatsapp_consent_status === 'granted') {
+        await supabase.from('members').update({ whatsapp_notifications: waPref }).eq('id', member.id);
+      } else if (!waPref) {
+        await recordConsentToggle('whatsapp', 'declined');
+      }
       setWaPrefBaseline(waPref);
     }
     setSaving(false);
@@ -171,10 +222,29 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     setShowPhone(member.show_phone_in_contact);
     setLocalAvatarUrl(member.avatar_url);
     setCropSrc(null);
+    setEmailChangeAffirmed(false);
+    setPhoneChangeAffirmed(false);
     setEditing(false);
   }
 
   const previewMember = { ...member, avatar_url: localAvatarUrl, gender: gender || null };
+
+  // The same popup shown at sign-in, reopened here for a single channel —
+  // "Give consent" and checking a not-yet-granted box both route through
+  // this instead of a second, different affirmation UI inline in the form.
+  const consentModal = consentModalChannel && (
+    <ConsentGateModal
+      member={member}
+      forceChannel={consentModalChannel}
+      onCancel={() => setConsentModalChannel(null)}
+      onDone={() => {
+        if (consentModalChannel === 'email') { setEmailPref(true); setEmailPrefBaseline(true); }
+        else { setWaPref(true); setWaPrefBaseline(true); }
+        setConsentModalChannel(null);
+        onUpdated();
+      }}
+    />
+  );
 
   if (cropSrc) {
     return <AvatarCropModal imageSrc={cropSrc} onSave={handleCropSave} onClose={() => setCropSrc(null)} />;
@@ -182,6 +252,7 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
 
   if (editing) {
     return (
+      <>
       <div className={cardCls}>
         <h3 className="font-serif text-base font-semibold text-slate-900 dark:text-white mb-4">Edit Profile</h3>
         <form onSubmit={save} className="space-y-3">
@@ -219,6 +290,17 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
             <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Phone</label>
             <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
               placeholder="+91 98765 43210" className={inputCls} />
+            {phone.trim() !== (member.phone ?? '') && (
+              <label className="flex items-start gap-2 mt-2 cursor-pointer select-none">
+                <input type="checkbox" checked={phoneChangeAffirmed} onChange={(e) => setPhoneChangeAffirmed(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  I am changing my phone number on my own consent. If I was using this service on my
+                  previously provided phone number{member.phone ? ` (${member.phone})` : ''}, then I had fully
+                  consented for it and had no issues with it.
+                </span>
+              </label>
+            )}
             {memberLeadershipRoles(member).length > 0 && phone.trim() && (
               <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
                 <input type="checkbox" checked={showPhone} onChange={(e) => setShowPhone(e.target.checked)}
@@ -229,32 +311,83 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
                 </span>
               </label>
             )}
-            <label className={`flex items-start gap-2 mt-2 select-none ${waAllowed ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-              <input type="checkbox" checked={waAllowed && waPref} disabled={!waAllowed}
-                onChange={(e) => setWaPref(e.target.checked)}
-                className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0 disabled:opacity-50" />
-              <span className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Send me WhatsApp reminders
-                {!waAllowed && (
-                  <span className="block text-[11px] text-slate-400 dark:text-slate-500">
-                    WhatsApp is not switched on for you. Only a club admin can turn it on — ask the VP
-                    Education if you would like reminders on your phone. Your email notifications are
-                    unaffected.
+            {(() => {
+              const waGranted = member.whatsapp_consent_status === 'granted';
+              return (
+                <label className={`flex items-start gap-2 mt-2 select-none ${waAllowed ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <input type="checkbox" checked={waAllowed && waPref} disabled={!waAllowed}
+                    onChange={(e) => {
+                      // Not yet granted: checking it on opens the same
+                      // consent popup shown at sign-in, every time. Already
+                      // granted: a plain mute/unmute, same as it always has —
+                      // no popup, takes effect straight away either way.
+                      if (e.target.checked && !waGranted) setConsentModalChannel('whatsapp');
+                      else setWaPref(e.target.checked);
+                    }}
+                    className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0 disabled:opacity-50" />
+                  <span className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Send me WhatsApp reminders
+                    {!waAllowed && (
+                      <span className="block text-[11px] text-slate-400 dark:text-slate-500">
+                        WhatsApp is not switched on for you. Only a club admin can turn it on — ask the VP
+                        Education if you would like reminders on your phone. Your email notifications are
+                        unaffected.
+                      </span>
+                    )}
+                    {waAllowed && waGranted && (
+                      <span className="block text-[11px] text-slate-400 dark:text-slate-500">
+                        Your consent to be contacted on WhatsApp is on record permanently and can&apos;t be
+                        withdrawn here — muting just stops messages; switching back on opens the consent
+                        screen again, same as the first time.
+                      </span>
+                    )}
                   </span>
-                )}
-              </span>
-            </label>
+                </label>
+              );
+            })()}
           </div>
 
           <div>
             <label className="text-xs font-medium text-slate-500 dark:text-slate-400 block mb-1">Email</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com" className={inputCls} />
-            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
-              <input type="checkbox" checked={emailPref} onChange={(e) => setEmailPref(e.target.checked)}
-                className="w-4 h-4 accent-maroon-700 rounded" />
-              <span className="text-xs text-slate-500 dark:text-slate-400">Send me email notifications</span>
-            </label>
+            {email.trim() !== (member.email ?? '') && (
+              <label className="flex items-start gap-2 mt-2 cursor-pointer select-none">
+                <input type="checkbox" checked={emailChangeAffirmed} onChange={(e) => setEmailChangeAffirmed(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  I am changing my email on my own consent. If I was using this service on my previously
+                  provided email{member.email ? ` (${member.email})` : ''}, then I had fully consented for it
+                  and had no issues with it.
+                </span>
+              </label>
+            )}
+            {(() => {
+              const emailGranted = member.email_consent_status === 'granted';
+              return (
+                <label className="flex items-start gap-2 mt-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={emailPref}
+                    onChange={(e) => {
+                      // Not yet granted: checking it on opens the same
+                      // consent popup shown at sign-in, every time. Already
+                      // granted: a plain mute/unmute, same as it always has.
+                      if (e.target.checked && !emailGranted) setConsentModalChannel('email');
+                      else setEmailPref(e.target.checked);
+                    }}
+                    className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    Send me email notifications
+                    {emailGranted && (
+                      <span className="block text-[11px] text-slate-400 dark:text-slate-500">
+                        Your consent to be contacted by email is on record permanently and can&apos;t be
+                        withdrawn here — muting just stops messages; switching back on opens the consent
+                        screen again, same as the first time.
+                      </span>
+                    )}
+                  </span>
+                </label>
+              );
+            })()}
           </div>
 
           <div>
@@ -264,7 +397,11 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           </div>
 
           <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={saving || uploading} className={primaryBtnCls}>
+            <button type="submit" disabled={
+              saving || uploading
+              || (email.trim() !== (member.email ?? '') && !emailChangeAffirmed)
+              || (phone.trim() !== (member.phone ?? '') && !phoneChangeAffirmed)
+            } className={primaryBtnCls}>
               {saving ? 'Saving…' : 'Save'}
             </button>
             <button type="button" onClick={cancel}
@@ -274,10 +411,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           </div>
         </form>
       </div>
+      {consentModal}
+      </>
     );
   }
 
   return (
+    <>
     <div className={cardCls}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
@@ -337,28 +477,111 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           just lets a member see what's on record. */}
       {(member.email || member.phone) && (
         <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1">
+          {member.email && (() => {
+            // Uses the locally-fetched emailPref (not member.email_notifications
+            // — that column is deliberately excluded from the central members
+            // query the `member` prop comes from, see the isolated fetch above),
+            // combined with the permanent consent record, for the one true
+            // "will a message actually reach me" answer.
+            const granted = member.email_consent_status === 'granted';
+            const active = granted && emailPref;
+            const reason = !granted
+              ? (member.email_consent_status === 'declined' ? 'you declined consent' : 'waiting on your consent')
+              : 'muted by you';
+            return (
+              <p className="text-xs font-medium">
+                <span className={active ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-500'}>
+                  ✉️ Email: {active ? 'Active' : 'Not active'}
+                </span>
+                {!active && <span className="text-slate-400 dark:text-slate-500"> — {reason}</span>}
+                {!granted && (
+                  <button type="button" onClick={() => setConsentModalChannel('email')}
+                    className="ml-2 text-maroon-600 dark:text-maroon-400 font-semibold hover:text-maroon-800 dark:hover:text-maroon-300 underline underline-offset-2">
+                    Give consent
+                  </button>
+                )}
+              </p>
+            );
+          })()}
+          {member.phone && (() => {
+            const granted = member.whatsapp_consent_status === 'granted';
+            const active = waAllowed && granted && waPref;
+            const reason = !waAllowed
+              ? 'not enabled by the club yet'
+              : !granted
+                ? (member.whatsapp_consent_status === 'declined' ? 'you declined consent' : 'waiting on your consent')
+                : 'muted by you';
+            return (
+              <p className="text-xs font-medium">
+                <span className={active ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-500'}>
+                  💬 WhatsApp: {active ? 'Active' : 'Not active'}
+                </span>
+                {!active && <span className="text-slate-400 dark:text-slate-500"> — {reason}</span>}
+                {waAllowed && !granted && (
+                  <button type="button" onClick={() => setConsentModalChannel('whatsapp')}
+                    className="ml-2 text-maroon-600 dark:text-maroon-400 font-semibold hover:text-maroon-800 dark:hover:text-maroon-300 underline underline-offset-2">
+                    Give consent
+                  </button>
+                )}
+              </p>
+            );
+          })()}
           {member.email && (
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">
-              Email consent: {consentStatusLabel(member.email_consent_status, member.email_consent_at)}
-            </p>
+            <>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                Email consent: {consentStatusLabel(member.email_consent_status, member.email_consent_at, member.name || member.display_name)}
+              </p>
+              {member.email_consent_device && (
+                <p className="text-[10px] text-slate-300 dark:text-slate-600 pl-0">{deviceSummaryText(member.email_consent_device)}</p>
+              )}
+            </>
           )}
           {member.phone && (
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">
-              WhatsApp consent: {consentStatusLabel(member.whatsapp_consent_status, member.whatsapp_consent_at)}
-            </p>
+            <>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                WhatsApp consent: {consentStatusLabel(member.whatsapp_consent_status, member.whatsapp_consent_at, member.name || member.display_name)}
+              </p>
+              {member.whatsapp_consent_device && (
+                <p className="text-[10px] text-slate-300 dark:text-slate-600 pl-0">{deviceSummaryText(member.whatsapp_consent_device)}</p>
+              )}
+            </>
           )}
         </div>
       )}
     </div>
+    {consentModal}
+    </>
   );
 }
 
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+// Stored consent timestamps are UTC ISO strings — every date/time shown to a
+// member must read in IST, not the raw UTC calendar date `.slice(0, 10)` used
+// to give (wrong day, no time at all).
+function formatIst(at: string): string {
+  const ist = new Date(new Date(at).getTime() + IST_OFFSET_MS).toISOString();
+  return `${formatMeetingDate(ist.slice(0, 10))}, ${formatTime(ist.slice(11, 16))} IST`;
+}
+
 function consentStatusLabel(
-  status: 'pending' | 'granted' | 'declined' | undefined, at: string | null | undefined,
+  status: 'pending' | 'granted' | 'declined' | undefined, at: string | null | undefined, byName: string,
 ): string {
-  if (status === 'granted') return `Granted${at ? ` on ${formatMeetingDate(at.slice(0, 10))}` : ''}`;
-  if (status === 'declined') return `Declined${at ? ` on ${formatMeetingDate(at.slice(0, 10))}` : ''}`;
+  if (status === 'granted') return `Granted by ${byName}${at ? ` on ${formatIst(at)}` : ''}`;
+  if (status === 'declined') return `Declined by ${byName}${at ? ` on ${formatIst(at)}` : ''}`;
   return 'Pending';
+}
+
+function deviceSummaryText(device: Record<string, string | null> | null | undefined): string {
+  if (!device) return '';
+  const parts = [
+    device.ip,
+    [device.browser, device.browser_version].filter(Boolean).join(' '),
+    device.os,
+    device.device_type,
+    [device.city, device.country].filter(Boolean).join(', '),
+  ].filter((p): p is string => !!p && p.trim().length > 0);
+  return parts.length ? `Device: ${parts.join(' · ')}` : '';
 }
 
 // ─── Participation card ───────────────────────────────────────────────────────

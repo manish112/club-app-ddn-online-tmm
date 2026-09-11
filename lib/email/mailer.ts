@@ -154,19 +154,26 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
   let bcc = (opts.bcc ?? []).filter(isEmail);
   if (!to && bcc.length === 0) return { skipped: 'no valid recipients' };
 
-  // Consent is required before ANY notification goes out. The one exception is
-  // the consent-confirmation receipt itself (see lib/member-consent.ts) — that's
-  // a record of the decision just made, not a notification, and must reach the
-  // member regardless of what they decided.
-  if (key !== 'consent_confirmation') {
-    const { data: rows } = await supabase.from('members').select('email, email_consent_status');
+  // Consent is required before ANY notification goes out. The two exceptions
+  // are compliance receipts, not notifications, and must reach the member
+  // regardless of consent state: consent_confirmation (a record of a decision
+  // just made) and contact_change_affirmation (see lib/member-consent.ts and
+  // the /api/contact-change route respectively).
+  if (key !== 'consent_confirmation' && key !== 'contact_change_affirmation') {
+    const { data: rows } = await supabase.from('members').select('email, email_notifications, email_consent_status');
+    // Two independent gates, both required: consent is a permanent record —
+    // once 'granted' it never reverts — but email_notifications is the
+    // member's own ongoing on/off preference, freely toggled anytime without
+    // touching that consent record (see components/MemberDashboard.tsx's
+    // save()). Muting must actually stop delivery even though consent stays
+    // granted, so both are checked here, not consent alone.
     const consented = new Set(
       (rows ?? [])
-        .filter((m) => m.email_consent_status === 'granted')
+        .filter((m) => m.email_consent_status === 'granted' && m.email_notifications !== false)
         .map((m) => String(m.email ?? '').toLowerCase())
         .filter(Boolean),
     );
-    if (to && !consented.has(to.toLowerCase())) return { skipped: 'recipient has not consented to email' };
+    if (to && !consented.has(to.toLowerCase())) return { skipped: 'recipient has not consented to email, or has muted it' };
     bcc = bcc.filter((e) => consented.has(e.toLowerCase()));
     if (!to && bcc.length === 0) return { skipped: 'no consenting recipients' };
   }

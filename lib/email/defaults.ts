@@ -32,7 +32,8 @@ export type TemplateKey =
   | 'mentor_assigned_to_mentor'
   | 'announcement'
   | 'custom_message'
-  | 'consent_confirmation';
+  | 'consent_confirmation'
+  | 'contact_change_affirmation';
 
 export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_created',
@@ -65,6 +66,7 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'announcement',
   'custom_message',
   'consent_confirmation',
+  'contact_change_affirmation',
 ];
 
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
@@ -98,6 +100,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   announcement: 'New announcement (to all members)',
   custom_message: 'Custom message (admin-written, to all members)',
   consent_confirmation: 'Notification consent recorded (compliance receipt, to the member)',
+  contact_change_affirmation: 'Email or phone changed by the member (compliance receipt, to the member)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -131,7 +134,8 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
-  consent_confirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'decision_label', 'decided_at', 'device_summary_block'],
+  consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line'],
+  contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'affirmation_line'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -585,21 +589,51 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
   // still goes out; see lib/member-consent.ts). Always CC'd to a fixed
   // record-keeping address, never admin-editable.
   consent_confirmation: {
-    subject: 'Your {{channel_label}} notification preference — {{decision_label}}',
-    body_html: shell('Preference Recorded', `
+    subject: 'Your {{channel_label}} notification consent — {{decision_short}}',
+    body_html: shell('Consent Recorded', `
       <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
-      <p style="${P}">This confirms a notification preference recorded on your account.</p>
+      <p style="${P}">This confirms a notification consent recorded on your account.</p>
       ${CARD_OPEN}
+        <p style="${KICKER}">Consent given by</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{given_by}}</p>
         <p style="${KICKER}">Channel</p>
         <p style="margin:0 0 12px;color:#1e293b;font-size:18px;font-weight:800;">{{channel_label}}</p>
-        <p style="${KICKER}">Decision</p>
+        <p style="${KICKER}">Consent status</p>
         <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{decision_label}}</p>
+        <p style="${KICKER}">For</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:15px;font-weight:600;">{{contact_value}}</p>
         <p style="${KICKER}">When</p>
         <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{decided_at}} IST</p>
       ${CARD_CLOSE}
-      <p style="${KICKER}">Device recorded with this decision</p>
+      <p style="${KICKER}">Device recorded with this consent</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
+      {{retro_line}}
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can review or change this anytime from your profile in the app.</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  // Sent whenever a member changes their own email or phone — a compliance
+  // receipt of the change and their own affirmation about prior use, not a
+  // notification, so (like consent_confirmation) it's exempt from the
+  // consent gate in lib/email/mailer.ts's deliver(). The change itself always
+  // resets that channel's consent back to 'pending' (see
+  // components/MemberDashboard.tsx / ConsentGateModal.tsx), so this and a
+  // future consent_confirmation are two separate emails, not one.
+  contact_change_affirmation: {
+    subject: 'Your {{channel_label}} was updated',
+    body_html: shell('Contact Detail Updated', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">This confirms you updated your own {{channel_label}} on file.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">Previous</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:15px;font-weight:600;">{{old_value}}</p>
+        <p style="${KICKER}">New</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:15px;font-weight:600;">{{new_value}}</p>
+        <p style="${KICKER}">When</p>
+        <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{changed_at}} IST</p>
+      ${CARD_CLOSE}
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You'll need to consent again for this channel before it's used with the new detail.</p>
       ${CTA('Open the App →')}`),
   },
 };
