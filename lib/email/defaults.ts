@@ -635,7 +635,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="${KICKER}">Device recorded with this change</p>
       <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
       <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
-      <p style="margin:0 0 24px;color:#9d1530;font-size:12px;font-weight:700;line-height:1.6;">⚠️ {{important_notice_line}}</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You'll need to consent again for this channel before it's used with the new detail.</p>
       ${CTA('Open the App →')}`),
   },
