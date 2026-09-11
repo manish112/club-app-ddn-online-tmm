@@ -26,11 +26,15 @@ export interface DeviceSnapshot {
 
 export async function recordConsent(
   memberId: string, channel: ConsentChannel, decision: ConsentDecision,
+  /** True when an existing member ticked the "I was aware of this feature
+   *  since it started" box alongside granting — included in the confirmation
+   *  email, not stored as its own column. */
+  retroactive = false,
 ): Promise<{ ok: true } | { error: string }> {
   const supabase = createServiceClient();
 
   const [{ data: member }, { data: capture }] = await Promise.all([
-    supabase.from('members').select('id, name, display_name, email').eq('id', memberId).single(),
+    supabase.from('members').select('id, name, display_name, email, phone').eq('id', memberId).single(),
     // device_captures is service-role-only (no anon RLS policy) — this lookup
     // can only happen here, not from the client that's asking.
     supabase.from('device_captures')
@@ -85,7 +89,8 @@ export async function recordConsent(
   if (member.email) {
     try {
       await notifyConsentDecision({
-        target: member, channel, decision, decidedAt,
+        target: member, channel, decision, decidedAt, retroactive,
+        contactValue: channel === 'email' ? member.email : member.phone,
         device: device as Record<string, string | null> | null, ccEmail: CONSENT_RECORD_CC,
       });
     } catch (err) {

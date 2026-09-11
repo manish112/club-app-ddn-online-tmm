@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, Meeting } from '@/lib/types';
 import { hasLeadershipRole, HOME_CLUB_NAME, WIC_CLUB_NAME } from '@/lib/types';
@@ -16,7 +16,7 @@ interface Props {
   onGuest: () => void;
 }
 
-type Step = 'identify' | 'register' | 'choose' | 'pick_meeting' | 'done' | 'verify_password' | 'set_password' | 'intro' | 'consent';
+type Step = 'identify' | 'register' | 'choose' | 'pick_meeting' | 'done' | 'verify_password' | 'set_password' | 'intro';
 
 const modalCls = 'bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark';
 const inputCls = 'w-full border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-800 dark:text-slate-100 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500 placeholder:text-slate-300 dark:placeholder:text-slate-600';
@@ -43,17 +43,6 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   const [city, setCity] = useState('');
   const [savingIntro, setSavingIntro] = useState(false);
 
-  // ── Notification consent gate ─────────────────────────────────────────────
-  const [consentEmailInput, setConsentEmailInput] = useState('');
-  const [consentEmailSaved, setConsentEmailSaved] = useState(false);
-  const [emailAnswer, setEmailAnswer] = useState<'granted' | 'declined' | null>(null);
-  const [whatsappAnswer, setWhatsappAnswer] = useState<'granted' | 'declined' | null>(null);
-  const [emailRetroChecked, setEmailRetroChecked] = useState(false);
-  const [whatsappRetroChecked, setWhatsappRetroChecked] = useState(false);
-  const [consentInfo, setConsentInfo] = useState<{
-    fromEmail: string | null; fromName: string | null; displayPhoneNumber: string | null; consentLaunchedAt: string | null;
-  } | null>(null);
-  const [savingConsent, setSavingConsent] = useState(false);
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -115,17 +104,7 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
     }
   }
 
-  // Applicable = has the contact method at all; "needs an answer" additionally
-  // requires still being 'pending' — once answered (granted OR declined),
-  // it's a done decision and the gate stops asking.
-  function emailNeedsAnswer(m: Member): boolean {
-    return !m.email || (m.email_consent_status ?? 'pending') === 'pending';
-  }
-  function whatsappNeedsAnswer(m: Member): boolean {
-    return !!m.phone && (m.whatsapp_consent_status ?? 'pending') === 'pending';
-  }
-
-  function proceedToIntroOrSelect() {
+  function proceedAfterAuth() {
     const member = members.find((m) => m.id === selected);
     if (member?.introduction && member?.city) {
       onSelect(selected);
@@ -134,46 +113,6 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
       setCity(member?.city ?? '');
       setStep('intro');
     }
-  }
-
-  function proceedAfterAuth() {
-    const member = members.find((m) => m.id === selected);
-    if (member && (emailNeedsAnswer(member) || whatsappNeedsAnswer(member))) {
-      setConsentEmailInput(member.email ?? '');
-      setConsentEmailSaved(!!member.email);
-      setEmailAnswer(null);
-      setWhatsappAnswer(null);
-      setEmailRetroChecked(false);
-      setWhatsappRetroChecked(false);
-      setStep('consent');
-      return;
-    }
-    proceedToIntroOrSelect();
-  }
-
-  useEffect(() => {
-    if (step !== 'consent' || consentInfo) return;
-    fetch('/api/consent-info').then((r) => r.json()).then(setConsentInfo).catch(() => {});
-  }, [step, consentInfo]);
-
-  async function handleContinueConsent() {
-    setSavingConsent(true);
-    const posts: Promise<unknown>[] = [];
-    if (selectedMember && emailNeedsAnswer(selectedMember) && emailAnswer) {
-      posts.push(fetch('/api/member-consent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId: selected, channel: 'email', decision: emailAnswer }),
-      }));
-    }
-    if (selectedMember && whatsappNeedsAnswer(selectedMember) && whatsappAnswer) {
-      posts.push(fetch('/api/member-consent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId: selected, channel: 'whatsapp', decision: whatsappAnswer }),
-      }));
-    }
-    await Promise.all(posts);
-    setSavingConsent(false);
-    proceedToIntroOrSelect();
   }
 
   async function handleVerifyPassword() {
@@ -460,118 +399,6 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
               Anyone who knows your name could sign in as you.
             </p>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Notification consent gate ─────────────────────────────────────────────
-  if (step === 'consent') {
-    const emailPending = selectedMember ? emailNeedsAnswer(selectedMember) : false;
-    const whatsappPending = selectedMember ? whatsappNeedsAnswer(selectedMember) : false;
-    const emailOnFile = consentEmailSaved || !!selectedMember?.email;
-    const emailValid = /.+@.+\..+/.test(consentEmailInput.trim());
-    const isExisting = !!(consentInfo?.consentLaunchedAt && selectedMember?.created_at
-      && new Date(selectedMember.created_at).getTime() < new Date(consentInfo.consentLaunchedAt).getTime());
-    const canContinue = (!emailPending || (emailOnFile && emailAnswer !== null))
-      && (!whatsappPending || whatsappAnswer !== null);
-
-    const retroLabel = (
-      <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-        I confirm I&apos;ve been fine receiving these since they began, and have never objected.
-      </span>
-    );
-    const answerButtons = (
-      answer: 'granted' | 'declined' | null, setAnswer: (a: 'granted' | 'declined') => void, yesDisabled: boolean,
-    ) => (
-      <div className="flex gap-2">
-        <button onClick={() => setAnswer('granted')} disabled={yesDisabled}
-          className={`flex-1 text-xs font-semibold py-2 rounded-lg border disabled:opacity-40 transition-colors ${
-            answer === 'granted' ? 'bg-emerald-600 text-white border-emerald-600' : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>
-          Yes, I consent
-        </button>
-        <button onClick={() => setAnswer('declined')}
-          className={`flex-1 text-xs font-semibold py-2 rounded-lg border transition-colors ${
-            answer === 'declined' ? 'bg-slate-600 text-white border-slate-600' : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}>
-          No
-        </button>
-      </div>
-    );
-
-    return (
-      <div className={backdropCls}>
-        <div className={`${modalCls} p-6`}>
-          <DragHandle />
-          <p className="text-xs font-semibold text-maroon-600 dark:text-maroon-400 uppercase tracking-widest mb-0.5">Before you continue</p>
-          <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-1">Notification consent</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-            We need your say on how the club reaches you, one channel at a time.
-          </p>
-
-          {emailPending && (
-            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 mb-3">
-              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-1">📧 Email</p>
-              {!emailOnFile ? (
-                <>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
-                    We don&apos;t have an email on file for you yet — it&apos;s required.
-                  </p>
-                  <div className="flex gap-2">
-                    <input type="email" value={consentEmailInput} onChange={(e) => setConsentEmailInput(e.target.value)}
-                      placeholder="you@example.com" className={`${inputCls} !py-2`} />
-                    <button
-                      onClick={async () => {
-                        if (!emailValid) return;
-                        await supabase.from('members').update({ email: consentEmailInput.trim() }).eq('id', selected);
-                        setConsentEmailSaved(true);
-                      }}
-                      disabled={!emailValid}
-                      className="shrink-0 text-xs font-semibold text-maroon-700 dark:text-maroon-400 px-3 rounded-lg border border-maroon-200 dark:border-maroon-800 disabled:opacity-40">
-                      Save
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
-                    You&apos;ll receive these from <strong>{consentInfo?.fromEmail ?? '…'}</strong>
-                    {consentInfo?.fromName ? ` (${consentInfo.fromName})` : ''}.{' '}
-                    Currently {selectedMember?.email_notifications === false ? 'off' : 'on'}.
-                  </p>
-                  {isExisting && (
-                    <label className="flex items-start gap-2 mb-2 cursor-pointer select-none">
-                      <input type="checkbox" checked={emailRetroChecked} onChange={(e) => setEmailRetroChecked(e.target.checked)}
-                        className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
-                      {retroLabel}
-                    </label>
-                  )}
-                  {answerButtons(emailAnswer, setEmailAnswer, isExisting && !emailRetroChecked)}
-                </>
-              )}
-            </div>
-          )}
-
-          {whatsappPending && (
-            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 mb-3">
-              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-1">💬 WhatsApp</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
-                You&apos;ll receive these from <strong>{consentInfo?.displayPhoneNumber ?? '…'}</strong>.{' '}
-                Currently {selectedMember?.whatsapp_notifications === false ? 'off' : 'on'}.
-              </p>
-              {isExisting && (
-                <label className="flex items-start gap-2 mb-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={whatsappRetroChecked} onChange={(e) => setWhatsappRetroChecked(e.target.checked)}
-                    className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
-                  {retroLabel}
-                </label>
-              )}
-              {answerButtons(whatsappAnswer, setWhatsappAnswer, isExisting && !whatsappRetroChecked)}
-            </div>
-          )}
-
-          <button onClick={handleContinueConsent} disabled={!canContinue || savingConsent} className={primaryBtnCls}>
-            {savingConsent ? 'Saving…' : 'Continue'}
-          </button>
         </div>
       </div>
     );

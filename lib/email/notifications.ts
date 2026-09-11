@@ -206,10 +206,19 @@ export async function notifyConsentDecision(params: {
   channel: 'email' | 'whatsapp';
   decision: 'granted' | 'declined';
   decidedAt: string; // ISO
+  /** The address/number this decision actually covers — the email if the
+   *  channel is email, the phone if it's WhatsApp — shown back so the
+   *  receipt names exactly what was consented for. */
+  contactValue: string | null;
+  /** True whenever the member ticked the mandatory "aware since it started"
+   *  box alongside granting — required for every grant now, not just an
+   *  existing member's first answer. See components/ConsentGateModal.tsx and
+   *  components/MemberDashboard.tsx. */
+  retroactive: boolean;
   device: Record<string, string | null> | null;
   ccEmail: string;
 }) {
-  const { target, channel, decision, decidedAt, device, ccEmail } = params;
+  const { target, channel, decision, decidedAt, contactValue, retroactive, device, ccEmail } = params;
   if (!target.email) return { skipped: 'no email' };
 
   const deviceFields: [string, string][] = [
@@ -227,8 +236,23 @@ export async function notifyConsentDecision(params: {
     club_name: CLUB_NAME,
     app_url: await getAppUrl(),
     full_name: target.name || target.display_name,
+    given_by: target.name || target.display_name,
     channel_label: channel === 'email' ? 'Email' : 'WhatsApp',
-    decision_label: decision === 'granted' ? 'Consented' : 'Declined',
+    decision_short: decision === 'granted' ? 'Consented' : 'Declined',
+    decision_label: `${decision === 'granted' ? 'Consented' : 'Declined'} to be contacted via `
+      + `${channel === 'email' ? 'Email' : 'WhatsApp'} channel`,
+    contact_value: contactValue?.trim() || 'not on file',
+    retro_line: retroactive
+      ? (() => {
+          const name = escapeHtml(target.name || target.display_name);
+          const chLabel = channel === 'email' ? 'Email' : 'WhatsApp';
+          return '<p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">'
+            + `This also confirms that ${name}, by their own free will, was aware of the ${chLabel} notification `
+            + 'feature at the time it was introduced, had previously provided consent to receive notifications '
+            + 'through it for their own convenience, and had raised no objection or concern regarding its use. '
+            + `${name}, of their own free will, affirmed the above while completing this consent form.</p>`;
+        })()
+      : '',
     decided_at: (() => {
       const ist = new Date(new Date(decidedAt).getTime() + IST_OFFSET_MS).toISOString();
       return `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`;
@@ -237,6 +261,39 @@ export async function notifyConsentDecision(params: {
   };
 
   return sendOneCc('consent_confirmation', target.email, [ccEmail], vars);
+}
+
+// A member's own affirmation when they change their email/phone — see
+// components/MemberDashboard.tsx and components/ConsentGateModal.tsx, both
+// of which require this checkbox ticked before the change can be saved.
+export async function notifyContactChangeAffirmation(params: {
+  target: { id: string; name: string; display_name: string; email: string | null };
+  channel: 'email' | 'whatsapp';
+  oldValue: string;
+  newValue: string;
+  changedAt: string; // ISO
+  ccEmail: string;
+}) {
+  const { target, channel, oldValue, newValue, changedAt, ccEmail } = params;
+  if (!target.email) return { skipped: 'no email' };
+
+  const channelWord = channel === 'email' ? 'email address' : 'phone number';
+  const ist = new Date(new Date(changedAt).getTime() + IST_OFFSET_MS).toISOString();
+
+  const vars = {
+    club_name: CLUB_NAME,
+    app_url: await getAppUrl(),
+    full_name: target.name || target.display_name,
+    channel_label: channelWord,
+    old_value: oldValue.trim() || 'none on file',
+    new_value: newValue.trim() || 'none on file',
+    changed_at: `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`,
+    affirmation_line: `I am changing my ${channelWord} on my own consent. If I was using this service on my `
+      + `previously provided ${channelWord} (${oldValue.trim() || 'none on file'}), then I had fully consented `
+      + 'for it and had no issues with it.',
+  };
+
+  return sendOneCc('contact_change_affirmation', target.email, [ccEmail], vars);
 }
 
 // Fired the moment a member grants email consent — same template the mass
