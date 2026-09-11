@@ -134,7 +134,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
-  consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line'],
+  consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'origin_label', 'origin_value', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line'],
   contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'changed_by_line', 'affirmation_line', 'device_summary_block', 'important_notice_line'],
 };
 
@@ -598,6 +598,8 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
         <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{given_by}}</p>
         <p style="${KICKER}">Channel</p>
         <p style="margin:0 0 12px;color:#1e293b;font-size:18px;font-weight:800;">{{channel_label}}</p>
+        <p style="${KICKER}">{{origin_label}}</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:15px;font-weight:600;">{{origin_value}}</p>
         <p style="${KICKER}">Consent status</p>
         <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{decision_label}}</p>
         <p style="${KICKER}">For</p>

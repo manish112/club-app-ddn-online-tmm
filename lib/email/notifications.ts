@@ -5,6 +5,7 @@ import { ROLE_META, getMeetingRoles, leadershipRoleLabel, type Meeting, type Rol
 import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime, escapeHtml, bioBlock } from './format';
 import { sendOne, sendOneCc, sendOneDeduped, getAppUrl, getEmailSettings, getVpEducationName } from './mailer';
+import { getWhatsAppSettings } from '@/lib/whatsapp/client';
 import { buildMeetingIcs } from './ical';
 import type { TemplateVars } from './render';
 
@@ -238,12 +239,23 @@ export async function notifyConsentDecision(params: {
 
   const deviceSummary = formatDeviceSummary(device);
 
+  // The club's own sending address/number for this channel — shown beside
+  // Channel so the receipt also names exactly where the notification would
+  // come from, not just what it's about (that's contact_value, below).
+  const origin = channel === 'email'
+    ? (await getEmailSettings())?.from_email || null
+    : (await getWhatsAppSettings())?.display_phone_number || null;
+
   const vars = {
     club_name: CLUB_NAME,
     app_url: await getAppUrl(),
     full_name: target.name || target.display_name,
     given_by: target.name || target.display_name,
     channel_label: channel === 'email' ? 'Email' : 'WhatsApp',
+    origin_label: channel === 'email'
+      ? 'Notification originating email address'
+      : 'Notification originating number on WhatsApp',
+    origin_value: origin?.trim() || 'not on file',
     decision_short: decision === 'granted' ? 'Consented' : 'Declined',
     decision_label: `${decision === 'granted' ? 'Consented' : 'Declined'} to be contacted via `
       + `${channel === 'email' ? 'Email' : 'WhatsApp'} channel`,
