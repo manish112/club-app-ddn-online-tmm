@@ -133,6 +133,7 @@ interface DeliverOpts {
   vars: TemplateVars;
   to?: string;            // 1:1 recipient
   bcc?: string[];         // mass recipients (BCC)
+  cc?: string[];          // fixed carbon-copy recipients (e.g. a compliance-record address)
   dedupeKey?: string;     // when set, a unique email_sends row guards against re-sends
   meetingId?: string | null;
   icalEvent?: IcalEvent;  // attach a calendar invite (.ics)
@@ -153,12 +154,22 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
   let bcc = (opts.bcc ?? []).filter(isEmail);
   if (!to && bcc.length === 0) return { skipped: 'no valid recipients' };
 
-  // Respect per-member email opt-out (members who unchecked "Send me email notifications").
-  const { data: optedRows } = await supabase.from('members').select('email').eq('email_notifications', false);
-  const blocked = new Set((optedRows ?? []).map((m) => String(m.email ?? '').toLowerCase()).filter(Boolean));
-  if (to && blocked.has(to.toLowerCase())) return { skipped: 'recipient opted out' };
-  bcc = bcc.filter((e) => !blocked.has(e.toLowerCase()));
-  if (!to && bcc.length === 0) return { skipped: 'all recipients opted out' };
+  // Consent is required before ANY notification goes out. The one exception is
+  // the consent-confirmation receipt itself (see lib/member-consent.ts) — that's
+  // a record of the decision just made, not a notification, and must reach the
+  // member regardless of what they decided.
+  if (key !== 'consent_confirmation') {
+    const { data: rows } = await supabase.from('members').select('email, email_consent_status');
+    const consented = new Set(
+      (rows ?? [])
+        .filter((m) => m.email_consent_status === 'granted')
+        .map((m) => String(m.email ?? '').toLowerCase())
+        .filter(Boolean),
+    );
+    if (to && !consented.has(to.toLowerCase())) return { skipped: 'recipient has not consented to email' };
+    bcc = bcc.filter((e) => consented.has(e.toLowerCase()));
+    if (!to && bcc.length === 0) return { skipped: 'no consenting recipients' };
+  }
 
   const recipientCount = to ? 1 : bcc.length;
 
@@ -182,6 +193,7 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
       from: fromHeader(settings),
       to: to ?? fromHeader(settings),   // BCC-only mail still needs a To header
       bcc: bcc.length ? bcc : undefined,
+      cc: opts.cc?.length ? opts.cc : undefined,
       replyTo: settings.reply_to || undefined,
       subject,
       html,
@@ -223,6 +235,17 @@ export function sendMass(
   opts?: { dedupeKey?: string; meetingId?: string | null },
 ): Promise<SendResult> {
   return deliver({ key, vars, bcc: recipients, dedupeKey: opts?.dedupeKey, meetingId: opts?.meetingId });
+}
+
+// Same as sendOne but with a fixed CC — used only by the consent-confirmation
+// receipt, which always copies a compliance-record address. Kept separate
+// from sendOne rather than adding a `cc` parameter there, since sendOne's
+// positional signature is used throughout this codebase and a new optional
+// arg would be easy to silently mis-order at an existing call site.
+export function sendOneCc(
+  key: TemplateKey, toEmail: string, cc: string[], vars: TemplateVars,
+): Promise<SendResult> {
+  return deliver({ key, vars, to: toEmail, cc });
 }
 
 // Same as sendOne but supports a dedupe key (used by the reminders) and an

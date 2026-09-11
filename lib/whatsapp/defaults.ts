@@ -118,14 +118,17 @@ export const WA_PLACEHOLDERS: Record<WaTemplateKey, string[]> = {
 // parameter so it follows whoever holds the office; the title and club line are
 // fixed text, which keeps the parameter count down and the sign-off constant.
 //
-// The closing note is not decoration. Nothing reads replies to this number — a
-// member answering "sorry, can't make it" would be talking to nobody — so every
-// message says so, and each one points at somewhere that is read: the app, or
+// The closing note is not decoration: it tells the member what replying here
+// actually does. This number now runs a small menu bot (see
+// waHandleInboundMessage) — texting "Hi" gets meeting info, participation
+// history, or a password reset, all by picking a number. Nobody reads a
+// free-text reply here, so anything that isn't a bare digit still goes to
 // the VP Education by name just above.
 const SIGN_OFF =
   '\n\nRegards,\n{{vp_education_name}}\nVP Education\nDehradun Online Toastmasters Club'
-  + '\n\n_Please do not reply to this number — it is not monitored. Do reach out to '
-  + 'TM {{vp_education_name}} instead._';
+  + '\n\n_Reply Hi to this number anytime for this week\'s meeting details, your '
+  + 'participation history, or to reset your password._'
+  + '\n\n_To turn off these messages, visit your profile page in the app._';
 
 // The sign-off's own placeholders, in the order they appear in it. Derived from
 // SIGN_OFF rather than typed out, so editing the sign-off can't leave the

@@ -31,7 +31,8 @@ export type TemplateKey =
   | 'mentor_assigned_to_mentee'
   | 'mentor_assigned_to_mentor'
   | 'announcement'
-  | 'custom_message';
+  | 'custom_message'
+  | 'consent_confirmation';
 
 export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_created',
@@ -63,6 +64,7 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'mentor_assigned_to_mentor',
   'announcement',
   'custom_message',
+  'consent_confirmation',
 ];
 
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
@@ -95,6 +97,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   mentor_assigned_to_mentor: 'Mentor assigned — to the mentor (shows mentee bio)',
   announcement: 'New announcement (to all members)',
   custom_message: 'Custom message (admin-written, to all members)',
+  consent_confirmation: 'Notification consent recorded (compliance receipt, to the member)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -128,6 +131,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
+  consent_confirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'decision_label', 'decided_at', 'device_summary_block'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -167,7 +171,8 @@ ${body}
           <td style="padding:20px 32px;border-top:1px solid #f1f5f9;">
             <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.6;">
               {{club_name}} · Club number: 28680307 · District 224<br>
-              You received this because you are a registered Toastmasters member.
+              You received this because you are a registered Toastmasters member.<br>
+              If you don't want emails from this address, log in to the app and turn off email notifications in your profile.
             </p>
           </td>
         </tr>
@@ -572,5 +577,29 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       ${CARD_CLOSE}
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">Open the admin panel to approve or decline this request. Until it's approved, the evaluator slot is held as &ldquo;assignment in progress&rdquo;.</p>
       <a href="{{app_url}}/amiadmin" style="display:inline-block;background:linear-gradient(135deg,#9d1530,#6b0c1e);color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:10px;font-size:14px;font-weight:700;">Review Request →</a>`),
+  },
+
+  // A compliance receipt, not a notification — sent whenever a member answers
+  // or changes an email/WhatsApp consent decision, regardless of what they
+  // decided, and even if they just declined email notifications (this one
+  // still goes out; see lib/member-consent.ts). Always CC'd to a fixed
+  // record-keeping address, never admin-editable.
+  consent_confirmation: {
+    subject: 'Your {{channel_label}} notification preference — {{decision_label}}',
+    body_html: shell('Preference Recorded', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">This confirms a notification preference recorded on your account.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">Channel</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:18px;font-weight:800;">{{channel_label}}</p>
+        <p style="${KICKER}">Decision</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{decision_label}}</p>
+        <p style="${KICKER}">When</p>
+        <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{decided_at}} IST</p>
+      ${CARD_CLOSE}
+      <p style="${KICKER}">Device recorded with this decision</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can review or change this anytime from your profile in the app.</p>
+      ${CTA('Open the App →')}`),
   },
 };
