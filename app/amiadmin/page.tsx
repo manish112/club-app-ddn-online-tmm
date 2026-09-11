@@ -775,7 +775,30 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setSavingContact(false);
     setContactMsg(error ? `✗ ${error.message}` : '✓ Saved');
     setTimeout(() => setContactMsg(null), 2500);
-    if (!error) onUpdated();
+    if (error) return;
+    // Compliance receipt — an admin editing someone else's contact info gets
+    // the same notification a self-service change would, sent to the old
+    // and new email (or, for a phone change, whatever email is on file), and
+    // naming this admin as who did it.
+    if (emailChanged) {
+      fetch('/api/contact-change', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId: member.id, channel: 'email', oldValue: member.email ?? '', newValue: newEmail ?? '',
+          actorId: currentAdminId, actorIsAdmin: true,
+        }),
+      }).catch(() => {});
+    }
+    if (phoneChanged) {
+      fetch('/api/contact-change', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId: member.id, channel: 'whatsapp', oldValue: member.phone ?? '', newValue: newPhone ?? '',
+          actorId: currentAdminId, actorIsAdmin: true,
+        }),
+      }).catch(() => {});
+    }
+    onUpdated();
   }
 
   // Each channel is written on its own: the WhatsApp columns arrived in

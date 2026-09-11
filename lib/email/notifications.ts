@@ -197,6 +197,21 @@ export async function notifyRoleChange(params: {
   return sendOne(isAssign ? 'role_assigned' : 'role_removed', target.email, vars, meeting.id);
 }
 
+// Shared by the consent receipt and the contact-change receipt — both show
+// exactly what was captured for whoever's device this was, never a guess.
+function formatDeviceSummary(device: Record<string, string | null> | null | undefined): string {
+  const deviceFields: [string, string][] = [
+    ['IP', device?.ip ?? ''],
+    ['Browser', [device?.browser, device?.browser_version].filter(Boolean).join(' ')],
+    ['OS', device?.os ?? ''],
+    ['Device', device?.device_type ?? ''],
+    ['Location', [device?.city, device?.country].filter(Boolean).join(', ')],
+  ].filter(([, v]) => v.trim()) as [string, string][];
+  return deviceFields.length
+    ? deviceFields.map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(value)}`).join(' · ')
+    : 'No device details captured with this action.';
+}
+
 // ── Consent decision receipt (1:1, CC'd to a fixed compliance address) ──────
 // Not gated by the member's own email_notifications opt-out — it's a receipt
 // of the decision itself, not an ongoing notification, so it goes out
@@ -221,16 +236,7 @@ export async function notifyConsentDecision(params: {
   const { target, channel, decision, decidedAt, contactValue, retroactive, device, ccEmail } = params;
   if (!target.email) return { skipped: 'no email' };
 
-  const deviceFields: [string, string][] = [
-    ['IP', device?.ip ?? ''],
-    ['Browser', [device?.browser, device?.browser_version].filter(Boolean).join(' ')],
-    ['OS', device?.os ?? ''],
-    ['Device', device?.device_type ?? ''],
-    ['Location', [device?.city, device?.country].filter(Boolean).join(', ')],
-  ].filter(([, v]) => v.trim()) as [string, string][];
-  const deviceSummary = deviceFields.length
-    ? deviceFields.map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(value)}`).join(' · ')
-    : 'No device details captured with this decision.';
+  const deviceSummary = formatDeviceSummary(device);
 
   const vars = {
     club_name: CLUB_NAME,
@@ -263,37 +269,66 @@ export async function notifyConsentDecision(params: {
   return sendOneCc('consent_confirmation', target.email, [ccEmail], vars);
 }
 
-// A member's own affirmation when they change their email/phone — see
-// components/MemberDashboard.tsx and components/ConsentGateModal.tsx, both
-// of which require this checkbox ticked before the change can be saved.
+// Sent whenever an email or phone number changes — to whoever changed it, or
+// to an admin acting on the member's request. See components/MemberDashboard.tsx,
+// components/ConsentGateModal.tsx (self-service) and app/amiadmin/page.tsx's
+// saveContact() (admin edit). Fired once per address that needs to hear about
+// it — the caller (app/api/contact-change/route.ts) sends this to both the old
+// and the new email on an email change, and to the member's current email on a
+// phone change, since a phone can't receive mail. Compliance record, not a
+// notification, so (like notifyConsentDecision) it's exempt from the consent
+// gate in lib/email/mailer.ts's deliver() and goes out regardless of the
+// member's own notification preference — the message says so explicitly.
 export async function notifyContactChangeAffirmation(params: {
-  target: { id: string; name: string; display_name: string; email: string | null };
+  target: { id: string; name: string; display_name: string };
+  /** Where this one send goes — the old address, the new address, or (for a
+   *  phone change) the member's only email. Never `target.email`: the caller
+   *  may need this fired at an address that's no longer on the member row. */
+  recipientEmail: string;
   channel: 'email' | 'whatsapp';
   oldValue: string;
   newValue: string;
   changedAt: string; // ISO
+  /** Who made the change, when it wasn't the member themselves. */
+  actor: { name: string; display_name: string } | null;
+  actorIsAdmin: boolean;
+  device: Record<string, string | null> | null;
   ccEmail: string;
 }) {
-  const { target, channel, oldValue, newValue, changedAt, ccEmail } = params;
-  if (!target.email) return { skipped: 'no email' };
+  const { target, recipientEmail, channel, oldValue, newValue, changedAt, actor, actorIsAdmin, device, ccEmail } = params;
+  if (!recipientEmail) return { skipped: 'no email' };
 
   const channelWord = channel === 'email' ? 'email address' : 'phone number';
   const ist = new Date(new Date(changedAt).getTime() + IST_OFFSET_MS).toISOString();
+  const actorName = actor?.display_name || actor?.name || 'an admin';
+  const memberName = target.name || target.display_name;
 
   const vars = {
     club_name: CLUB_NAME,
     app_url: await getAppUrl(),
-    full_name: target.name || target.display_name,
+    full_name: memberName,
     channel_label: channelWord,
     old_value: oldValue.trim() || 'none on file',
     new_value: newValue.trim() || 'none on file',
     changed_at: `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`,
-    affirmation_line: `I am changing my ${channelWord} on my own consent. If I was using this service on my `
-      + `previously provided ${channelWord} (${oldValue.trim() || 'none on file'}), then I had fully consented `
-      + 'for it and had no issues with it.',
+    // Written in the third person deliberately — this is a record of what
+    // happened, read by the club as much as by the member, not the member's
+    // own words the way affirmation_line below is.
+    changed_by_line: actorIsAdmin
+      ? `${memberName}'s ${channelWord} on file was updated by Admin ${actorName}, at ${memberName}'s request.`
+      : `${memberName} updated their own ${channelWord} on file.`,
+    affirmation_line: actorIsAdmin
+      ? `Admin ${actorName} is changing this record on the member's request.`
+      : `${memberName} has, of their own free will, changed their ${channelWord}. If they were using the `
+        + `notification service on their previously provided ${channelWord} (${oldValue.trim() || 'none on file'}), then `
+        + `they had fully consented for it and had no issues with it. ${memberName} had, on their own free `
+        + 'will, acknowledged this change on the form while submitting this change.',
+    device_summary_block: formatDeviceSummary(device),
+    important_notice_line: 'This is an important service message confirming a change to your contact record '
+      + '— it is sent irrespective of your notification preference.',
   };
 
-  return sendOneCc('contact_change_affirmation', target.email, [ccEmail], vars);
+  return sendOneCc('contact_change_affirmation', recipientEmail, [ccEmail], vars);
 }
 
 // Fired the moment a member grants email consent — same template the mass
