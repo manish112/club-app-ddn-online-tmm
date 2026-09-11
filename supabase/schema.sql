@@ -74,7 +74,20 @@ create table if not exists members (
   -- admin says otherwise, and a member cannot switch it on themselves.
   email_notifications    boolean not null default true,
   whatsapp_notifications boolean not null default true,
-  whatsapp_enabled       boolean not null default false
+  whatsapp_enabled       boolean not null default false,
+
+  -- Mandatory per-channel consent, captured at sign-in (or later from the
+  -- profile toggle). 'pending' until answered; a changed email/phone resets
+  -- its own channel back to 'pending' (see lib/member-consent.ts) since
+  -- consent was for a specific address/number, not the person in general.
+  -- *_consent_device snapshots that member's most recent device_captures row
+  -- at decision time, so the DB and the confirmation email always agree.
+  email_consent_status    text not null default 'pending',
+  email_consent_at        timestamptz,
+  email_consent_device    jsonb,
+  whatsapp_consent_status text not null default 'pending',
+  whatsapp_consent_at     timestamptz,
+  whatsapp_consent_device jsonb
 );
 
 -- Catch-up for databases created before these columns existed.
@@ -105,6 +118,20 @@ update members
  where whatsapp_enabled is null;
 alter table members alter column whatsapp_enabled set default false;
 alter table members alter column whatsapp_enabled set not null;
+
+alter table members add column if not exists email_consent_status    text not null default 'pending';
+alter table members add column if not exists email_consent_at        timestamptz;
+alter table members add column if not exists email_consent_device    jsonb;
+alter table members add column if not exists whatsapp_consent_status text not null default 'pending';
+alter table members add column if not exists whatsapp_consent_at     timestamptz;
+alter table members add column if not exists whatsapp_consent_device jsonb;
+
+alter table members drop constraint if exists members_email_consent_status_check;
+alter table members add  constraint members_email_consent_status_check
+  check (email_consent_status in ('pending', 'granted', 'declined'));
+alter table members drop constraint if exists members_whatsapp_consent_status_check;
+alter table members add  constraint members_whatsapp_consent_status_check
+  check (whatsapp_consent_status in ('pending', 'granted', 'declined'));
 
 -- One member may hold several offices, so leadership_roles is an array. An
 -- older database has the retired singular column; fold it in, once, then leave
@@ -552,6 +579,12 @@ alter table agenda_config add column if not exists online_reservation_days_befor
 alter table agenda_config add column if not exists offline_reservation_enabled     boolean not null default true;
 alter table agenda_config add column if not exists offline_reservation_days_before integer not null default 2;
 alter table agenda_config add column if not exists default_meeting_link            text;
+-- The one-time cutover moment the consent gate is measured against: a member
+-- created before this is "existing" (grandfathered, sees the retroactive
+-- affirmation line); set once, on whichever deploy first runs this file, and
+-- never touched again (the `is null` guard is what makes that safe to re-run).
+alter table agenda_config add column if not exists consent_launched_at             timestamptz;
+update agenda_config set consent_launched_at = now() where id = 1 and consent_launched_at is null;
 alter table agenda_config add column if not exists timer_modes                     jsonb   not null default '{
   "icebreaker":  {"green": 240, "yellow": 300, "red": 360, "grace": 30},
   "speech":      {"green": 300, "yellow": 360, "red": 420, "grace": 30},
@@ -675,6 +708,10 @@ alter table whatsapp_settings add column if not exists role_change_enabled boole
 alter table whatsapp_settings add column if not exists business_account_id text    not null default '';
 alter table whatsapp_settings add column if not exists auto_reply_enabled  boolean not null default true;
 alter table whatsapp_settings add column if not exists meeting_cancelled_enabled boolean not null default true;
+-- Human-readable number shown to members during the consent ask — distinct
+-- from phone_number_id above, which is Meta's internal API id, not a real,
+-- displayable phone number.
+alter table whatsapp_settings add column if not exists display_phone_number text;
 alter table whatsapp_settings alter column api_version set default 'v25.0';
 -- Only a row still on the version that shipped by mistake; a version an admin
 -- pinned deliberately is left alone.

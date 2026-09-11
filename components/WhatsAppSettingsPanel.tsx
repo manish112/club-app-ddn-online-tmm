@@ -12,6 +12,7 @@ interface Settings {
   enabled: boolean;
   access_token: string;        // write-only; blank means "keep existing"
   phone_number_id: string;
+  display_phone_number: string;
   api_version: string;
   default_country_code: string;
   text_mode: boolean;
@@ -28,7 +29,7 @@ interface Settings {
 }
 
 const EMPTY: Settings = {
-  enabled: false, access_token: '', phone_number_id: '',
+  enabled: false, access_token: '', phone_number_id: '', display_phone_number: '',
   api_version: 'v25.0', default_country_code: '91', text_mode: false,
   auto_reply_enabled: true,
   welcome_enabled: true, meeting_created_enabled: true, meeting_cancelled_enabled: true, role_change_enabled: true,
@@ -185,6 +186,13 @@ export function WhatsAppSettingsPanel({ currentAdminId }: { currentAdminId: stri
           <label><span className={labelCls}>Default country code</span>
             <input type="text" value={settings.default_country_code} onChange={(e) => set('default_country_code', e.target.value)} placeholder="91" className={inputCls} />
             <span className="text-[11px] text-slate-400 mt-1 block">Added to member phone numbers stored without one.</span>
+          </label>
+          <label className="col-span-2"><span className={labelCls}>Display phone number</span>
+            <input type="text" value={settings.display_phone_number} onChange={(e) => set('display_phone_number', e.target.value)} placeholder="+91 98765 43210" className={inputCls} />
+            <span className="text-[11px] text-slate-400 mt-1 block">
+              The real, human-readable number members see this comes from — shown during the notification
+              consent ask. Not used for sending; that&apos;s the phone number ID above.
+            </span>
           </label>
         </div>
 

@@ -51,6 +51,11 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   const [saving, setSaving] = useState(false);
   const [emailPref, setEmailPref] = useState(member.email_notifications !== false);
   const [waPref, setWaPref] = useState(member.whatsapp_notifications !== false);
+  // Last-known-saved value each toggle is compared against — save() only
+  // records a fresh consent decision (and sends the confirmation email) when
+  // the toggle actually moved from this, not on every re-save of the form.
+  const [emailPrefBaseline, setEmailPrefBaseline] = useState(member.email_notifications !== false);
+  const [waPrefBaseline, setWaPrefBaseline] = useState(member.whatsapp_notifications !== false);
   // Whether the club sends this member WhatsApp at all — an admin's decision, not
   // theirs, because each message is billed to the club. When it's off the switch
   // below is shown locked rather than hidden: a member who wonders why no
@@ -62,9 +67,13 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
   // reason: a database with 046 but not 055 must still load the email one.
   useEffect(() => {
     supabase.from('members').select('email_notifications').eq('id', member.id).maybeSingle()
-      .then(({ data }) => { if (data && typeof data.email_notifications === 'boolean') setEmailPref(data.email_notifications); });
+      .then(({ data }) => {
+        if (data && typeof data.email_notifications === 'boolean') { setEmailPref(data.email_notifications); setEmailPrefBaseline(data.email_notifications); }
+      });
     supabase.from('members').select('whatsapp_notifications').eq('id', member.id).maybeSingle()
-      .then(({ data }) => { if (data && typeof data.whatsapp_notifications === 'boolean') setWaPref(data.whatsapp_notifications); });
+      .then(({ data }) => {
+        if (data && typeof data.whatsapp_notifications === 'boolean') { setWaPref(data.whatsapp_notifications); setWaPrefBaseline(data.whatsapp_notifications); }
+      });
     supabase.from('members').select('whatsapp_enabled').eq('id', member.id).maybeSingle()
       .then(({ data }) => { if (data && typeof data.whatsapp_enabled === 'boolean') setWaAllowed(data.whatsapp_enabled); });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,26 +101,61 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
     setUploading(false);
   }
 
+  async function recordConsentToggle(channel: 'email' | 'whatsapp', decision: 'granted' | 'declined') {
+    await fetch('/api/member-consent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: member.id, channel, decision }),
+    }).catch(() => {});
+  }
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    await supabase.from('members').update({
+
+    const newEmail = email.trim() || null;
+    const newPhone = phone.trim() || null;
+    const emailChanged = newEmail !== (member.email ?? null);
+    const phoneChanged = newPhone !== (member.phone ?? null);
+
+    const bulkUpdate: Record<string, unknown> = {
       introduction: intro.trim() || null,
-      phone: phone.trim() || null,
-      email: email.trim() || null,
+      phone: newPhone,
+      email: newEmail,
       city: city.trim() || null,
       gender: gender || null,
       show_phone_in_contact: showPhone,
-    }).eq('id', member.id);
-    // Save each notification preference separately (best-effort — an unmigrated
-    // column must never block the profile save, nor take the other one down).
-    await supabase.from('members').update({ email_notifications: emailPref }).eq('id', member.id);
-    // Only written while the club allows WhatsApp for this member. Not merely
-    // because the switch is disabled in that case — saving would overwrite the
-    // preference they had before the admin switched the channel off, so turning
-    // it back on later would silently forget what they had asked for.
-    if (waAllowed) {
-      await supabase.from('members').update({ whatsapp_notifications: waPref }).eq('id', member.id);
+    };
+    // Consent was for a specific address/number — a changed one hasn't been
+    // consented to yet. Fail closed: reset that channel's consent and force
+    // its notification flag off in the same write, rather than leaving
+    // messages flowing to something nobody has agreed to receive them on.
+    if (emailChanged) {
+      bulkUpdate.email_notifications = false;
+      bulkUpdate.email_consent_status = 'pending';
+      bulkUpdate.email_consent_at = null;
+      bulkUpdate.email_consent_device = null;
+    }
+    if (phoneChanged) {
+      bulkUpdate.whatsapp_notifications = false;
+      bulkUpdate.whatsapp_consent_status = 'pending';
+      bulkUpdate.whatsapp_consent_at = null;
+      bulkUpdate.whatsapp_consent_device = null;
+    }
+    await supabase.from('members').update(bulkUpdate).eq('id', member.id);
+
+    // Each toggle is its own consent decision, recorded (and confirmed by
+    // email) only when it actually moved from its last-known-saved value —
+    // re-saving the form without touching a toggle shouldn't re-fire a
+    // decision that already stands. Skipped when the address/number itself
+    // just changed above, since that already forced the flag off and reset
+    // to pending — there's nothing to "decide" yet on the new one.
+    if (!emailChanged && emailPref !== emailPrefBaseline) {
+      await recordConsentToggle('email', emailPref ? 'granted' : 'declined');
+      setEmailPrefBaseline(emailPref);
+    }
+    if (waAllowed && !phoneChanged && waPref !== waPrefBaseline) {
+      await recordConsentToggle('whatsapp', waPref ? 'granted' : 'declined');
+      setWaPrefBaseline(waPref);
     }
     setSaving(false);
     setEditing(false);
@@ -288,8 +332,33 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           </button>
         )}
       </div>
+
+      {/* Read-only — the toggles above are the only way to change these; this
+          just lets a member see what's on record. */}
+      {(member.email || member.phone) && (
+        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1">
+          {member.email && (
+            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+              Email consent: {consentStatusLabel(member.email_consent_status, member.email_consent_at)}
+            </p>
+          )}
+          {member.phone && (
+            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+              WhatsApp consent: {consentStatusLabel(member.whatsapp_consent_status, member.whatsapp_consent_at)}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function consentStatusLabel(
+  status: 'pending' | 'granted' | 'declined' | undefined, at: string | null | undefined,
+): string {
+  if (status === 'granted') return `Granted${at ? ` on ${formatMeetingDate(at.slice(0, 10))}` : ''}`;
+  if (status === 'declined') return `Declined${at ? ` on ${formatMeetingDate(at.slice(0, 10))}` : ''}`;
+  return 'Pending';
 }
 
 // ─── Participation card ───────────────────────────────────────────────────────

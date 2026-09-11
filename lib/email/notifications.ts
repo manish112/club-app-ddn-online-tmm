@@ -4,7 +4,7 @@ import { createServiceClient } from '@/utils/supabase/server';
 import { ROLE_META, getMeetingRoles, leadershipRoleLabel, type Meeting, type RoleKey, type LeadershipRole } from '@/lib/types';
 import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime, escapeHtml, bioBlock } from './format';
-import { sendOne, sendOneDeduped, getAppUrl, getEmailSettings, getVpEducationName } from './mailer';
+import { sendOne, sendOneCc, sendOneDeduped, getAppUrl, getEmailSettings, getVpEducationName } from './mailer';
 import { buildMeetingIcs } from './ical';
 import type { TemplateVars } from './render';
 
@@ -195,6 +195,59 @@ export async function notifyRoleChange(params: {
   };
 
   return sendOne(isAssign ? 'role_assigned' : 'role_removed', target.email, vars, meeting.id);
+}
+
+// ── Consent decision receipt (1:1, CC'd to a fixed compliance address) ──────
+// Not gated by the member's own email_notifications opt-out — it's a receipt
+// of the decision itself, not an ongoing notification, so it goes out
+// whenever there's an email on file at all, per the club's own decision.
+export async function notifyConsentDecision(params: {
+  target: { id: string; name: string; display_name: string; email: string | null };
+  channel: 'email' | 'whatsapp';
+  decision: 'granted' | 'declined';
+  decidedAt: string; // ISO
+  device: Record<string, string | null> | null;
+  ccEmail: string;
+}) {
+  const { target, channel, decision, decidedAt, device, ccEmail } = params;
+  if (!target.email) return { skipped: 'no email' };
+
+  const deviceFields: [string, string][] = [
+    ['IP', device?.ip ?? ''],
+    ['Browser', [device?.browser, device?.browser_version].filter(Boolean).join(' ')],
+    ['OS', device?.os ?? ''],
+    ['Device', device?.device_type ?? ''],
+    ['Location', [device?.city, device?.country].filter(Boolean).join(', ')],
+  ].filter(([, v]) => v.trim()) as [string, string][];
+  const deviceSummary = deviceFields.length
+    ? deviceFields.map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(value)}`).join(' · ')
+    : 'No device details captured with this decision.';
+
+  const vars = {
+    club_name: CLUB_NAME,
+    app_url: await getAppUrl(),
+    full_name: target.name || target.display_name,
+    channel_label: channel === 'email' ? 'Email' : 'WhatsApp',
+    decision_label: decision === 'granted' ? 'Consented' : 'Declined',
+    decided_at: (() => {
+      const ist = new Date(new Date(decidedAt).getTime() + IST_OFFSET_MS).toISOString();
+      return `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`;
+    })(),
+    device_summary_block: deviceSummary,
+  };
+
+  return sendOneCc('consent_confirmation', target.email, [ccEmail], vars);
+}
+
+// Fired the moment a member grants email consent — same template the mass
+// broadcastWelcome() sends, just for one member instead of the whole club.
+export async function notifyWelcomeEmail(
+  target: { id: string; name: string; display_name: string; email: string | null },
+) {
+  if (!target.email) return { skipped: 'no email' };
+  return sendOne('welcome', target.email, {
+    club_name: CLUB_NAME, app_url: await getAppUrl(), full_name: target.name || target.display_name,
+  });
 }
 
 // ── New meeting announced (mass, BCC) ───────────────────────────────────────

@@ -542,6 +542,19 @@ function MemberActionConfirm({
 
 // ─── Member row ────────────────────────────────────────────────────────────────
 
+function ConsentBadge({ label, status, at }: { label: string; status?: 'pending' | 'granted' | 'declined'; at?: string | null }) {
+  const dateStr = at ? new Date(at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : null;
+  const cls = status === 'granted'
+    ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
+    : status === 'declined'
+      ? 'bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800/60'
+      : 'bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700';
+  const text = status === 'granted' ? `✅ ${label} consented${dateStr ? ` ${dateStr}` : ''}`
+    : status === 'declined' ? `❌ ${label} declined${dateStr ? ` ${dateStr}` : ''}`
+    : `⏳ ${label} pending`;
+  return <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${cls}`}>{text}</span>;
+}
+
 function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   member: Member; allMembers: Member[]; currentAdminId: string; onUpdated: () => void;
 }) {
@@ -714,10 +727,26 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   // here is often the whole reason someone stopped hearing from the club.
   async function saveContact() {
     setSavingContact(true); setContactMsg(null);
-    const { error } = await supabase.from('members').update({
-      email: email.trim() || null,
-      phone: phone.trim() || null,
-    }).eq('id', member.id);
+    const newEmail = email.trim() || null;
+    const newPhone = phone.trim() || null;
+    const emailChanged = newEmail !== (member.email ?? null);
+    const phoneChanged = newPhone !== (member.phone ?? null);
+    const update: Record<string, unknown> = { email: newEmail, phone: newPhone };
+    // Same fail-closed reset as the member's own profile save: an admin
+    // fixing a typo means the old consent no longer covers the new address.
+    if (emailChanged) {
+      update.email_notifications = false;
+      update.email_consent_status = 'pending';
+      update.email_consent_at = null;
+      update.email_consent_device = null;
+    }
+    if (phoneChanged) {
+      update.whatsapp_notifications = false;
+      update.whatsapp_consent_status = 'pending';
+      update.whatsapp_consent_at = null;
+      update.whatsapp_consent_device = null;
+    }
+    const { error } = await supabase.from('members').update(update).eq('id', member.id);
     setSavingContact(false);
     setContactMsg(error ? `✗ ${error.message}` : '✓ Saved');
     setTimeout(() => setContactMsg(null), 2500);
@@ -908,6 +937,14 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
             }`}>
             {togglingPref === 'whatsapp' ? '…' : `💬 WhatsApp ${waEnabled ? 'on' : 'off'}`}
           </button>
+        </div>
+
+        {/* Consent status — read-only here; the member (or the gate at their
+            next sign-in) is the only one who can change it. A "Declined" badge
+            IS the note this decline needed: nothing separate to build. */}
+        <div className="flex items-center gap-2 flex-wrap pl-14">
+          {member.email && <ConsentBadge label="Email" status={member.email_consent_status} at={member.email_consent_at} />}
+          {member.phone && <ConsentBadge label="WhatsApp" status={member.whatsapp_consent_status} at={member.whatsapp_consent_at} />}
         </div>
 
         {/* A channel switched on with nothing to reach them by sends nothing and

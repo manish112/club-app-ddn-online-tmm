@@ -20,6 +20,8 @@ export interface WhatsAppSettings {
   enabled: boolean;
   access_token: string;
   phone_number_id: string;
+  /** Human-readable number shown to members during the consent ask — not used for sending. */
+  display_phone_number: string;
   api_version: string;
   default_country_code: string;
   text_mode: boolean;

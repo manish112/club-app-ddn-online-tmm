@@ -7,8 +7,7 @@
 // route a send that vanished and a send that landed look identical in the log.
 //
 // The same `messages` field also carries INBOUND messages — anyone who texts
-// the club's number — which get an automatic reply with the next meeting's
-// details (see waAutoReplyToInboundMessage).
+// the club's number gets a numbered menu reply (see waHandleInboundMessage).
 //
 // Setup (once):
 //   1. Set WHATSAPP_VERIFY_TOKEN and WHATSAPP_APP_SECRET in Vercel.
@@ -28,7 +27,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServiceClient } from '@/utils/supabase/server';
-import { waAutoReplyToInboundMessage } from '@/lib/whatsapp/notifications';
+import { waHandleInboundMessage } from '@/lib/whatsapp/notifications';
 
 // createHmac needs the Node runtime; the Edge runtime has no node:crypto.
 export const runtime = 'nodejs';
@@ -142,16 +141,17 @@ export async function POST(req: NextRequest) {
 interface MetaInboundMessage {
   from?: string;   // sender's WhatsApp ID — Meta's own E.164 digits, no '+'
   id?: string;
+  text?: { body?: string };
 }
 
-// One reply per distinct sender in the batch — waAutoReplyToInboundMessage's
-// own per-phone-per-day dedupe is what actually stops a burst of texts from
-// producing a burst of replies; this just avoids firing that check twice for
-// two messages that arrived in the same webhook delivery.
+// One reply per inbound message, not per sender — the menu bot needs each
+// distinct message's own text (a greeting vs. a "2") handled on its own, and
+// waHandleInboundMessage's own per-message-id dedupe (keyed off `m.id`) is
+// what actually stops a Meta webhook retry from producing a duplicate reply.
 async function replyToInboundMessages(messages: MetaInboundMessage[]) {
-  const senders = [...new Set(messages.map((m) => m.from as string))];
-  for (const from of senders) {
-    const res = await waAutoReplyToInboundMessage({ from });
+  for (const m of messages) {
+    if (!m.id) { console.error('[whatsapp-webhook] inbound message has no id, skipping:', m.from); continue; }
+    const res = await waHandleInboundMessage({ from: m.from as string, text: m.text?.body ?? '', messageId: m.id });
     if ('error' in res) console.error('[whatsapp-webhook] auto-reply failed:', res.error);
   }
 }

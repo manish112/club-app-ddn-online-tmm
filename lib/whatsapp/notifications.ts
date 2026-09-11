@@ -39,10 +39,11 @@ interface WaMemberLite {
    *  to select it must be a type error, not a silent charge to the club. */
   whatsapp_enabled: boolean | null;
   whatsapp_notifications?: boolean;
+  whatsapp_consent_status?: 'pending' | 'granted' | 'declined';
 }
 
 const MEMBER_COLS =
-  'id, name, display_name, phone, active, whatsapp_enabled, whatsapp_notifications';
+  'id, name, display_name, phone, active, whatsapp_enabled, whatsapp_notifications, whatsapp_consent_status';
 
 // Why this member cannot be messaged, or null when they can. Every 1:1 send
 // reports this verbatim, because "nothing happened" is the least useful thing an
@@ -53,12 +54,16 @@ const MEMBER_COLS =
 // unknown counts as "not authorised". The member's own opt-out is only a
 // preference, so undefined (a column not yet migrated) counts as opted in.
 export function waMemberSkipReason(
-  m: Pick<WaMemberLite, 'active' | 'phone' | 'whatsapp_enabled' | 'whatsapp_notifications'>,
+  m: Pick<WaMemberLite, 'active' | 'phone' | 'whatsapp_enabled' | 'whatsapp_notifications' | 'whatsapp_consent_status'>,
   countryCode: string,
 ): string | null {
   if (!m.active) return 'member is not active';
   if (m.whatsapp_enabled !== true) return 'WhatsApp is not enabled for this member';
   if (m.whatsapp_notifications === false) return 'the member has turned WhatsApp off in their profile';
+  // Consent is required before anything is sent — no grandfathering here, by
+  // decision: this blocks every member, existing or new, until they explicitly
+  // grant it (at the sign-in gate or from their profile).
+  if (m.whatsapp_consent_status !== 'granted') return 'the member has not consented to WhatsApp notifications';
   if (!normalizePhone(m.phone, countryCode)) return 'no usable phone number';
   return null;
 }
@@ -332,11 +337,16 @@ async function roleSheetLines(meetingId: string): Promise<{ taken: string; open:
 }
 
 // ── Auto-reply to an inbound WhatsApp message ───────────────────────────────
-// Anyone who texts the club's number gets an answer. A member's own phone
-// gets the next meeting's details — theme, join link, who has which role; a
-// number that matches nobody gets pointed at VP Membership and the club's
-// public page instead, since the agenda is for members and a stranger texting
-// in is far more likely asking how to join.
+// Anyone who texts the club's number gets a numbered menu back — no AI, just
+// digit matching. A bare "1"-"4" runs that option (this week's meeting, past
+// month participation, full TM journey, password reset); anything else (a
+// greeting, a question, anything at all) gets the menu again. This is
+// stateless: every inbound message is judged on its own, so a member can
+// jump straight to "2" with no prior message required.
+//
+// A number that matches nobody in `members` is pointed at VP Membership and
+// the club's public page instead of the menu — the agenda and a member's own
+// history are for members, not for whoever has the club's number.
 //
 // This is free text, not a template: Meta only allows business-initiated
 // messages through an approved template, but a reply inside the 24-hour
@@ -344,49 +354,65 @@ async function roleSheetLines(meetingId: string): Promise<{ taken: string; open:
 // shape, including the multi-line layout Meta's body-parameter rule forbids
 // elsewhere in this file.
 //
-// Deduped once per phone per (UTC) calendar day — reusing the day as the
-// dedupe scope is what stops a burst of messages from the same person
-// producing a burst of identical replies, and also absorbs a webhook retry of
-// the same delivery for free, the same way every scheduled send in this file
-// already relies on a claimed key rather than checking-then-sending.
-async function buildAutoReplyText(fromE164: string, countryCode: string): Promise<string> {
+// Deduped per Meta message id, not per phone-per-day — a menu needs more
+// than one reply a day (the menu, then whatever the member picks), so the id
+// itself is what now absorbs a webhook retry of the same delivery for free,
+// the same way every scheduled send in this file already relies on a
+// claimed key rather than checking-then-sending.
+const MENU_TEXT =
+  '1️⃣ This week’s meeting\n'
+  + '2️⃣ My participation — past month\n'
+  + '3️⃣ My full TM journey\n'
+  + '4️⃣ Reset my password';
+
+function menuFooter(): string {
+  return `\n\nReply with a number anytime:\n${MENU_TEXT}`;
+}
+
+interface WaMenuMember {
+  id: string; name: string; display_name: string; password_hash: string | null;
+  whatsapp_consent_status: 'pending' | 'granted' | 'declined';
+}
+
+// Best-effort name match, same rule the message log uses to turn a bare
+// number back into a member: normalise every stored phone the same way and
+// compare digits.
+async function matchMemberByPhone(fromE164: string, countryCode: string): Promise<WaMenuMember | undefined> {
   const supabase = createServiceClient();
-  const [{ data: members }, meeting] = await Promise.all([
-    supabase.from('members').select('id, name, display_name, phone, active'),
-    upcomingMeetingRow(),
-  ]);
-
-  // Best-effort name match, same rule the message log uses to turn a bare
-  // number back into a member: normalise every stored phone the same way and
-  // compare digits.
-  const match = (members ?? []).find(
+  const { data: members } = await supabase
+    .from('members').select('id, name, display_name, phone, active, password_hash, whatsapp_consent_status');
+  return (members ?? []).find(
     (m) => m.active && normalizePhone(m.phone as string | null, countryCode) === fromE164,
-  );
+  ) as WaMenuMember | undefined;
+}
 
-  // A number that doesn't match anyone isn't shown the agenda — meeting links
-  // and who holds which role are for members, not for whoever has the club's
-  // number. They're pointed at the person who can actually help them, and at
-  // the club's own public page, instead.
-  if (!match) {
-    const vpName = await getVpMembershipName();
-    return 'Hi there,\n\n'
-      + `Please reach out to the club VP Membership, TM ${vpName || '(see the club page below)'}, `
-      + 'to know more about the club, or visit our website:\n'
-      + `${CLUB_FINDER_URL}`;
-  }
-
-  const greeting = `Hi TM ${match.name || match.display_name} 👋`;
+// A matched member who hasn't (yet) consented to WhatsApp notifications gets
+// this instead of the menu — 'pending' and 'declined' both read as "not
+// consented," same as the menu's own digit dispatch treats anything but a
+// granted consent identically.
+async function buildConsentRequiredReply(member: WaMenuMember): Promise<string> {
   const appUrl = await getAppUrl();
+  return `Hi TM ${member.name || member.display_name} 👋\n\n`
+    + 'Before this number can message you, we need your consent to WhatsApp notifications.\n\n'
+    + `Please open the app and answer that on your next sign-in:\n${appUrl}`;
+}
 
+async function buildNoMatchReply(): Promise<string> {
+  const vpName = await getVpMembershipName();
+  return 'Hi there,\n\n'
+    + `Please reach out to the club VP Membership, TM ${vpName || '(see the club page below)'}, `
+    + 'to know more about the club, or visit our website:\n'
+    + `${CLUB_FINDER_URL}`;
+}
+
+async function buildMeetingInfoReply(): Promise<string> {
+  const [meeting, appUrl] = await Promise.all([upcomingMeetingRow(), getAppUrl()]);
   if (!meeting) {
-    return `${greeting}\n\nThere's no meeting on the calendar right now. Check back soon, or see `
-      + `everything the club is up to in the app:\n${appUrl}`;
+    return `There's no meeting on the calendar right now. Check back soon, or see everything `
+      + `the club is up to in the app:\n${appUrl}`;
   }
-
   const sheet = await roleSheetLines(meeting.id);
   return [
-    greeting,
-    '',
     'Here are the next meeting’s details:',
     '',
     `📅 *Meeting #${meeting.number}* · ${formatDate(meeting.date)}`,
@@ -399,14 +425,83 @@ async function buildAutoReplyText(fromE164: string, countryCode: string): Promis
     '',
     '🟡 *Roles open*',
     sheet.open,
-    '',
-    'To see the full agenda, claim or change a role, visit our club app:',
-    appUrl,
   ].join('\n');
 }
 
-export async function waAutoReplyToInboundMessage(params: {
-  from: string;   // Meta's own E.164 digits, no '+'
+interface RoleClaimWithMeeting {
+  role_key: string;
+  meeting: { number: number; date: string; theme: string | null } | null;
+}
+
+async function memberRoleHistory(memberId: string): Promise<RoleClaimWithMeeting[]> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from('role_claims')
+    .select('role_key, meeting:meetings(number, date, theme)')
+    .eq('member_id', memberId);
+  return ((data ?? []) as unknown as RoleClaimWithMeeting[]).filter((c) => c.meeting);
+}
+
+async function buildPastMonthReply(memberId: string): Promise<string> {
+  const claims = await memberRoleHistory(memberId);
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const byMeeting = new Map<number, { date: string; roles: string[] }>();
+  for (const c of claims) {
+    if (!c.meeting || c.meeting.date < cutoff) continue;
+    const entry = byMeeting.get(c.meeting.number) ?? { date: c.meeting.date, roles: [] };
+    entry.roles.push(ROLE_META[c.role_key as RoleKey]?.label ?? c.role_key);
+    byMeeting.set(c.meeting.number, entry);
+  }
+  if (byMeeting.size === 0) return 'No roles on record for you in the past month.';
+  const lines = [...byMeeting.entries()]
+    .sort((a, b) => a[1].date.localeCompare(b[1].date))
+    .map(([number, { date, roles }]) => `📅 Meeting #${number} · ${formatDate(date)} — ${roles.join(', ')}`);
+  return ['Your participation over the past month:', '', ...lines].join('\n');
+}
+
+async function buildFullJourneyReply(memberId: string): Promise<string> {
+  const claims = await memberRoleHistory(memberId);
+  if (claims.length === 0) return 'No roles on record for you yet — your first one is one tap away in the app.';
+  const meetingNumbers = new Set(claims.map((c) => c.meeting!.number));
+  const counts = new Map<string, number>();
+  for (const c of claims) {
+    const label = ROLE_META[c.role_key as RoleKey]?.label ?? c.role_key;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const earliest = claims.reduce((min, c) => (c.meeting!.date < min ? c.meeting!.date : min), claims[0].meeting!.date);
+  const breakdown = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([label, n]) => `${label} × ${n}`).join(', ');
+  return [
+    'Your TM journey so far:',
+    '',
+    `📅 ${meetingNumbers.size} meeting${meetingNumbers.size === 1 ? '' : 's'} · `
+      + `${claims.length} role${claims.length === 1 ? '' : 's'} · since ${formatDate(earliest)}`,
+    breakdown,
+  ].join('\n');
+}
+
+async function buildPasswordResetReply(member: WaMenuMember): Promise<string> {
+  if (!member.password_hash) {
+    return 'You don’t have a password set yet — just open the app and sign in as yourself.';
+  }
+  const supabase = createServiceClient();
+  await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
+  return 'Your password has been reset. Open the app, sign in as yourself, and you’ll be asked to set a new one.';
+}
+
+async function buildMenuReply(member: WaMenuMember, opt: string): Promise<string> {
+  switch (opt) {
+    case '1': return (await buildMeetingInfoReply()) + menuFooter();
+    case '2': return (await buildPastMonthReply(member.id)) + menuFooter();
+    case '3': return (await buildFullJourneyReply(member.id)) + menuFooter();
+    case '4': return (await buildPasswordResetReply(member)) + menuFooter();
+    default: return `Hi TM ${member.name || member.display_name} 👋${menuFooter()}`;
+  }
+}
+
+export async function waHandleInboundMessage(params: {
+  from: string;       // Meta's own E.164 digits, no '+'
+  text: string;        // inbound message body — empty when it wasn't a text message
+  messageId: string;   // Meta's wamid — the dedupe key
 }): Promise<{ ok: true } | { skipped: string } | { error: string }> {
   const settings = await getWhatsAppSettings();
   if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
@@ -414,22 +509,27 @@ export async function waAutoReplyToInboundMessage(params: {
   if (!settings.access_token || !settings.phone_number_id) return { skipped: 'whatsapp not configured' };
 
   const supabase = createServiceClient();
-  const day = new Date().toISOString().slice(0, 10);
-  const dedupeKey = `wa_auto_reply:${params.from}:${day}`;
+  const dedupeKey = `wa_auto_reply:${params.messageId}`;
 
-  // Claim the day before doing any work — a second callback for the same
-  // delivery (Meta's own retry, or two texts a second apart) hits the unique
-  // constraint and stops here rather than sending twice.
+  // Claim the message id before doing any work — a second callback for the
+  // same delivery (Meta's own retry) hits the unique constraint and stops
+  // here rather than replying twice to one inbound message.
   const { data: claimed, error: claimError } = await supabase
     .from('whatsapp_sends')
     .insert({ dedupe_key: dedupeKey, template_key: WA_AUTO_REPLY_KEY, recipient: params.from, status: 'sent' })
     .select('id').single();
   if (claimError) {
-    if (claimError.code === '23505') return { skipped: 'already replied to this number today' };
+    if (claimError.code === '23505') return { skipped: 'already replied to this message' };
     return { error: `could not write the send log — ${claimError.message}` };
   }
 
-  const text = await buildAutoReplyText(params.from, settings.default_country_code);
+  const member = await matchMemberByPhone(params.from, settings.default_country_code);
+  const text = !member
+    ? await buildNoMatchReply()
+    : member.whatsapp_consent_status !== 'granted'
+      ? await buildConsentRequiredReply(member)
+      : await buildMenuReply(member, params.text.trim());
+
   const result = await sendTextMessage(settings, params.from, text);
 
   if ('ok' in result) {
@@ -439,8 +539,8 @@ export async function waAutoReplyToInboundMessage(params: {
     return { ok: true };
   }
 
-  // Clear the dedupe key on failure, matching deliverWhatsApp: a transient API
-  // error shouldn't cost the member their one reply for the day.
+  // Clear the dedupe key on failure, matching deliverWhatsApp: a transient
+  // API error shouldn't cost the member their reply to this message.
   const reason = 'error' in result ? result.error : result.skipped;
   await supabase.from('whatsapp_sends')
     .update({ dedupe_key: null, status: 'error', error: reason })
@@ -472,7 +572,11 @@ export async function waSendMeetingStarting(
 
 // ── Role assigned / removed (1:1, the moment it happens) ────────────────────
 export async function waNotifyRoleChange(params: {
-  target: { id: string; name: string; display_name: string; phone: string | null; active: boolean; whatsapp_enabled: boolean | null; whatsapp_notifications?: boolean };
+  target: {
+    id: string; name: string; display_name: string; phone: string | null; active: boolean;
+    whatsapp_enabled: boolean | null; whatsapp_notifications?: boolean;
+    whatsapp_consent_status?: 'pending' | 'granted' | 'declined';
+  };
   actor: { id: string; display_name: string } | null;
   actorIsAdmin: boolean;
   meeting: MeetingRow;

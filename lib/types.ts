@@ -144,6 +144,15 @@ export interface Member {
   // member's own choice within it. Both must allow it for anything to be sent.
   whatsapp_enabled?: boolean;       // admin gate; only an explicit true permits sending
   whatsapp_notifications?: boolean; // member's opt-out; undefined/true = wants WhatsApp
+  // Mandatory per-channel consent captured at sign-in or from the profile
+  // toggle. 'pending' until answered; resets to 'pending' if the address/
+  // number it was given for changes. See lib/member-consent.ts.
+  email_consent_status?: 'pending' | 'granted' | 'declined';
+  email_consent_at?: string | null;
+  email_consent_device?: Record<string, string | null> | null;
+  whatsapp_consent_status?: 'pending' | 'granted' | 'declined';
+  whatsapp_consent_at?: string | null;
+  whatsapp_consent_device?: Record<string, string | null> | null;
   // Admin-set; undefined when the column hasn't been read (see participationMode).
   participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;

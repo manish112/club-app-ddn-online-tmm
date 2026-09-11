@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
     id: 1,
     enabled: !!s.enabled,
     phone_number_id: String(s.phone_number_id ?? '').trim(),
+    display_phone_number: String(s.display_phone_number ?? '').trim(),
     api_version: apiVersion,
     default_country_code: String(s.default_country_code ?? '').replace(/\D+/g, '') || '91',
     text_mode: !!s.text_mode,
