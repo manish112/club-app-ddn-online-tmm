@@ -24,26 +24,15 @@ export interface DeviceSnapshot {
   country: string | null;
 }
 
-export async function recordConsent(
-  memberId: string, channel: ConsentChannel, decision: ConsentDecision,
-  /** True when an existing member ticked the "I was aware of this feature
-   *  since it started" box alongside granting — included in the confirmation
-   *  email, not stored as its own column. */
-  retroactive = false,
-): Promise<{ ok: true } | { error: string }> {
+// device_captures is service-role-only (no anon RLS policy) — this lookup can
+// only happen server-side, keyed by whichever member's browser session it was
+// (the actor performing an action, not necessarily the record it's about).
+export async function getLatestDeviceCapture(memberId: string): Promise<DeviceSnapshot | null> {
   const supabase = createServiceClient();
-
-  const [{ data: member }, { data: capture }] = await Promise.all([
-    supabase.from('members').select('id, name, display_name, email, phone').eq('id', memberId).single(),
-    // device_captures is service-role-only (no anon RLS policy) — this lookup
-    // can only happen here, not from the client that's asking.
-    supabase.from('device_captures')
-      .select('ip, browser, browser_version, os, device_type, city, country')
-      .eq('member_id', memberId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-  ]);
-  if (!member) return { error: 'member not found' };
-
-  const device: DeviceSnapshot | null = capture
+  const { data: capture } = await supabase.from('device_captures')
+    .select('ip, browser, browser_version, os, device_type, city, country')
+    .eq('member_id', memberId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+  return capture
     ? {
         ip: capture.ip ?? null,
         browser: capture.browser ?? null,
@@ -54,6 +43,22 @@ export async function recordConsent(
         country: capture.country ?? null,
       }
     : null;
+}
+
+export async function recordConsent(
+  memberId: string, channel: ConsentChannel, decision: ConsentDecision,
+  /** True when an existing member ticked the "I was aware of this feature
+   *  since it started" box alongside granting — included in the confirmation
+   *  email, not stored as its own column. */
+  retroactive = false,
+): Promise<{ ok: true } | { error: string }> {
+  const supabase = createServiceClient();
+
+  const [{ data: member }, device] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, email, phone').eq('id', memberId).single(),
+    getLatestDeviceCapture(memberId),
+  ]);
+  if (!member) return { error: 'member not found' };
 
   const decidedAt = new Date().toISOString();
   const notificationsField = channel === 'email' ? 'email_notifications' : 'whatsapp_notifications';

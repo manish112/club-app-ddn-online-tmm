@@ -589,6 +589,9 @@ export async function waNotifyRoleChange(params: {
   if (!settings.role_change_enabled) return { skipped: 'role change messages off' };
 
   const { target, actor, actorIsAdmin, meeting, roleKey, action } = params;
+  // Only an admin action from the admin panel triggers this message — a member
+  // claiming or releasing their own role stays silent on WhatsApp, by decision.
+  if (!actorIsAdmin) return { skipped: 'not an admin action' };
   const blocked = waMemberSkipReason(target, settings.default_country_code);
   if (blocked) return { skipped: blocked };
 

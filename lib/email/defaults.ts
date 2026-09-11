@@ -100,7 +100,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   announcement: 'New announcement (to all members)',
   custom_message: 'Custom message (admin-written, to all members)',
   consent_confirmation: 'Notification consent recorded (compliance receipt, to the member)',
-  contact_change_affirmation: 'Email or phone changed by the member (compliance receipt, to the member)',
+  contact_change_affirmation: 'Email or phone changed, by the member or an admin (compliance receipt, to old + new email)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -135,7 +135,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
   consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line'],
-  contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'affirmation_line'],
+  contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'changed_by_line', 'affirmation_line', 'device_summary_block', 'important_notice_line'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -623,7 +623,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
     subject: 'Your {{channel_label}} was updated',
     body_html: shell('Contact Detail Updated', `
       <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
-      <p style="${P}">This confirms you updated your own {{channel_label}} on file.</p>
+      <p style="${P}">{{changed_by_line}}</p>
       ${CARD_OPEN}
         <p style="${KICKER}">Previous</p>
         <p style="margin:0 0 12px;color:#1e293b;font-size:15px;font-weight:600;">{{old_value}}</p>
@@ -632,7 +632,10 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
         <p style="${KICKER}">When</p>
         <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{changed_at}} IST</p>
       ${CARD_CLOSE}
-      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
+      <p style="${KICKER}">Device recorded with this change</p>
+      <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
+      <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You'll need to consent again for this channel before it's used with the new detail.</p>
       ${CTA('Open the App →')}`),
   },
