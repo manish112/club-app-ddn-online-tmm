@@ -506,6 +506,12 @@ create table if not exists agenda_config (
   schedule_weekday                integer     not null default 6,
   schedule_start_time             text        not null default '19:30',
   schedule_end_time               text        not null default '21:00',
+  -- Applied to every new meeting's meeting_link at creation time. A TMoD (or
+  -- admin) can still overwrite their own meeting's link afterwards — clearing
+  -- it back to empty is what brings the "set a link" nudge back for that
+  -- meeting, since it then reads as "wants their own, hasn't set it yet"
+  -- rather than "never got one".
+  default_meeting_link            text,
   -- When true, /api/auto-schedule (the weekly cron) creates nothing — an admin
   -- who wants a break between meetings sets this instead of racing the cron.
   auto_schedule_paused            boolean     not null default false,
@@ -545,6 +551,7 @@ alter table agenda_config add column if not exists online_reservation_enabled   
 alter table agenda_config add column if not exists online_reservation_days_before  integer not null default 7;
 alter table agenda_config add column if not exists offline_reservation_enabled     boolean not null default true;
 alter table agenda_config add column if not exists offline_reservation_days_before integer not null default 2;
+alter table agenda_config add column if not exists default_meeting_link            text;
 alter table agenda_config add column if not exists timer_modes                     jsonb   not null default '{
   "icebreaker":  {"green": 240, "yellow": 300, "red": 360, "grace": 30},
   "speech":      {"green": 300, "yellow": 360, "red": 420, "grace": 30},

@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient();
 
   const [{ data: cfg }, { data: allMeetings }] = await Promise.all([
-    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles, auto_schedule_paused').single(),
+    supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_disabled_roles, default_meeting_link, auto_schedule_paused').single(),
     supabase.from('meetings').select('id, number, date, start_time, end_time, cancelled').order('number', { ascending: false }),
   ]);
 
@@ -101,6 +101,7 @@ export async function GET(req: NextRequest) {
       evaluator_slots: 1,
       base_speaker_slots: 1,
       disabled_roles: disabledRoles,
+      meeting_link: cfg.default_meeting_link || null,
     });
   }
 

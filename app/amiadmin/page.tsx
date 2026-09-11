@@ -31,7 +31,7 @@ const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
   { key: 'timer',      label: 'Timer' },
   { key: 'harkmaster', label: 'Harkmaster' },
 ];
-import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, offlineClaimWindow, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, offlineClaimWindow, normalizeMeetingLink, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -137,7 +137,7 @@ function toLocalDateStr(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-interface ScheduleConfig { weekday: number; startTime: string; endTime: string }
+interface ScheduleConfig { weekday: number; startTime: string; endTime: string; defaultMeetingLink?: string | null }
 
 // ─── Meeting form ──────────────────────────────────────────────────────────────
 
@@ -174,12 +174,14 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   });
   const [saving, setSaving] = useState(false);
 
-  // For a brand-new meeting, seed the role mix from the club-wide default.
+  // For a brand-new meeting, seed the role mix and meeting link from the
+  // club-wide defaults — the link is a starting point only, still editable.
   useEffect(() => {
     if (initial?.id) return;
-    supabase.from('agenda_config').select('default_disabled_roles').single().then(({ data }) => {
+    supabase.from('agenda_config').select('default_disabled_roles, default_meeting_link').single().then(({ data }) => {
       const defaults = (data?.default_disabled_roles ?? []) as RoleKey[];
       if (defaults.length) setForm(f => ({ ...f, disabled_roles: defaults }));
+      if (data?.default_meeting_link) setForm(f => ({ ...f, meeting_link: data.default_meeting_link }));
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1777,7 +1779,7 @@ function reservationOpenDayOptions(meetingWeekday: number): { days: number; labe
   });
 }
 
-function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
+function AgendaSettingsPanel({ meetings, onChanged }: { meetings: MeetingWithClaims[]; onChanged?: () => void }) {
   const supabase = createClient();
   const [vals, setVals] = useState({
     networking_mins: 10,
@@ -1791,6 +1793,8 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   const [autoSchedulePaused, setAutoSchedulePaused] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleConfig>({ weekday: 6, startTime: '19:30', endTime: '21:00' });
   const [defaultDisabledRoles, setDefaultDisabledRoles] = useState<RoleKey[]>([]);
+  const [defaultMeetingLink, setDefaultMeetingLink] = useState('');
+  const [linkError, setLinkError] = useState(false);
   const [timerModes, setTimerModes] = useState<TimerModes>(DEFAULT_TIMER_MODES);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1805,6 +1809,7 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
         setAutoSchedulePaused(data.auto_schedule_paused === true);
         setSchedule({ weekday: data.schedule_weekday ?? 6, startTime: data.schedule_start_time ?? '19:30', endTime: data.schedule_end_time ?? '21:00' });
         setDefaultDisabledRoles((data.default_disabled_roles ?? []) as RoleKey[]);
+        setDefaultMeetingLink(data.default_meeting_link ?? '');
         setTimerModes(normalizeModes(data.timer_modes));
       }
     });
@@ -1821,6 +1826,11 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
   }
 
   async function save() {
+    // undefined = typed something that can't be a URL; keep them in the field
+    // rather than saving a default nobody can join on.
+    const link = normalizeMeetingLink(defaultMeetingLink);
+    if (link === undefined) { setLinkError(true); return; }
+    setLinkError(false);
     setSaving(true);
     setSaveError(false);
     const { error } = await supabase.from('agenda_config').upsert({
@@ -1829,20 +1839,29 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
       schedule_start_time: schedule.startTime,
       schedule_end_time: schedule.endTime,
       default_disabled_roles: defaultDisabledRoles,
+      default_meeting_link: link,
       timer_modes: timerModes,
       online_reservation_enabled: reservationEnabled,
       offline_reservation_enabled: offlineReservationEnabled,
       auto_schedule_paused: autoSchedulePaused,
       updated_at: new Date().toISOString(),
     });
-    setSaving(false);
     if (error) {
       console.error('[agenda_config] save failed', error);
+      setSaving(false);
       setSaveError(true);
       setTimeout(() => setSaveError(false), 4000);
       return;
     }
+    // Meetings already on the calendar that never got their own link start
+    // using the new default immediately, same as brand-new ones will.
+    if (link) {
+      const ids = meetings.filter(m => !isMeetingPast(m) && !m.meeting_link?.trim()).map(m => m.id);
+      if (ids.length) await supabase.from('meetings').update({ meeting_link: link }).in('id', ids);
+    }
+    setSaving(false);
     setSaved(true); setTimeout(() => setSaved(false), 2500);
+    onChanged?.();
   }
 
   function numField(key: keyof typeof vals, label: string, hint?: string, min = 1) {
@@ -1919,6 +1938,17 @@ function AgendaSettingsPanel({ meetings }: { meetings: MeetingWithClaims[] }) {
                 );
               })}
             </div>
+          </div>
+          <div>
+            <p className={labelCls}>Default meeting link</p>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 mb-1.5">
+              Used by every meeting unless its TMoD sets their own. Saving here also fills it into any
+              upcoming meeting that doesn&apos;t have a link yet.
+            </p>
+            <input type="url" value={defaultMeetingLink}
+              onChange={e => { setDefaultMeetingLink(e.target.value); setLinkError(false); }}
+              placeholder="Zoom / Google Meet URL" className={inputCls} />
+            {linkError && <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mt-1">That doesn&apos;t look like a link.</p>}
           </div>
         </div>
         <button onClick={save} disabled={saving} className={`w-full ${saveError ? 'bg-red-600 hover:bg-red-700 text-white' : primaryBtn}`}>{saveError ? '✗ Save failed — retry' : saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Settings'}</button>
@@ -2504,14 +2534,14 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
       supabase.from('ballots').select('*'),
       supabase.from('guest_registrations').select('*').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*').eq('active', true).order('created_at', { ascending: false }).limit(1),
-      supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, auto_schedule_paused').single(),
+      supabase.from('agenda_config').select('schedule_weekday, schedule_start_time, schedule_end_time, default_meeting_link, auto_schedule_paused').single(),
     ]);
     if (m)  setMeetings(m as MeetingWithClaims[]);
     if (mb) setMembers(mb as Member[]);
     if (bl) setBallotsMap(new Map((bl as Ballot[]).map(b => [b.meeting_id, b])));
     if (gr) setGuestRegs(gr as GuestRegistration[]);
     setCurrentAnnouncement((ann as Announcement[] | null)?.[0] ?? null);
-    if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 6, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00' });
+    if (cfg) setScheduleConfig({ weekday: cfg.schedule_weekday ?? 6, startTime: cfg.schedule_start_time ?? '19:30', endTime: cfg.schedule_end_time ?? '21:00', defaultMeetingLink: cfg.default_meeting_link ?? null });
     setAutoSchedulePaused(cfg?.auto_schedule_paused === true);
     setLoading(false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2551,6 +2581,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         speaker_slots: 1,
         evaluator_slots: 1,
         base_speaker_slots: 1,
+        meeting_link: cfg.defaultMeetingLink || null,
       });
     }
     const { data: created } = await supabase.from('meetings').insert(rows).select('id');
@@ -2745,7 +2776,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
         {loading ? (
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-slate-200 dark:bg-slate-900/60 rounded-2xl h-32 animate-pulse" />)}</div>
         ) : tab === 'settings' ? (
-          <AgendaSettingsPanel meetings={meetings} />
+          <AgendaSettingsPanel meetings={meetings} onChanged={fetchAll} />
         ) : tab === 'email' ? (
           <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
         ) : tab === 'whatsapp' ? (
