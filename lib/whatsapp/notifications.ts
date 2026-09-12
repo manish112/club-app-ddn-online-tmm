@@ -278,6 +278,10 @@ export async function waSendNoRoleNudge(
     openRoleSlots(meeting.id),
     supabase.from('members').select(MEMBER_COLS),
   ]);
+  // A failed read must not read as "nothing to offer" — that's the bug that
+  // once suppressed this nudge (and the meeting-day role sheet) on a genuine
+  // vacancy. Skip loudly instead of silently.
+  if (open.error) return { skipped: `could not check open roles — ${open.error}` };
   // Every role is spoken for — asking someone to pick one would be nonsense.
   if (open.roles.length === 0) return { skipped: 'no open roles' };
 
@@ -331,9 +335,14 @@ async function roleSheetLines(meetingId: string): Promise<{ taken: string; open:
 
   return {
     taken: taken.length ? taken.join(LIST_SEP) : 'Nobody yet — the agenda is wide open.',
-    open: openSlots.roles.length
-      ? openSlots.roles.map(({ roleKey, slot }) => roleLabel(roleKey, slot)).join(LIST_SEP)
-      : 'None — every role is filled 🎉',
+    // A failed read renders as "couldn't check", never as "every role is
+    // filled" — that false positive is exactly what went out on 2026-09-12
+    // when GE and Timer were genuinely still open.
+    open: openSlots.error
+      ? 'Could not check just now — open the app for the latest.'
+      : openSlots.roles.length
+        ? openSlots.roles.map(({ roleKey, slot }) => roleLabel(roleKey, slot)).join(LIST_SEP)
+        : 'None — every role is filled 🎉',
   };
 }
 

@@ -510,11 +510,15 @@ async function openRolesFor(meetingId: string): Promise<{
   listHtml: string;
   /** Members already holding a role at this meeting — they don't need inviting. */
   claimedBy: Set<string>;
+  /** Set when the underlying read failed — count:0 in that case means
+   *  "couldn't tell", not "genuinely none open" (see lib/open-roles.ts). */
+  error: string | null;
 }> {
   // What counts as "open" is shared with the WhatsApp nudge (lib/open-roles.ts);
   // only the presentation differs.
-  const { roles: openRoles, claimedBy } = await openRoleSlots(meetingId);
-  if (openRoles.length === 0) return { count: 0, listHtml: '', claimedBy };
+  const { roles: openRoles, claimedBy, error } = await openRoleSlots(meetingId);
+  if (error) return { count: 0, listHtml: '', claimedBy, error };
+  if (openRoles.length === 0) return { count: 0, listHtml: '', claimedBy, error: null };
 
   // Multi-slot roles are numbered so "Prepared Speaker 2" reads unambiguously.
   const multiSlot = new Set(['speaker', 'evaluator']);
@@ -528,6 +532,7 @@ async function openRolesFor(meetingId: string): Promise<{
     count: openRoles.length,
     listHtml: `<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-top:1px solid #f1f5f9;">${rows}</table>`,
     claimedBy,
+    error: null,
   };
 }
 
@@ -540,6 +545,9 @@ export async function sendOpenRolesNudge(
     openRolesFor(meeting.id),
     supabase.from('members').select('id, name, display_name, email, active'),
   ]);
+  // A failed read must not read as "nothing to offer" — skip loudly instead
+  // of silently claiming the agenda is full when the check itself just failed.
+  if (open.error) return { skipped: `could not check open roles — ${open.error}` as const };
   // Every role is spoken for — say nothing rather than send an empty list.
   if (open.count === 0) return { skipped: 'no open roles' as const };
 
