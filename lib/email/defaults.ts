@@ -33,7 +33,8 @@ export type TemplateKey =
   | 'announcement'
   | 'custom_message'
   | 'consent_confirmation'
-  | 'contact_change_affirmation';
+  | 'contact_change_affirmation'
+  | 'terms_accepted';
 
 export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_created',
@@ -67,13 +68,15 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'custom_message',
   'consent_confirmation',
   'contact_change_affirmation',
+  'terms_accepted',
 ];
 
 // Compliance receipts, not notifications — the only templates allowed to
 // reach a member regardless of consent state. Shared by lib/email/mailer.ts's
 // deliver() gate and the manual "send to a member" admin tool
 // (app/api/admin/email-send-member/route.ts), so the two can't drift apart.
-export const CONSENT_EXEMPT_TEMPLATE_KEYS: TemplateKey[] = ['consent_confirmation', 'contact_change_affirmation'];
+export const CONSENT_EXEMPT_TEMPLATE_KEYS: TemplateKey[] =
+  ['consent_confirmation', 'contact_change_affirmation', 'terms_accepted'];
 
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   meeting_created:  'New meeting announced (to all members)',
@@ -107,6 +110,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   custom_message: 'Custom message (admin-written, to all members)',
   consent_confirmation: 'Notification consent recorded — service email, sent regardless of consent (to the member)',
   contact_change_affirmation: 'Email or phone changed, by the member or an admin — service email, sent regardless of consent (to old + new email)',
+  terms_accepted: 'Terms & Privacy Policy accepted — service email, sent regardless of consent (to the member)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -142,6 +146,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
   consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'origin_label', 'origin_value', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line', 'important_notice_line'],
   contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'changed_by_line', 'affirmation_line', 'device_summary_block', 'important_notice_line'],
+  terms_accepted: ['full_name', 'club_name', 'app_url', 'terms_version', 'accepted_at', 'device_summary_block', 'important_notice_line'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -646,6 +651,34 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You'll need to consent again for this channel before it's used with the new detail.</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  // A compliance receipt, not a notification — sent once when a member accepts
+  // the Terms & Conditions / Privacy Policy gate (see
+  // components/TermsGateModal.tsx and lib/member-consent.ts's
+  // recordTermsAcceptance()). Exempt from the consent gate in
+  // lib/email/mailer.ts's deliver() for the same reason consent_confirmation
+  // is — always CC'd to the same fixed record-keeping address.
+  terms_accepted: {
+    subject: 'Your Terms & Privacy Policy acceptance — {{club_name}}',
+    body_html: shell('Terms & Privacy Accepted', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">This confirms your acceptance of our Terms &amp; Conditions and Privacy Policy — and your
+      affirmation that you had already been agreeing to them since you began using this app, with no issues.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">Version accepted</p>
+        <p style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:700;">{{terms_version}}</p>
+        <p style="${KICKER}">When</p>
+        <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{accepted_at}} IST</p>
+      ${CARD_CLOSE}
+      <p style="${KICKER}">Device recorded with this acceptance</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">This email is also an assurance
+      that you have agreed to the updated Terms &amp; Conditions and Privacy Policy of the app hosted at
+      <a href="{{app_url}}" style="color:#9d1530;">{{app_url}}</a>.</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can read the Terms &amp; Conditions and Privacy Policy anytime from the app.</p>
       ${CTA('Open the App →')}`),
   },
 };

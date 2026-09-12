@@ -548,6 +548,27 @@ function ProfileCard({ member, onUpdated }: { member: Member; onUpdated: () => v
           )}
         </div>
       )}
+
+      {/* Standing acknowledgement, not another consent decision — accepting
+          this is a condition of using the app at all (see TermsGateModal,
+          shown at sign-in), so it's shown here as a record, not a toggle. */}
+      <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+        <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed">
+          By using this app, I agree to all the{' '}
+          <Link href="/terms" target="_blank" className="text-maroon-600 dark:text-maroon-400 font-semibold underline underline-offset-2">
+            Terms and Conditions
+          </Link>{' '}
+          and have understood the{' '}
+          <Link href="/privacy" target="_blank" className="text-maroon-600 dark:text-maroon-400 font-semibold underline underline-offset-2">
+            Privacy Policy
+          </Link>.
+        </p>
+        {member.terms_accepted_at && (
+          <p className="text-[10px] text-slate-300 dark:text-slate-600 mt-1">
+            Accepted {formatIst(member.terms_accepted_at)}
+          </p>
+        )}
+      </div>
     </div>
     {consentModal}
     </>

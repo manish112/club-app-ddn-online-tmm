@@ -6,6 +6,7 @@ import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { TmodReminderModal } from '@/components/TmodReminderModal';
 import { ConsentGateModal, memberNeedsConsentGate } from '@/components/ConsentGateModal';
+import { TermsGateModal, memberNeedsTermsGate } from '@/components/TermsGateModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type { MeetingWithClaims, Member, ParticipationMode } from '@/lib/types';
 import { isClubOfficer, hasLeadershipRole, participationMode as readParticipationMode, WIC_CLUB_NAME } from '@/lib/types';
@@ -142,6 +143,10 @@ export default function Home() {
   // MemberPicker's flow, so the gate can't live there alone or a returning
   // member with a pending decision would never be asked again.
   const needsConsent = !!currentMember && memberNeedsConsentGate(currentMember);
+  // Checked ahead of needsConsent — accepting the Terms & Privacy gate is the
+  // more foundational step, so it's asked first when both are outstanding
+  // (e.g. a brand-new member, who has answered neither yet).
+  const needsTerms = !!currentMember && memberNeedsTermsGate(currentMember);
 
   // Read separately from the members list (which doesn't select this column) so
   // a missing migration degrades to the default rather than breaking sign-in.
@@ -506,7 +511,9 @@ export default function Home() {
 
 
 
-      {needsConsent && currentMember ? (
+      {needsTerms && currentMember ? (
+        <TermsGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
+      ) : needsConsent && currentMember ? (
         <ConsentGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
       ) : tmodReminder && (
         <TmodReminderModal
