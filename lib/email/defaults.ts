@@ -621,6 +621,8 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="${KICKER}">Device recorded with this consent</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
       {{retro_line}}
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">This decision was given at your
+      own free will, under no coercion or pressure.</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can review or change this anytime from your profile in the app.</p>
       ${CTA('Open the App →')}`),
@@ -649,6 +651,8 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="${KICKER}">Device recorded with this change</p>
       <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
       <p style="margin:0 0 20px;color:#64748b;font-size:13px;line-height:1.6;font-style:italic;">{{affirmation_line}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">This change was made at your own
+      free will, under no coercion or pressure.</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You'll need to consent again for this channel before it's used with the new detail.</p>
       ${CTA('Open the App →')}`),
@@ -677,6 +681,9 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">This email is also an assurance
       that you have agreed to the updated Terms &amp; Conditions and Privacy Policy of the app hosted at
       <a href="{{app_url}}" style="color:#9d1530;">{{app_url}}</a>.</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You have accepted both the
+      previous and this revised Terms &amp; Conditions and Privacy Policy at your own free will, under no
+      coercion or pressure.</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can read the Terms &amp; Conditions and Privacy Policy anytime from the app.</p>
       ${CTA('Open the App →')}`),
