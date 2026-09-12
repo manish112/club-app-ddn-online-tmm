@@ -516,6 +516,23 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
         >
           {passwordLoading ? 'Checking…' : "That's me"}
         </button>
+
+        {/* Covers both paths above — a returning member and a guest — since
+            neither goes through a per-person consent record the way a member's
+            own account does later (a guest has no member row to attach one
+            to). This is the one place both are told, before either continues. */}
+        <p className="text-[11px] text-slate-400 dark:text-slate-500 text-center mt-3 leading-relaxed">
+          By signing in to this app, I agree to the{' '}
+          <a href="/terms" target="_blank" rel="noopener noreferrer"
+            className="text-maroon-600 dark:text-maroon-400 font-semibold underline underline-offset-2">
+            Terms &amp; Conditions
+          </a>{' '}and{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer"
+            className="text-maroon-600 dark:text-maroon-400 font-semibold underline underline-offset-2">
+            Privacy Policy
+          </a>{' '}of this app — and affirm, of my own free will, that I have already been agreeing to them
+          since I began using this app, with no issues.
+        </p>
       </div>
     </div>
   );
