@@ -655,9 +655,17 @@ export async function previewActivityRun(
 ) {
   const supabase = createServiceClient();
   const { data: members } = await supabase
-    .from('members').select('id, name, display_name, active, email').eq('active', true).order('name');
+    .from('members').select('id, name, display_name, active, email, email_consent_status, email_notifications')
+    .eq('active', true).order('name');
 
-  const recipients: { id: string; name: string; email: string; template: ActivityTemplate }[] = [];
+  const recipients: {
+    id: string; name: string; email: string; template: ActivityTemplate;
+    // Listed so the dry run stays "preview for everyone who'd be selected",
+    // not "preview for who'd actually receive it" — this flags the gap: the
+    // real send below goes through sendOne()'s consent gate and silently
+    // skips anyone false here, same as it would for a real send.
+    canReceive: boolean;
+  }[] = [];
   let passedOver = 0;
   let skipped = 0;
 
@@ -673,6 +681,7 @@ export async function previewActivityRun(
       name: (m.display_name as string) || (m.name as string),
       email: built.email,
       template: built.templateKey,
+      canReceive: m.email_consent_status === 'granted' && m.email_notifications !== false,
     });
   }
   return { recipients, passedOver, skipped };

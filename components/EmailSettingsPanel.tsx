@@ -341,11 +341,25 @@ function ActivityReportCard({ currentAdminId, members }: { currentAdminId: strin
   type Sample = { subject: string; html: string; template: string; to: string };
   const [preview, setPreview] = useState<Sample | null>(null);
   // Dry run of a club-wide send: exactly who'd be emailed, and what they'd get.
+  // `canReceive: false` means this member matches but sendActivityReportToAll
+  // will silently skip them (deliver()'s consent gate) — listed anyway since
+  // this preview intentionally covers everyone who'd be selected, not just
+  // who'd actually receive something.
   const [dryRun, setDryRun] = useState<
-    { recipients: { id: string; name: string; template: string }[]; passedOver: number; skipped: number } | null
+    | { recipients: { id: string; name: string; template: string; canReceive: boolean }[]; passedOver: number; skipped: number }
+    | null
   >(null);
 
   const withEmail = members.filter((m) => m.email && m.active);
+  // sendMemberActivityReport/sendActivityReportToAll both send through
+  // sendOne(), so deliver()'s consent gate (lib/email/mailer.ts) already
+  // silently skips anyone not consented/opted-in — this just surfaces that
+  // *before* the click for the single-member case, rather than after a failed
+  // send. Preview is deliberately not gated the same way: it never sends
+  // anything, so it stays available for any member, consenting or not.
+  const selectedMember = audience === 'one' ? withEmail.find((m) => m.id === memberId) : undefined;
+  const selectedCanReceive = !selectedMember
+    || (selectedMember.email_consent_status === 'granted' && selectedMember.email_notifications !== false);
   const payload = () => ({
     adminId: currentAdminId,
     memberId,
@@ -450,6 +464,12 @@ function ActivityReportCard({ currentAdminId, members }: { currentAdminId: strin
               {members.length - withEmail.length} inactive or without an email are hidden.
             </p>
           )}
+          {selectedMember && !selectedCanReceive && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+              TM {selectedMember.display_name} hasn&apos;t consented to email, or has muted it — you can still
+              preview what they&apos;d receive, but sending is disabled.
+            </p>
+          )}
         </div>
       ) : audience === 'all' ? (
         <p className="text-xs text-slate-500 dark:text-slate-400 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2 leading-relaxed">
@@ -485,7 +505,9 @@ function ActivityReportCard({ currentAdminId, members }: { currentAdminId: strin
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={send} disabled={busy || (audience === 'one' && !memberId) || (period === 'month' && !month)} className={primaryBtn}>
+        <button onClick={send}
+          disabled={busy || (audience === 'one' && (!memberId || !selectedCanReceive)) || (period === 'month' && !month)}
+          className={primaryBtn}>
           {busy ? 'Working…'
             : audience === 'all' ? `Send to ${withEmail.length} members`
             : audience === 'without_roles' ? 'Send reminders'
@@ -514,11 +536,15 @@ function ActivityReportCard({ currentAdminId, members }: { currentAdminId: strin
             <div className="flex flex-wrap gap-1.5">
               {dryRun.recipients.map((r) => (
                 <span key={r.id}
-                  title={r.template === 'activity_encouragement' ? 'Gets the pick-a-role reminder' : 'Gets their activity report'}
+                  title={!r.canReceive
+                    ? "Matches, but hasn't consented to email (or has muted it) — sending will skip them"
+                    : r.template === 'activity_encouragement' ? 'Gets the pick-a-role reminder' : 'Gets their activity report'}
                   className={`text-[11px] font-medium px-2 py-1 rounded-lg border ${
-                    r.template === 'activity_encouragement'
-                      ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/60'
+                    !r.canReceive
+                      ? 'bg-slate-50 dark:bg-slate-800/60 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700/60 line-through'
+                      : r.template === 'activity_encouragement'
+                        ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50'
+                        : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/60'
                   }`}>
                   TM {r.name}
                 </span>
@@ -526,6 +552,10 @@ function ActivityReportCard({ currentAdminId, members }: { currentAdminId: strin
             </div>
           )}
           <p className="text-[11px] text-slate-400 mt-2">
+            {dryRun.recipients.some((r) => !r.canReceive) && (
+              <>{dryRun.recipients.filter((r) => !r.canReceive).length} matched but haven&apos;t consented to email
+                (or muted it) — struck through above, and skipped when actually sent. </>
+            )}
             {dryRun.passedOver > 0 && <>{dryRun.passedOver} already took a role and would be skipped. </>}
             {dryRun.skipped > 0 && <>{dryRun.skipped} have no email on file. </>}
             Nothing has been sent yet.
@@ -595,7 +625,7 @@ function CustomMessageCard({ currentAdminId }: { currentAdminId: string }) {
     <div className={`${cardCls} p-5 space-y-3`}>
       <div>
         <h3 className="font-serif font-semibold text-slate-900 dark:text-slate-100 text-sm mb-0.5">Message all members</h3>
-        <p className="text-xs text-slate-500">Write a message (bold, italic, images) and email it individually to every member (they see &ldquo;Dear TM &lt;name&gt;&rdquo;). Opted-out members are skipped.</p>
+        <p className="text-xs text-slate-500">Write a message (bold, italic, images) and email it individually to every member (they see &ldquo;Dear TM &lt;name&gt;&rdquo;). Members who haven&apos;t consented to email, or have muted it, are skipped.</p>
       </div>
       <div>
         <span className={labelCls}>Subject</span>
