@@ -137,6 +137,10 @@ export interface Member {
   gender: 'male' | 'female' | 'other' | null;
   avatar_url: string | null;
   show_phone_in_contact: boolean;
+  // Present only where explicitly selected (e.g. app/amiadmin/page.tsx's
+  // `select('*')`) — never on the leaner queries most of the app uses. Used
+  // only to tell whether a member currently has one set, never to read it.
+  password_hash?: string | null;
   email_notifications?: boolean;   // opt-out flag; undefined/true = receives emails
   // The two WhatsApp bits, and the order matters: the admin gate decides whether
   // the club is willing to pay to message this member at all (off for anyone

@@ -38,12 +38,12 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
-  // Only asked for once the server says one's needed — a member whose
-  // password was reset (admin panel or the WhatsApp menu bot) has one waiting
-  // for them; a brand-new member setting a password for the first time never
-  // does. See app/api/set-password/route.ts.
+  // Shown alongside the password fields from the start (not revealed only
+  // after a failed attempt) — a member whose password was reset (admin panel
+  // or the WhatsApp menu bot) has one waiting for them; a brand-new member
+  // setting a password for the first time just leaves it blank. Enforced
+  // server-side either way — see app/api/set-password/route.ts.
   const [resetCode, setResetCode] = useState('');
-  const [codeRequired, setCodeRequired] = useState(false);
 
   const [intro, setIntro] = useState('');
   const [city, setCity] = useState('');
@@ -52,6 +52,18 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Reused by both the "forgot password" note and the "need a code" one —
+  // whoever's in the president/VP Education seats is who a member without
+  // either would actually go ask.
+  function officerNames() {
+    const president = members.find(m => hasLeadershipRole(m, 'president'));
+    const vpEd = members.find(m => hasLeadershipRole(m, 'vp_education'));
+    const names = [president, vpEd].filter(Boolean).map(m => <strong key={m!.id}>TM {m!.display_name}</strong>);
+    if (names.length === 0) return <strong>your club officer</strong>;
+    if (names.length === 1) return names[0];
+    return <>{names[0]} or {names[1]}</>;
+  }
 
   const selectedMember = members.find((m) => m.id === selected);
 
@@ -104,7 +116,6 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
     setNewPassword('');
     setConfirmPassword('');
     setResetCode('');
-    setCodeRequired(false);
     if (data?.password_hash) {
       setStep('verify_password');
     } else {
@@ -138,7 +149,6 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   async function handleSetPassword() {
     if (newPassword.length < 6) { setPasswordError('Password must be at least 6 characters.'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('Passwords do not match.'); return; }
-    if (codeRequired && !resetCode.trim()) { setPasswordError('Enter the verification code you were given.'); return; }
     setPasswordLoading(true);
     setPasswordError('');
     const salt = generateSalt();
@@ -151,8 +161,7 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
     setPasswordLoading(false);
     if (res.ok) { proceedAfterAuth(); return; }
     if (data.error === 'code_required') {
-      setCodeRequired(true);
-      setPasswordError('Your password was reset — enter the verification code you were given to continue.');
+      setPasswordError('Your password was reset — enter the verification code you were given above to continue.');
       return;
     }
     if (data.error === 'invalid_code') {
@@ -369,16 +378,13 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
           </button>
           <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              🔒 <strong>Forgot your password?</strong> Contact{' '}
-              {(() => {
-                const president = members.find(m => hasLeadershipRole(m, 'president'));
-                const vpEd = members.find(m => hasLeadershipRole(m, 'vp_education'));
-                const names = [president, vpEd].filter(Boolean).map(m => <strong key={m!.id}>TM {m!.display_name}</strong>);
-                if (names.length === 0) return <strong>your club officer</strong>;
-                if (names.length === 1) return names[0];
-                return <>{names[0]} or {names[1]}</>;
-              })()}{' '}
-              to reset it.
+              🔒 <strong>Forgot your password?</strong> Contact {officerNames()}{' '}
+              {selectedMember?.whatsapp_consent_status === 'granted' ? (
+                <>to reset it, or send <strong>Hi</strong> to our club&apos;s WhatsApp number and pick
+                &ldquo;Reset my password&rdquo; from the menu.</>
+              ) : (
+                <>to reset it.</>
+              )}
             </p>
           </div>
         </div>
@@ -406,25 +412,31 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
               placeholder="New password (min 6 characters)" autoFocus className={inputCls} />
             <input type="password" value={confirmPassword}
               onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(''); }}
-              onKeyDown={(e) => { if (!codeRequired && e.key === 'Enter') handleSetPassword(); }}
               placeholder="Confirm password" className={inputCls} />
-            {codeRequired && (
-              <input type="text" inputMode="numeric" value={resetCode}
-                onChange={(e) => { setResetCode(e.target.value); setPasswordError(''); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSetPassword(); }}
-                placeholder="Verification code" className={inputCls} />
-            )}
+            <input type="text" inputMode="numeric" value={resetCode}
+              onChange={(e) => { setResetCode(e.target.value); setPasswordError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSetPassword(); }}
+              placeholder="Verification code" className={inputCls} />
           </div>
           {passwordError && <p className="text-xs text-red-500 mb-3">{passwordError}</p>}
-          <button onClick={handleSetPassword} disabled={passwordLoading || !newPassword || !confirmPassword}
+          <button onClick={handleSetPassword}
+            disabled={passwordLoading || !newPassword || !confirmPassword || !resetCode.trim()}
             className={`${primaryBtnCls} mb-3`}>
             {passwordLoading ? 'Saving…' : 'Set Password'}
           </button>
           <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              🔒 A password is required before you can continue — it&apos;s what stops anyone who knows your
-              name from signing in as you.{codeRequired && ' Your password was reset, so you\'ll also need the '
-                + 'verification code you were given (by an admin, or in the WhatsApp reply).'}
+              🔒 A verification code is required — it&apos;s what stops anyone who knows your name from
+              signing in as you. Don&apos;t have one? Contact {officerNames()}{' '}
+              {selectedMember?.whatsapp_consent_status === 'granted' ? (
+                <>to get one, or send <strong>Hi</strong> to our club&apos;s WhatsApp number and pick
+                &ldquo;Reset my password&rdquo; from the menu.</>
+              ) : (
+                // WhatsApp self-service needs granted consent, which a member
+                // can only give AFTER their first sign-in — so a brand-new
+                // member (or anyone who hasn't consented) has just this one way.
+                <>to get one.</>
+              )}
             </p>
           </div>
         </div>

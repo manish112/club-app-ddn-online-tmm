@@ -768,10 +768,12 @@ function PasswordCard({ member }: { member: Member }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   // Only relevant to mode === 'set' — 'change' already proves identity by
-  // requiring the current password. See app/api/set-password/route.ts and
-  // lib/password-reset.ts for why this can't be skipped for a reset account.
+  // requiring the current password. Always required for 'set', including a
+  // brand-new member's very first password: deliberately not automated, so a
+  // club officer (or, once WhatsApp is consented to, the menu bot) is always
+  // the one issuing it. See app/api/set-password/route.ts and
+  // lib/password-reset.ts.
   const [resetCode, setResetCode] = useState('');
-  const [codeRequired, setCodeRequired] = useState(false);
 
   useEffect(() => {
     supabase.from('members').select('password_hash').eq('id', member.id).single()
@@ -780,14 +782,14 @@ function PasswordCard({ member }: { member: Member }) {
 
   function reset() {
     setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false); setMode('idle');
-    setResetCode(''); setCodeRequired(false);
+    setResetCode('');
   }
 
   async function handleSave() {
     setError('');
     if (newPw.length < 6) { setError('Password must be at least 6 characters.'); return; }
     if (newPw !== confirmPw) { setError('Passwords do not match.'); return; }
-    if (mode === 'set' && codeRequired && !resetCode.trim()) {
+    if (mode === 'set' && !resetCode.trim()) {
       setError('Enter the verification code you were given.'); return;
     }
     setSaving(true);
@@ -825,8 +827,7 @@ function PasswordCard({ member }: { member: Member }) {
       return;
     }
     if (data.error === 'code_required') {
-      setCodeRequired(true);
-      setError('Your password was reset — enter the verification code you were given to continue.');
+      setError('Enter the verification code you were given.');
       return;
     }
     if (data.error === 'invalid_code') {
@@ -888,7 +889,7 @@ function PasswordCard({ member }: { member: Member }) {
           <input type="password" value={confirmPw} onChange={(e) => { setConfirmPw(e.target.value); setError(''); }}
             onKeyDown={(e) => { if (mode === 'change' && e.key === 'Enter') handleSave(); }}
             placeholder="Confirm new password" className={inputCls} />
-          {mode === 'set' && codeRequired && (
+          {mode === 'set' && (
             <input type="text" inputMode="numeric" value={resetCode}
               onChange={(e) => { setResetCode(e.target.value); setError(''); }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
@@ -896,7 +897,7 @@ function PasswordCard({ member }: { member: Member }) {
           )}
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <button onClick={handleSave} disabled={saving} className={primaryBtnCls}>
+            <button onClick={handleSave} disabled={saving || (mode === 'set' && !resetCode.trim())} className={primaryBtnCls}>
               {saving ? 'Saving…' : 'Save Password'}
             </button>
             <button onClick={reset} className="px-4 py-2.5 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 min-h-[44px]">
@@ -904,9 +905,19 @@ function PasswordCard({ member }: { member: Member }) {
             </button>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-3 mt-1">
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              🔒 <strong>Forgot your password?</strong> Contact <strong>TM Manish Singh</strong> to hard reset it.
-            </p>
+            {mode === 'set' ? (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                🔒 <strong>Don&apos;t have a verification code?</strong> Contact <strong>TM Manish Singh</strong>
+                {' '}to get one{member.whatsapp_consent_status === 'granted' && (
+                  <>, or send <strong>Hi</strong> to our club&apos;s WhatsApp number and pick &ldquo;Reset my
+                  password&rdquo; from the menu</>
+                )}.
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                🔒 <strong>Forgot your current password?</strong> Contact <strong>TM Manish Singh</strong> to reset it.
+              </p>
+            )}
           </div>
         </div>
       )}

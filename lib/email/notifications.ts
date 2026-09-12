@@ -386,6 +386,37 @@ export async function notifyTermsAccepted(params: {
   return sendOneCc('terms_accepted', target.email, [ccEmail], vars);
 }
 
+// ── Password changed receipt (1:1, CC'd to a fixed compliance address) ─────
+// Fired from every path that sets or clears a password — self-service
+// (sign-in screen or profile page), an admin's reset, or the WhatsApp menu
+// bot's "Reset my password" option — so a member is always told, especially
+// if it wasn't them. Exempt from the consent gate the same way
+// notifyConsentDecision is: a security receipt, not a notification.
+export async function notifyPasswordChanged(params: {
+  target: { id: string; name: string; display_name: string; email: string | null };
+  changedAt: string; // ISO
+  device: Record<string, string | null> | null;
+  ccEmail: string;
+}) {
+  const { target, changedAt, device, ccEmail } = params;
+  if (!target.email) return { skipped: 'no email' };
+
+  const vars = {
+    club_name: CLUB_NAME,
+    app_url: await getAppUrl(),
+    full_name: target.name || target.display_name,
+    changed_at: (() => {
+      const ist = new Date(new Date(changedAt).getTime() + IST_OFFSET_MS).toISOString();
+      return `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`;
+    })(),
+    device_summary_block: formatDeviceSummary(device),
+    important_notice_line: 'This is a transactional record of an action on your account, not a notification '
+      + '— it falls outside your notification preference, which governs ongoing meeting and role emails only.',
+  };
+
+  return sendOneCc('password_changed', target.email, [ccEmail], vars);
+}
+
 // Fired the moment a member grants email consent — same template the mass
 // broadcastWelcome() sends, just for one member instead of the whole club.
 export async function notifyWelcomeEmail(
