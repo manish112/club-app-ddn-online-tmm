@@ -276,6 +276,13 @@ export async function notifyConsentDecision(params: {
       return `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`;
     })(),
     device_summary_block: deviceSummary,
+    // Same disclaimer wording as contact_change_affirmation's — both are
+    // compliance receipts exempt from the consent gate in lib/email/mailer.ts's
+    // deliver(), framed as a category exemption (this isn't a notification)
+    // rather than "sent regardless of your choice", which reads as overriding
+    // the member's preference rather than correctly falling outside it.
+    important_notice_line: 'This is a transactional record of an action on your account, not a notification '
+      + '— it falls outside your notification preference, which governs ongoing meeting and role emails only.',
   };
 
   return sendOneCc('consent_confirmation', target.email, [ccEmail], vars);
@@ -336,8 +343,10 @@ export async function notifyContactChangeAffirmation(params: {
         + `they had fully consented for it and had no issues with it. ${memberName} had, on their own free `
         + 'will, acknowledged this change on the form while submitting this change.',
     device_summary_block: formatDeviceSummary(device),
-    important_notice_line: 'This is an important service message confirming a change to your contact record '
-      + '— it is sent irrespective of your notification preference.',
+    // Framed as a category exemption (this isn't a notification) rather than
+    // "sent regardless of your choice" — see notifyConsentDecision above.
+    important_notice_line: 'This is a transactional record of an action on your account, not a notification '
+      + '— it falls outside your notification preference, which governs ongoing meeting and role emails only.',
   };
 
   return sendOneCc('contact_change_affirmation', recipientEmail, [ccEmail], vars);
@@ -646,9 +655,17 @@ export async function previewActivityRun(
 ) {
   const supabase = createServiceClient();
   const { data: members } = await supabase
-    .from('members').select('id, name, display_name, active, email').eq('active', true).order('name');
+    .from('members').select('id, name, display_name, active, email, email_consent_status, email_notifications')
+    .eq('active', true).order('name');
 
-  const recipients: { id: string; name: string; email: string; template: ActivityTemplate }[] = [];
+  const recipients: {
+    id: string; name: string; email: string; template: ActivityTemplate;
+    // Listed so the dry run stays "preview for everyone who'd be selected",
+    // not "preview for who'd actually receive it" — this flags the gap: the
+    // real send below goes through sendOne()'s consent gate and silently
+    // skips anyone false here, same as it would for a real send.
+    canReceive: boolean;
+  }[] = [];
   let passedOver = 0;
   let skipped = 0;
 
@@ -664,6 +681,7 @@ export async function previewActivityRun(
       name: (m.display_name as string) || (m.name as string),
       email: built.email,
       template: built.templateKey,
+      canReceive: m.email_consent_status === 'granted' && m.email_notifications !== false,
     });
   }
   return { recipients, passedOver, skipped };

@@ -48,8 +48,13 @@ export async function POST(req: NextRequest) {
   if (!settings || !settings.enabled) return NextResponse.json({ error: 'Email is disabled in settings' }, { status: 400 });
 
   const supabase = createServiceClient();
-  const { data: members } = await supabase.from('members').select('id, name, display_name, email, active, email_notifications');
-  const active = (members ?? []).filter((m) => m.active && m.email && m.email_notifications !== false);
+  const { data: members } = await supabase
+    .from('members').select('id, name, display_name, email, active, email_notifications, email_consent_status');
+  // sendCustomEmail below bypasses lib/email/mailer.ts's deliver() (and its
+  // consent gate) entirely, so this filter has to reproduce that gate itself —
+  // same rule as /api/admin/email-send-member: granted consent AND not muted.
+  const active = (members ?? []).filter(
+    (m) => m.active && m.email && m.email_consent_status === 'granted' && m.email_notifications !== false);
   if (active.length === 0) return NextResponse.json({ ok: true, recipients: 0 });
 
   const tpl = await resolveTemplate('custom_message');

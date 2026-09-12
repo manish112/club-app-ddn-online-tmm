@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { createServiceClient } from '@/utils/supabase/server';
-import { DEFAULT_TEMPLATES, type TemplateKey } from './defaults';
+import { DEFAULT_TEMPLATES, CONSENT_EXEMPT_TEMPLATE_KEYS, type TemplateKey } from './defaults';
 import { fillTemplate, type TemplateVars } from './render';
 import { decodeEntities } from './format';
 
@@ -159,7 +159,7 @@ async function deliver(opts: DeliverOpts): Promise<SendResult> {
   // regardless of consent state: consent_confirmation (a record of a decision
   // just made) and contact_change_affirmation (see lib/member-consent.ts and
   // the /api/contact-change route respectively).
-  if (key !== 'consent_confirmation' && key !== 'contact_change_affirmation') {
+  if (!CONSENT_EXEMPT_TEMPLATE_KEYS.includes(key)) {
     const { data: rows } = await supabase.from('members').select('email, email_notifications, email_consent_status');
     // Two independent gates, both required: consent is a permanent record —
     // once 'granted' it never reverts — but email_notifications is the

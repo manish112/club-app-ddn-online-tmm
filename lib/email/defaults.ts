@@ -69,6 +69,12 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'contact_change_affirmation',
 ];
 
+// Compliance receipts, not notifications — the only templates allowed to
+// reach a member regardless of consent state. Shared by lib/email/mailer.ts's
+// deliver() gate and the manual "send to a member" admin tool
+// (app/api/admin/email-send-member/route.ts), so the two can't drift apart.
+export const CONSENT_EXEMPT_TEMPLATE_KEYS: TemplateKey[] = ['consent_confirmation', 'contact_change_affirmation'];
+
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   meeting_created:  'New meeting announced (to all members)',
   role_assigned:    'Role assigned (to the member)',
@@ -99,8 +105,8 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   mentor_assigned_to_mentor: 'Mentor assigned — to the mentor (shows mentee bio)',
   announcement: 'New announcement (to all members)',
   custom_message: 'Custom message (admin-written, to all members)',
-  consent_confirmation: 'Notification consent recorded (compliance receipt, to the member)',
-  contact_change_affirmation: 'Email or phone changed, by the member or an admin (compliance receipt, to old + new email)',
+  consent_confirmation: 'Notification consent recorded — service email, sent regardless of consent (to the member)',
+  contact_change_affirmation: 'Email or phone changed, by the member or an admin — service email, sent regardless of consent (to old + new email)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -134,7 +140,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   mentor_assigned_to_mentor: ['full_name', 'mentee_name', 'mentee_bio_block', 'club_name', 'app_url'],
   announcement: ['full_name', 'club_name', 'app_url', 'message_body'],
   custom_message: ['full_name', 'club_name', 'app_url', 'subject', 'message_body'],
-  consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'origin_label', 'origin_value', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line'],
+  consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'origin_label', 'origin_value', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line', 'important_notice_line'],
   contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'changed_by_line', 'affirmation_line', 'device_summary_block', 'important_notice_line'],
 };
 
@@ -610,6 +616,7 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       <p style="${KICKER}">Device recorded with this consent</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
       {{retro_line}}
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can review or change this anytime from your profile in the app.</p>
       ${CTA('Open the App →')}`),
   },
