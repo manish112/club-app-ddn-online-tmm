@@ -143,9 +143,11 @@ export default function Home() {
   // MemberPicker's flow, so the gate can't live there alone or a returning
   // member with a pending decision would never be asked again.
   const needsConsent = !!currentMember && memberNeedsConsentGate(currentMember);
-  // Checked ahead of needsConsent — accepting the Terms & Privacy gate is the
-  // more foundational step, so it's asked first when both are outstanding
-  // (e.g. a brand-new member, who has answered neither yet).
+  // Checked AFTER needsConsent, deliberately — the Terms gate's own
+  // confirmation email (notifyTermsAccepted) needs an email on file to send
+  // to, and the consent gate is where a first-time member supplies or
+  // corrects that email. Asking Terms first, for a member with no email yet,
+  // would silently skip that receipt with nothing to show for it.
   const needsTerms = !!currentMember && memberNeedsTermsGate(currentMember);
 
   // Read separately from the members list (which doesn't select this column) so
@@ -511,10 +513,10 @@ export default function Home() {
 
 
 
-      {needsTerms && currentMember ? (
-        <TermsGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
-      ) : needsConsent && currentMember ? (
+      {needsConsent && currentMember ? (
         <ConsentGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
+      ) : needsTerms && currentMember ? (
+        <TermsGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
       ) : tmodReminder && (
         <TmodReminderModal
           meeting={tmodReminder.meeting}
