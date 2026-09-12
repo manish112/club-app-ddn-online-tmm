@@ -4,6 +4,7 @@ import type { Member } from '@/lib/types';
 import { RichMessageEditor } from '@/components/RichMessageEditor';
 import { createClient } from '@/utils/supabase/client';
 import { formatMeetingDate, formatTime } from '@/lib/utils';
+import { CONSENT_EXEMPT_TEMPLATE_KEYS } from '@/lib/email/defaults';
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -708,6 +709,22 @@ function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
   // Templates that render meeting details are filled from the next meeting.
   const needsMeeting = (placeholders[templateKey] ?? []).includes('meeting_number');
 
+  // Every template except the two compliance receipts requires the member's
+  // own granted, unmuted consent — same rule /api/admin/email-send-member
+  // enforces server-side. Narrowing the picker to only who's actually
+  // reachable keeps an admin from choosing someone the send will just reject.
+  const isExempt = CONSENT_EXEMPT_TEMPLATE_KEYS.includes(templateKey as never);
+  const sendable = isExempt
+    ? withEmail
+    : withEmail.filter((m) => m.email_consent_status === 'granted' && m.email_notifications !== false);
+
+  // Switching to a template that the currently-picked member isn't reachable
+  // for (e.g. they've muted email, or only the compliance receipts got them
+  // in the list) clears the pick rather than leaving a stale, now-invalid one.
+  useEffect(() => {
+    if (targetId && !sendable.some((m) => m.id === targetId)) setTargetId('');
+  }, [templateKey, targetId, sendable]);
+
   // Render exactly what this member would receive — their name, their roles,
   // the meeting it would reference — without sending anything.
   async function showPreview() {
@@ -726,7 +743,7 @@ function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
   async function send() {
     if (!targetId || !templateKey) return;
     const current = needsMeeting ? await reload() : null;
-    const who = withEmail.find((m) => m.id === targetId);
+    const who = sendable.find((m) => m.id === targetId);
     const detail = current ? `\n\n${meetingSummary(current)}` : '';
     if (!confirm(`Send "${labels[templateKey]}" to TM ${who?.display_name ?? 'this member'}?${detail}`)) return;
     setSending(true); setMsg(null);
@@ -748,18 +765,28 @@ function SendToMember({ currentAdminId, members, keys, labels, placeholders }: {
       <div>
         <span className={labelCls}>Notification</span>
         <select value={templateKey} onChange={(e) => setTemplateKey(e.target.value)} className={inputCls}>
-          {keys.map((k) => <option key={k} value={k}>{labels[k]}</option>)}
+          {keys.map((k) => (
+            <option key={k} value={k}>
+              {labels[k]}{CONSENT_EXEMPT_TEMPLATE_KEYS.includes(k as never) ? ' — service email' : ''}
+            </option>
+          ))}
         </select>
       </div>
       <div>
         <span className={labelCls}>Member</span>
         <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={inputCls}>
           <option value="">Select a member…</option>
-          {withEmail.map((m) => <option key={m.id} value={m.id}>TM {m.display_name}</option>)}
+          {sendable.map((m) => <option key={m.id} value={m.id}>TM {m.display_name}</option>)}
         </select>
-        {members.length !== withEmail.length && (
-          <p className="text-[11px] text-slate-400 mt-1">{members.length - withEmail.length} member(s) without an email are hidden.</p>
-        )}
+        {isExempt
+          ? members.length !== withEmail.length && (
+              <p className="text-[11px] text-slate-400 mt-1">{members.length - withEmail.length} member(s) without an email are hidden.</p>
+            )
+          : withEmail.length !== sendable.length && (
+              <p className="text-[11px] text-slate-400 mt-1">
+                {withEmail.length - sendable.length} member(s) hidden — no email, haven&apos;t consented to email, or have muted it.
+              </p>
+            )}
       </div>
       {needsMeeting && <MeetingTargetBanner meeting={meeting} loaded={loaded} />}
       <div className="flex items-center gap-2 flex-wrap">
@@ -850,6 +877,9 @@ function TemplateEditor({ templateKey, label, placeholders, stored, def, current
   onPreview: (subject: string, body: string) => void;
 }) {
   const isCustom = !!(stored?.subject?.trim() || stored?.body_html?.trim());
+  // A compliance receipt, not a notification — deliver()'s consent gate lets
+  // it through regardless of consent/preference (see CONSENT_EXEMPT_TEMPLATE_KEYS).
+  const isServiceEmail = CONSENT_EXEMPT_TEMPLATE_KEYS.includes(templateKey as never);
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState(stored?.subject?.trim() ? stored.subject : def.subject);
   const [body, setBody] = useState(stored?.body_html?.trim() ? stored.body_html : def.body_html);
@@ -890,6 +920,12 @@ function TemplateEditor({ templateKey, label, placeholders, stored, def, current
       <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50">
         <span className={`text-xs ${enabled ? 'text-emerald-500' : 'text-slate-300 dark:text-slate-600'}`}>●</span>
         <span className="text-sm font-medium text-slate-800 dark:text-slate-200 flex-1">{label}</span>
+        {isServiceEmail && (
+          <span title="Compliance receipt — always sent, regardless of the member's consent or notification preference"
+            className="text-[9px] font-bold uppercase tracking-wide bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full">
+            Service email
+          </span>
+        )}
         {isCustom && <span className="text-[9px] font-bold uppercase tracking-wide bg-maroon-100 dark:bg-maroon-900/40 text-maroon-700 dark:text-maroon-300 px-2 py-0.5 rounded-full">Custom</span>}
         <span className="text-slate-400 text-xs">{open ? '▲' : '▼'}</span>
       </button>
