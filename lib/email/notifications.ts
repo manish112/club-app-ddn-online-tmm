@@ -352,6 +352,40 @@ export async function notifyContactChangeAffirmation(params: {
   return sendOneCc('contact_change_affirmation', recipientEmail, [ccEmail], vars);
 }
 
+// ── Terms & Privacy Policy acceptance receipt (1:1, CC'd to a fixed compliance
+// address) ────────────────────────────────────────────────────────────────
+// Not gated by the member's own email_notifications opt-out — same reasoning
+// as notifyConsentDecision: a receipt of an action just taken, not an ongoing
+// notification, so it goes out whenever there's an email on file at all. See
+// components/TermsGateModal.tsx and lib/member-consent.ts's
+// recordTermsAcceptance().
+export async function notifyTermsAccepted(params: {
+  target: { id: string; name: string; display_name: string; email: string | null };
+  version: string;
+  acceptedAt: string; // ISO
+  device: Record<string, string | null> | null;
+  ccEmail: string;
+}) {
+  const { target, version, acceptedAt, device, ccEmail } = params;
+  if (!target.email) return { skipped: 'no email' };
+
+  const vars = {
+    club_name: CLUB_NAME,
+    app_url: await getAppUrl(),
+    full_name: target.name || target.display_name,
+    terms_version: version,
+    accepted_at: (() => {
+      const ist = new Date(new Date(acceptedAt).getTime() + IST_OFFSET_MS).toISOString();
+      return `${formatDate(ist.slice(0, 10))} ${formatTime(ist.slice(11, 16))}`;
+    })(),
+    device_summary_block: formatDeviceSummary(device),
+    important_notice_line: 'This is a transactional record of an action on your account, not a notification '
+      + '— it falls outside your notification preference, which governs ongoing meeting and role emails only.',
+  };
+
+  return sendOneCc('terms_accepted', target.email, [ccEmail], vars);
+}
+
 // Fired the moment a member grants email consent — same template the mass
 // broadcastWelcome() sends, just for one member instead of the whole club.
 export async function notifyWelcomeEmail(

@@ -87,7 +87,15 @@ create table if not exists members (
   email_consent_device    jsonb,
   whatsapp_consent_status text not null default 'pending',
   whatsapp_consent_at     timestamptz,
-  whatsapp_consent_device jsonb
+  whatsapp_consent_device jsonb,
+
+  -- Terms & Conditions / Privacy Policy acceptance, gated at sign-in whenever
+  -- terms_accepted_version doesn't match lib/terms.ts's TERMS_VERSION. Unlike
+  -- the two channel-consent columns above there is only one version to track
+  -- (not per-channel), and no 'declined' state — using the app requires it.
+  terms_accepted_version text,
+  terms_accepted_at      timestamptz,
+  terms_accepted_device  jsonb
 );
 
 -- Catch-up for databases created before these columns existed.
@@ -132,6 +140,10 @@ alter table members add  constraint members_email_consent_status_check
 alter table members drop constraint if exists members_whatsapp_consent_status_check;
 alter table members add  constraint members_whatsapp_consent_status_check
   check (whatsapp_consent_status in ('pending', 'granted', 'declined'));
+
+alter table members add column if not exists terms_accepted_version text;
+alter table members add column if not exists terms_accepted_at      timestamptz;
+alter table members add column if not exists terms_accepted_device  jsonb;
 
 -- One member may hold several offices, so leadership_roles is an array. An
 -- older database has the retired singular column; fold it in, once, then leave

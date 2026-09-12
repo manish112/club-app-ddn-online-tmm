@@ -4,8 +4,9 @@
 // (components/MemberDashboard.tsx's ProfileCard, same route) — one consent
 // record per channel per decision, not a combined one.
 import { createServiceClient } from '@/utils/supabase/server';
-import { notifyConsentDecision, notifyWelcomeEmail } from '@/lib/email/notifications';
+import { notifyConsentDecision, notifyWelcomeEmail, notifyTermsAccepted } from '@/lib/email/notifications';
 import { waSendWelcome } from '@/lib/whatsapp/notifications';
+import { TERMS_VERSION } from '@/lib/terms';
 
 // Kept out of the admin panel deliberately — this is a fixed compliance
 // record-keeping address, not a per-club setting.
@@ -148,5 +149,41 @@ export async function resendConsentReceipt(
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'send failed' };
   }
+  return { ok: true };
+}
+
+// Records acceptance of the Terms & Conditions / Privacy Policy gate (see
+// components/TermsGateModal.tsx) — one version stamp per member, not
+// per-channel like the consent columns above, and no 'declined' state:
+// continuing to use the app requires it. Fires a compliance receipt the same
+// way recordConsent() does above.
+export async function recordTermsAcceptance(memberId: string): Promise<{ ok: true } | { error: string }> {
+  const supabase = createServiceClient();
+
+  const [{ data: member }, device] = await Promise.all([
+    supabase.from('members').select('id, name, display_name, email').eq('id', memberId).single(),
+    getLatestDeviceCapture(memberId),
+  ]);
+  if (!member) return { error: 'member not found' };
+
+  const acceptedAt = new Date().toISOString();
+  const { error } = await supabase.from('members').update({
+    terms_accepted_version: TERMS_VERSION,
+    terms_accepted_at: acceptedAt,
+    terms_accepted_device: device,
+  }).eq('id', memberId);
+  if (error) return { error: error.message };
+
+  if (member.email) {
+    try {
+      await notifyTermsAccepted({
+        target: member, version: TERMS_VERSION, acceptedAt,
+        device: device as Record<string, string | null> | null, ccEmail: CONSENT_RECORD_CC,
+      });
+    } catch (err) {
+      console.error('[member-consent] terms acceptance email failed:', err);
+    }
+  }
+
   return { ok: true };
 }

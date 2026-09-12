@@ -153,6 +153,12 @@ export interface Member {
   whatsapp_consent_status?: 'pending' | 'granted' | 'declined';
   whatsapp_consent_at?: string | null;
   whatsapp_consent_device?: Record<string, string | null> | null;
+  // Terms & Conditions / Privacy Policy acceptance, gated at sign-in whenever
+  // this doesn't match lib/terms.ts's TERMS_VERSION. See
+  // components/TermsGateModal.tsx and lib/member-consent.ts.
+  terms_accepted_version?: string | null;
+  terms_accepted_at?: string | null;
+  terms_accepted_device?: Record<string, string | null> | null;
   // Admin-set; undefined when the column hasn't been read (see participationMode).
   participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;
