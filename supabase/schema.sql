@@ -25,11 +25,11 @@
 -- rules enforced in app code — that is deliberate and matches how the app was
 -- built. The exceptions are the tables holding secrets or private data:
 -- email_settings, email_templates, email_sends, whatsapp_settings,
--- whatsapp_templates, whatsapp_sends and device_captures have RLS enabled with
--- NO policies at all, so the anon key can neither read nor write them; only the
--- service-role key (server routes) reaches them. Do not add anon policies to
--- those seven tables — the SMTP password, the Meta access token and raw
--- visitor IPs live there.
+-- whatsapp_templates, whatsapp_sends, device_captures and password_reset_codes
+-- have RLS enabled with NO policies at all, so the anon key can neither read
+-- nor write them; only the service-role key (server routes) reaches them. Do
+-- not add anon policies to those eight tables — the SMTP password, the Meta
+-- access token, raw visitor IPs and password-reset codes live there.
 -- =============================================================================
 
 create extension if not exists pgcrypto;   -- gen_random_uuid()
@@ -808,6 +808,21 @@ create index if not exists device_captures_created_at_idx on device_captures (cr
 create index if not exists device_captures_visitor_idx    on device_captures (visitor_id);
 create index if not exists device_captures_member_idx     on device_captures (member_id);
 
+-- One-time codes proving whoever is setting a new password after an admin
+-- reset is actually that member — not just someone who knows their name. Kept
+-- OUT of the members table deliberately: members has no RLS at all (see the
+-- security-model note above), so a code stored there would be readable by
+-- anyone holding the anon key, defeating the entire point. This table is
+-- service-role-only instead (see section below), reached only through
+-- app/api/admin/reset-password and app/api/set-password's server code —
+-- never through a direct anon client call.
+create table if not exists password_reset_codes (
+  member_id  uuid primary key references members(id) on delete cascade,
+  code       text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
 
 -- =============================================================================
 -- 10. FUNCTIONS
@@ -888,14 +903,15 @@ alter table club_surveys            enable row level security;
 alter table club_survey_responses   enable row level security;
 alter table agenda_config           enable row level security;
 
--- Service-role only — no policies follow for these seven.
-alter table email_settings     enable row level security;
-alter table email_templates    enable row level security;
-alter table email_sends        enable row level security;
-alter table whatsapp_settings  enable row level security;
-alter table whatsapp_templates enable row level security;
-alter table whatsapp_sends     enable row level security;
-alter table device_captures    enable row level security;
+-- Service-role only — no policies follow for these eight.
+alter table email_settings        enable row level security;
+alter table email_templates       enable row level security;
+alter table email_sends           enable row level security;
+alter table whatsapp_settings     enable row level security;
+alter table whatsapp_templates    enable row level security;
+alter table whatsapp_sends        enable row level security;
+alter table device_captures       enable row level security;
+alter table password_reset_codes  enable row level security;
 
 do $$
 declare

@@ -11,6 +11,7 @@ import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime } from '@/lib/email/format';
 import { getAppUrl, getVpEducationName, getVpMembershipName } from '@/lib/email/mailer';
 import { pickUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
+import { createResetCode } from '@/lib/password-reset';
 import {
   deliverWhatsApp, getWhatsAppSettings, normalizePhone, sendTextMessage, type WaSendResult,
 } from './client';
@@ -485,7 +486,11 @@ async function buildPasswordResetReply(member: WaMenuMember): Promise<string> {
   }
   const supabase = createServiceClient();
   await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
-  return 'Your password has been reset. Open the app, sign in as yourself, and you’ll be asked to set a new one.';
+  // Proof this reset was really requested by the number on file — the sign-in
+  // screen won't accept a new password without it. See lib/password-reset.ts.
+  const code = await createResetCode(member.id);
+  return 'Your password has been reset. Open the app, sign in as yourself, and you’ll be asked to set a new '
+    + `one along with this verification code:\n\n*${code}*\n\nValid for 24 hours.`;
 }
 
 async function buildMenuReply(member: WaMenuMember, opt: string): Promise<string> {

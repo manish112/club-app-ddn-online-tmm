@@ -38,6 +38,12 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
+  // Only asked for once the server says one's needed — a member whose
+  // password was reset (admin panel or the WhatsApp menu bot) has one waiting
+  // for them; a brand-new member setting a password for the first time never
+  // does. See app/api/set-password/route.ts.
+  const [resetCode, setResetCode] = useState('');
+  const [codeRequired, setCodeRequired] = useState(false);
 
   const [intro, setIntro] = useState('');
   const [city, setCity] = useState('');
@@ -97,6 +103,8 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
     setPasswordInput('');
     setNewPassword('');
     setConfirmPassword('');
+    setResetCode('');
+    setCodeRequired(false);
     if (data?.password_hash) {
       setStep('verify_password');
     } else {
@@ -130,12 +138,28 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
   async function handleSetPassword() {
     if (newPassword.length < 6) { setPasswordError('Password must be at least 6 characters.'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('Passwords do not match.'); return; }
+    if (codeRequired && !resetCode.trim()) { setPasswordError('Enter the verification code you were given.'); return; }
     setPasswordLoading(true);
+    setPasswordError('');
     const salt = generateSalt();
     const hash = await hashPassword(newPassword, salt);
-    await supabase.from('members').update({ password_hash: hash, password_salt: salt }).eq('id', selected);
+    const res = await fetch('/api/set-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: selected, passwordHash: hash, passwordSalt: salt, code: resetCode.trim() || undefined }),
+    });
+    const data = await res.json().catch(() => ({}));
     setPasswordLoading(false);
-    proceedAfterAuth();
+    if (res.ok) { proceedAfterAuth(); return; }
+    if (data.error === 'code_required') {
+      setCodeRequired(true);
+      setPasswordError('Your password was reset — enter the verification code you were given to continue.');
+      return;
+    }
+    if (data.error === 'invalid_code') {
+      setPasswordError('That code is incorrect or has expired.');
+      return;
+    }
+    setPasswordError(data.error ?? 'Something went wrong. Please try again.');
   }
 
   async function saveIntro() {
@@ -382,21 +406,25 @@ export function MemberPicker({ members, meetingId, upcomingMeetings, onSelect, o
               placeholder="New password (min 6 characters)" autoFocus className={inputCls} />
             <input type="password" value={confirmPassword}
               onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(''); }}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSetPassword(); }}
+              onKeyDown={(e) => { if (!codeRequired && e.key === 'Enter') handleSetPassword(); }}
               placeholder="Confirm password" className={inputCls} />
+            {codeRequired && (
+              <input type="text" inputMode="numeric" value={resetCode}
+                onChange={(e) => { setResetCode(e.target.value); setPasswordError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSetPassword(); }}
+                placeholder="Verification code" className={inputCls} />
+            )}
           </div>
           {passwordError && <p className="text-xs text-red-500 mb-3">{passwordError}</p>}
           <button onClick={handleSetPassword} disabled={passwordLoading || !newPassword || !confirmPassword}
             className={`${primaryBtnCls} mb-3`}>
             {passwordLoading ? 'Saving…' : 'Set Password'}
           </button>
-          <button onClick={proceedAfterAuth} className="block w-full text-center py-2 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[36px]">
-            Skip for now
-          </button>
-          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3 mt-3">
-            <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-              ⚠️ <strong>Not setting a password leaves your profile unprotected.</strong>{' '}
-              Anyone who knows your name could sign in as you.
+          <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              🔒 A password is required before you can continue — it&apos;s what stops anyone who knows your
+              name from signing in as you.{codeRequired && ' Your password was reset, so you\'ll also need the '
+                + 'verification code you were given (by an admin, or in the WhatsApp reply).'}
             </p>
           </div>
         </div>
