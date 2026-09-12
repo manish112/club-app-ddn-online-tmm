@@ -599,6 +599,8 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [savingContact, setSavingContact] = useState(false);
   const [contactMsg, setContactMsg] = useState<string | null>(null);
   const [togglingPref, setTogglingPref] = useState<'email' | 'whatsapp' | null>(null);
+  const [resendingConsent, setResendingConsent] = useState<'email' | 'whatsapp' | null>(null);
+  const [resendConsentMsg, setResendConsentMsg] = useState<string | null>(null);
   // Both destructive actions confirm first; 'delete' also reports what history
   // stands in the way before anything is touched.
   const [confirming, setConfirming] = useState<'deactivate' | 'delete' | null>(null);
@@ -822,6 +824,29 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     onUpdated();
   }
 
+  // Re-sends the consent receipt already on file for this channel — for
+  // whenever the original didn't land (bounce, spam filter, full inbox) so an
+  // admin doesn't have to chase it down manually. Only ever called once a
+  // real decision exists (buttons below are hidden until then).
+  async function resendConsentEmail(channel: 'email' | 'whatsapp') {
+    setResendingConsent(channel);
+    setResendConsentMsg(null);
+    try {
+      const res = await fetch('/api/admin/resend-consent-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId: member.id, channel, adminId: currentAdminId }),
+      });
+      const data = await res.json();
+      setResendConsentMsg(res.ok
+        ? `${channel === 'email' ? 'Email' : 'WhatsApp'} consent receipt resent.`
+        : `Failed: ${data.error ?? 'unknown error'}`);
+    } catch {
+      setResendConsentMsg('Failed: network error');
+    }
+    setResendingConsent(null);
+  }
+
   async function toggleGuestManager() {
     setTogglingGuest(true);
     await supabase.from('members').update({ can_manage_guests: !member.can_manage_guests }).eq('id', member.id);
@@ -1001,6 +1026,31 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
           {member.email && <ConsentBadge label="Email" status={member.email_consent_status} at={member.email_consent_at} device={member.email_consent_device} />}
           {member.phone && <ConsentBadge label="WhatsApp" status={member.whatsapp_consent_status} at={member.whatsapp_consent_at} device={member.whatsapp_consent_device} />}
         </div>
+
+        {/* Manual resend of the receipt already on file — for whenever the
+            original didn't land. Only shown once a real decision exists for
+            that channel (there's nothing to resend while still 'pending'),
+            and only when there's an email on file, since the receipt always
+            goes there regardless of which channel it's about. */}
+        {member.email && (
+          <div className="flex items-center gap-2 flex-wrap pl-14">
+            {member.email_consent_status && member.email_consent_status !== 'pending' && (
+              <button onClick={() => resendConsentEmail('email')} disabled={resendingConsent === 'email'}
+                title="Resend the consent receipt email for the Email channel decision"
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 hover:border-maroon-300 hover:text-maroon-600 disabled:opacity-40 active:scale-95 transition-all">
+                {resendingConsent === 'email' ? 'Sending…' : '✉️ Resend email consent mail'}
+              </button>
+            )}
+            {member.phone && member.whatsapp_consent_status && member.whatsapp_consent_status !== 'pending' && (
+              <button onClick={() => resendConsentEmail('whatsapp')} disabled={resendingConsent === 'whatsapp'}
+                title="Resend the consent receipt email for the WhatsApp channel decision"
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 hover:border-maroon-300 hover:text-maroon-600 disabled:opacity-40 active:scale-95 transition-all">
+                {resendingConsent === 'whatsapp' ? 'Sending…' : '💬 Resend WhatsApp consent mail'}
+              </button>
+            )}
+          </div>
+        )}
+        {resendConsentMsg && <p className="text-[10px] text-slate-500 pl-14">{resendConsentMsg}</p>}
 
         {/* The member's OWN mute/unmute preference — distinct from both the
             admin gate above (whatsapp_enabled — whether the club pays to
