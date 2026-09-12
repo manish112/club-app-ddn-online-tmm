@@ -9,8 +9,11 @@ import { waSendWelcome } from '@/lib/whatsapp/notifications';
 import { TERMS_VERSION } from '@/lib/terms';
 
 // Kept out of the admin panel deliberately — this is a fixed compliance
-// record-keeping address, not a per-club setting.
-const CONSENT_RECORD_CC = 'singhmanish.work@gmail.com';
+// record-keeping address, not a per-club setting. Exported so other
+// compliance receipts outside this file (e.g. app/api/set-password/route.ts's
+// password-changed notice) CC the same address rather than a second one
+// drifting into existence.
+export const CONSENT_RECORD_CC = 'singhmanish.work@gmail.com';
 
 export type ConsentChannel = 'email' | 'whatsapp';
 export type ConsentDecision = 'granted' | 'declined';

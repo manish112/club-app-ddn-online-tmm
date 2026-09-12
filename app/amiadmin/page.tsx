@@ -698,7 +698,10 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   }
 
   async function resetPassword() {
-    if (!confirm(`Reset password for TM ${member.display_name}?`)) return;
+    // Same action either way — this is also how a brand-new member gets the
+    // verification code for their very first password, not just a forgotten
+    // one; clearing password_hash is a no-op when there wasn't one.
+    if (!confirm(`Give TM ${member.display_name} a password verification code?${member.password_hash ? ' This also clears their current password.' : ''}`)) return;
     setResettingPw(true);
     setResetPwCode(null);
     const res = await fetch('/api/admin/reset-password', {

@@ -481,16 +481,19 @@ async function buildFullJourneyReply(memberId: string): Promise<string> {
 }
 
 async function buildPasswordResetReply(member: WaMenuMember): Promise<string> {
-  if (!member.password_hash) {
-    return 'You don’t have a password set yet — just open the app and sign in as yourself.';
-  }
+  // Every password screen now requires a code, including a brand-new
+  // member's very first one — so this issues one either way. Clearing
+  // password_hash is a no-op when there wasn't one, and reaching this reply
+  // at all already proves the request came from the number on file (Meta
+  // only delivers it inside the 24-hour window that number's own message
+  // opened, and matchMemberByPhone already required it to match).
+  const hadOne = !!member.password_hash;
   const supabase = createServiceClient();
   await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
-  // Proof this reset was really requested by the number on file — the sign-in
-  // screen won't accept a new password without it. See lib/password-reset.ts.
   const code = await createResetCode(member.id);
-  return 'Your password has been reset. Open the app, sign in as yourself, and you’ll be asked to set a new '
-    + `one along with this verification code:\n\n*${code}*\n\nValid for 24 hours.`;
+  const opening = hadOne ? 'Your password has been reset.' : 'No problem — you don’t have one yet.';
+  return `${opening} Open the app, sign in as yourself, and you’ll be asked to set a new one along with `
+    + `this verification code:\n\n*${code}*\n\nValid for 24 hours.`;
 }
 
 async function buildMenuReply(member: WaMenuMember, opt: string): Promise<string> {

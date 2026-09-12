@@ -34,7 +34,8 @@ export type TemplateKey =
   | 'custom_message'
   | 'consent_confirmation'
   | 'contact_change_affirmation'
-  | 'terms_accepted';
+  | 'terms_accepted'
+  | 'password_changed';
 
 export const TEMPLATE_KEYS: TemplateKey[] = [
   'meeting_created',
@@ -69,6 +70,7 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
   'consent_confirmation',
   'contact_change_affirmation',
   'terms_accepted',
+  'password_changed',
 ];
 
 // Compliance receipts, not notifications — the only templates allowed to
@@ -76,7 +78,7 @@ export const TEMPLATE_KEYS: TemplateKey[] = [
 // deliver() gate and the manual "send to a member" admin tool
 // (app/api/admin/email-send-member/route.ts), so the two can't drift apart.
 export const CONSENT_EXEMPT_TEMPLATE_KEYS: TemplateKey[] =
-  ['consent_confirmation', 'contact_change_affirmation', 'terms_accepted'];
+  ['consent_confirmation', 'contact_change_affirmation', 'terms_accepted', 'password_changed'];
 
 export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   meeting_created:  'New meeting announced (to all members)',
@@ -111,6 +113,7 @@ export const TEMPLATE_LABELS: Record<TemplateKey, string> = {
   consent_confirmation: 'Notification consent recorded — service email, sent regardless of consent (to the member)',
   contact_change_affirmation: 'Email or phone changed, by the member or an admin — service email, sent regardless of consent (to old + new email)',
   terms_accepted: 'Terms & Privacy Policy accepted — service email, sent regardless of consent (to the member)',
+  password_changed: 'Password was set or changed — service email, sent regardless of consent (to the member)',
 };
 
 // Placeholders available to each template, for the admin editor's help list.
@@ -147,6 +150,7 @@ export const PLACEHOLDERS: Record<TemplateKey, string[]> = {
   consent_confirmation: ['full_name', 'club_name', 'app_url', 'given_by', 'channel_label', 'origin_label', 'origin_value', 'decision_short', 'decision_label', 'contact_value', 'decided_at', 'device_summary_block', 'retro_line', 'important_notice_line'],
   contact_change_affirmation: ['full_name', 'club_name', 'app_url', 'channel_label', 'old_value', 'new_value', 'changed_at', 'changed_by_line', 'affirmation_line', 'device_summary_block', 'important_notice_line'],
   terms_accepted: ['full_name', 'club_name', 'app_url', 'terms_version', 'accepted_at', 'device_summary_block', 'important_notice_line'],
+  password_changed: ['full_name', 'club_name', 'app_url', 'changed_at', 'device_summary_block', 'important_notice_line'],
 };
 
 const HEADER_GRADIENT = 'linear-gradient(135deg,#6b0c1e 0%,#9d1530 50%,#0E2D6A 100%)';
@@ -686,6 +690,30 @@ export const DEFAULT_TEMPLATES: Record<TemplateKey, { subject: string; body_html
       coercion or pressure.</p>
       <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">You can read the Terms &amp; Conditions and Privacy Policy anytime from the app.</p>
+      ${CTA('Open the App →')}`),
+  },
+
+  // A compliance receipt, not a notification — sent whenever a member's
+  // password is set or changed, by any path (self-service on the sign-in
+  // screen or profile page, an admin's reset, or the WhatsApp menu bot's
+  // "Reset my password" option). Exempt from the consent gate in
+  // lib/email/mailer.ts's deliver() for the same reason consent_confirmation
+  // is: this is the one alert that would matter most to a member if they
+  // *didn't* make the change themselves.
+  password_changed: {
+    subject: 'Your password was changed — {{club_name}}',
+    body_html: shell('Password Changed', `
+      <p style="${P}">Dear <strong style="color:#1e293b;">TM {{full_name}}</strong>,</p>
+      <p style="${P}">This confirms your account's password was set or changed.</p>
+      ${CARD_OPEN}
+        <p style="${KICKER}">When</p>
+        <p style="margin:0;color:#1e293b;font-size:15px;font-weight:600;">{{changed_at}} IST</p>
+      ${CARD_CLOSE}
+      <p style="${KICKER}">Device recorded with this change</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{device_summary_block}}</p>
+      <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6;">If this wasn't you, contact a
+      club officer right away.</p>
+      <p style="margin:0 0 24px;color:#64748b;font-size:13px;line-height:1.6;">{{important_notice_line}}</p>
       ${CTA('Open the App →')}`),
   },
 };
