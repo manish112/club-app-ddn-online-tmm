@@ -105,3 +105,48 @@ export async function recordConsent(
 
   return { ok: true };
 }
+
+// Manual re-send of the consent receipt already on file — for whenever the
+// original (sent from recordConsent above) didn't land: a bounce, a spam
+// filter, a full inbox. Doesn't touch the recorded decision at all, just
+// replays the same receipt an admin would otherwise have to reconstruct by
+// hand. Only ever an option once a real decision exists for that channel —
+// there's nothing to resend while it's still 'pending'.
+export async function resendConsentReceipt(
+  memberId: string, channel: ConsentChannel,
+): Promise<{ ok: true } | { error: string }> {
+  const supabase = createServiceClient();
+  const { data: member } = await supabase.from('members')
+    .select(`
+      id, name, display_name, email, phone,
+      email_consent_status, email_consent_at, email_consent_device,
+      whatsapp_consent_status, whatsapp_consent_at, whatsapp_consent_device
+    `)
+    .eq('id', memberId).single();
+  if (!member) return { error: 'member not found' };
+  if (!member.email) return { error: 'member has no email on file to send the receipt to' };
+
+  const status: ConsentDecision | 'pending' = channel === 'email'
+    ? member.email_consent_status : member.whatsapp_consent_status;
+  const decidedAt: string | null = channel === 'email'
+    ? member.email_consent_at : member.whatsapp_consent_at;
+  const device = channel === 'email' ? member.email_consent_device : member.whatsapp_consent_device;
+  if (status !== 'granted' && status !== 'declined') {
+    return { error: `no ${channel} consent decision recorded for this member yet` };
+  }
+  if (!decidedAt) return { error: `no ${channel} consent decision recorded for this member yet` };
+
+  try {
+    await notifyConsentDecision({
+      target: member, channel, decision: status, decidedAt,
+      // Resending doesn't know whether the original grant carried the
+      // retro-awareness affirmation, so it's left off rather than guessed.
+      retroactive: false,
+      contactValue: channel === 'email' ? member.email : member.phone,
+      device: device as Record<string, string | null> | null, ccEmail: CONSENT_RECORD_CC,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'send failed' };
+  }
+  return { ok: true };
+}
