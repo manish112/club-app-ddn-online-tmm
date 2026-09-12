@@ -11,13 +11,19 @@ export interface OpenRoleSlots {
   roles: { roleKey: RoleKey; slot: number }[];
   /** Members already holding a role at this meeting. */
   claimedBy: Set<string>;
+  /** Set when the reads behind this failed — `roles: []` in that case means
+   *  "couldn't tell", not "genuinely none open". A caller that renders this
+   *  straight to a member (WhatsApp's "still open" line, the open-roles email)
+   *  must check this before treating an empty list as good news: a transient
+   *  read failure once rendered as a false "every role is filled 🎉". */
+  error: string | null;
 }
 
 export async function openRoleSlots(meetingId: string): Promise<OpenRoleSlots> {
   const supabase = createServiceClient();
   // getMeetingRoles needs the slot counts and disabled categories, which the
   // lighter meeting rows used elsewhere don't carry.
-  const [{ data: full }, { data: claims }] = await Promise.all([
+  const [{ data: full, error: meetingError }, { data: claims, error: claimsError }] = await Promise.all([
     supabase.from('meetings')
       .select('id, speaker_slots, evaluator_slots, jury_slots, disabled_roles, meeting_type')
       .eq('id', meetingId).single(),
@@ -26,7 +32,12 @@ export async function openRoleSlots(meetingId: string): Promise<OpenRoleSlots> {
 
   const claimedBy = new Set(
     (claims ?? []).map((c) => c.member_id).filter((id): id is string => !!id));
-  if (!full) return { roles: [], claimedBy };
+
+  if (meetingError || claimsError || !full) {
+    const message = meetingError?.message ?? claimsError?.message ?? `meeting ${meetingId} not found`;
+    console.error(`openRoleSlots(${meetingId}): ${message}`);
+    return { roles: [], claimedBy, error: message };
+  }
 
   const taken = new Set((claims ?? []).map((c) => `${c.role_key}:${c.slot_index}`));
 
@@ -40,5 +51,5 @@ export async function openRoleSlots(meetingId: string): Promise<OpenRoleSlots> {
     return true;
   });
 
-  return { roles, claimedBy };
+  return { roles, claimedBy, error: null };
 }

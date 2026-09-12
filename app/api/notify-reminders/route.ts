@@ -36,6 +36,22 @@ function describe(res: { ok: true; sent: number; failed: number; reason: string 
   return res.sent === 0 && res.reason ? `sent 0 (${res.reason})` : `sent ${res.sent}${failed}`;
 }
 
+// Runs one action in isolation: a throw here (a DB hiccup, a rejected
+// promise) used to propagate all the way out of the GET handler and abort
+// every other action in this run — including ones for other meetings —
+// with nothing in the response and nothing in the logs to say why. Now it's
+// caught, logged, and recorded against its own label so the rest of the run
+// still happens and the failure is at least visible.
+async function track(actions: Record<string, string>, label: string, fn: () => Promise<string>): Promise<void> {
+  try {
+    actions[label] = await fn();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`notify-reminders: ${label} threw`, err);
+    actions[label] = `error: ${message}`;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization');
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -84,8 +100,10 @@ export async function GET(req: NextRequest) {
       // duplicate of the first.
       const dueDay = openRolesDays.find((d) => shiftDate(m.date, -d) === todayIst);
       if (dueDay !== undefined) {
-        const res = await sendOpenRolesNudge(m, { leadDay: dueDay });
-        actions[`open_roles:${m.number}:d${dueDay}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
+        await track(actions, `open_roles:${m.number}:d${dueDay}`, async () => {
+          const res = await sendOpenRolesNudge(m, { leadDay: dueDay });
+          return 'ok' in res ? `sent ${res.sent}` : res.skipped;
+        });
       }
     }
 
@@ -93,21 +111,24 @@ export async function GET(req: NextRequest) {
     // so the real lead time depends on when the cron lands; dedupe on the
     // meeting id keeps it to one send).
     if (emailOn && settings!.hour_before_enabled && now >= startMs - 70 * 60 * 1000 && now < startMs) {
-      const res = await sendMeetingReminder(m);
-      actions[`meeting_reminder:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
+      await track(actions, `meeting_reminder:${m.number}`, async () => {
+        const res = await sendMeetingReminder(m);
+        return 'ok' in res ? `sent ${res.sent}` : res.skipped;
+      });
     }
 
     // 1 day before → one reminder per role holder, naming every role they hold
     // (deduped per member).
     if (emailOn && settings!.day_before_enabled && m.date === tomorrowIst) {
-      const res = await sendRoleReminders(m);
-      actions[`role_reminders:${m.number}`] = `sent ${res.sent}`;
+      await track(actions, `role_reminders:${m.number}`, async () => `sent ${(await sendRoleReminders(m)).sent}`);
     }
 
     // 1 day before → mass meeting reminder to all members (deduped on the meeting).
     if (emailOn && settings!.day_before_meeting_enabled && m.date === tomorrowIst) {
-      const res = await sendMeetingReminderDayBefore(m);
-      actions[`meeting_reminder_day:${m.number}`] = 'ok' in res ? `sent ${res.sent}` : res.skipped;
+      await track(actions, `meeting_reminder_day:${m.number}`, async () => {
+        const res = await sendMeetingReminderDayBefore(m);
+        return 'ok' in res ? `sent ${res.sent}` : res.skipped;
+      });
     }
 
     // ── WhatsApp ────────────────────────────────────────────────────────────
@@ -118,23 +139,20 @@ export async function GET(req: NextRequest) {
 
       // 1 day before → the role(s) you agreed to play, to each role holder.
       if (wa.role_reminder_enabled && m.date === tomorrowIst) {
-        const res = await waSendRoleReminders(m);
-        actions[`wa_role_reminder:${m.number}`] = describe(res);
+        await track(actions, `wa_role_reminder:${m.number}`, async () => describe(await waSendRoleReminders(m)));
       }
 
       // 1 day before → "you haven't picked a role yet", to everyone who hasn't.
       // Sends nothing when the agenda is already full.
       if (wa.no_role_nudge_enabled && m.date === tomorrowIst) {
-        const res = await waSendNoRoleNudge(m);
-        actions[`wa_no_role_nudge:${m.number}`] = describe(res);
+        await track(actions, `wa_no_role_nudge:${m.number}`, async () => describe(await waSendNoRoleNudge(m)));
       }
 
       // Meeting day → "starting soon", within the configured lead window. The
       // real lead time depends on when the cron lands inside that window.
       const leadMs = (wa.meeting_starting_lead_minutes || 70) * 60 * 1000;
       if (wa.meeting_starting_enabled && now >= startMs - leadMs && now < startMs) {
-        const res = await waSendMeetingStarting(m);
-        actions[`wa_meeting_starting:${m.number}`] = describe(res);
+        await track(actions, `wa_meeting_starting:${m.number}`, async () => describe(await waSendMeetingStarting(m)));
       }
     }
   }
