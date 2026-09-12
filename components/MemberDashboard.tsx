@@ -760,54 +760,80 @@ function ParticipationCard({ member, meetings }: { member: Member; meetings: Mee
 function PasswordCard({ member }: { member: Member }) {
   const supabase = createClient();
   const [hasPassword, setHasPassword] = useState<boolean | null>(null);
-  const [mode, setMode] = useState<'idle' | 'set' | 'change' | 'remove'>('idle');
+  const [mode, setMode] = useState<'idle' | 'set' | 'change'>('idle');
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  // Only relevant to mode === 'set' — 'change' already proves identity by
+  // requiring the current password. See app/api/set-password/route.ts and
+  // lib/password-reset.ts for why this can't be skipped for a reset account.
+  const [resetCode, setResetCode] = useState('');
+  const [codeRequired, setCodeRequired] = useState(false);
 
   useEffect(() => {
     supabase.from('members').select('password_hash').eq('id', member.id).single()
       .then(({ data }) => setHasPassword(!!data?.password_hash));
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function reset() { setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false); setMode('idle'); }
-
-  async function handleRemovePassword() {
-    setError('');
-    if (!currentPw) { setError('Enter your current password to confirm removal.'); return; }
-    setSaving(true);
-    const { data } = await supabase.from('members').select('password_hash, password_salt').eq('id', member.id).single();
-    if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
-    const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
-    if (!valid) { setError('Incorrect password.'); setSaving(false); return; }
-    await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
-    setSaving(false);
-    setHasPassword(false);
-    reset();
+  function reset() {
+    setCurrentPw(''); setNewPw(''); setConfirmPw(''); setError(''); setSaving(false); setMode('idle');
+    setResetCode(''); setCodeRequired(false);
   }
 
   async function handleSave() {
     setError('');
     if (newPw.length < 6) { setError('Password must be at least 6 characters.'); return; }
     if (newPw !== confirmPw) { setError('Passwords do not match.'); return; }
+    if (mode === 'set' && codeRequired && !resetCode.trim()) {
+      setError('Enter the verification code you were given.'); return;
+    }
     setSaving(true);
     if (mode === 'change') {
       const { data } = await supabase.from('members').select('password_hash, password_salt').eq('id', member.id).single();
       if (!data?.password_hash || !data?.password_salt) { setSaving(false); reset(); return; }
       const valid = await verifyPassword(currentPw, data.password_salt, data.password_hash);
       if (!valid) { setError('Current password is incorrect.'); setSaving(false); return; }
+      const salt = generateSalt();
+      const hash = await hashPassword(newPw, salt);
+      await supabase.from('members').update({ password_hash: hash, password_salt: salt }).eq('id', member.id);
+      setSaving(false);
+      setHasPassword(true);
+      setDone(true);
+      setMode('idle');
+      reset();
+      return;
     }
+    // mode === 'set' — routed through the server so a pending reset code
+    // (see lib/password-reset.ts) actually gets enforced; the anon client
+    // could never check that table itself.
     const salt = generateSalt();
     const hash = await hashPassword(newPw, salt);
-    await supabase.from('members').update({ password_hash: hash, password_salt: salt }).eq('id', member.id);
+    const res = await fetch('/api/set-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memberId: member.id, passwordHash: hash, passwordSalt: salt, code: resetCode.trim() || undefined }),
+    });
+    const data = await res.json().catch(() => ({}));
     setSaving(false);
-    setHasPassword(true);
-    setDone(true);
-    setMode('idle');
-    reset();
+    if (res.ok) {
+      setHasPassword(true);
+      setDone(true);
+      setMode('idle');
+      reset();
+      return;
+    }
+    if (data.error === 'code_required') {
+      setCodeRequired(true);
+      setError('Your password was reset — enter the verification code you were given to continue.');
+      return;
+    }
+    if (data.error === 'invalid_code') {
+      setError('That code is incorrect or has expired.');
+      return;
+    }
+    setError(data.error ?? 'Something went wrong. Please try again.');
   }
 
   if (hasPassword === null) return null;
@@ -836,48 +862,18 @@ function PasswordCard({ member }: { member: Member }) {
       {hasPassword && mode === 'idle' && (
         <div className="space-y-2">
           {!done && <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Your account is password protected.</p>}
-          {[
-            { action: () => { setDone(false); setMode('change'); }, title: 'Change Password', sub: 'Update your current password', danger: false },
-            { action: () => { setDone(false); setMode('remove'); }, title: 'Remove Password', sub: 'Leave your profile unprotected', danger: true },
-          ].map((item) => (
-            <button key={item.title} onClick={item.action}
-              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors min-h-[52px] group
-                bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50
-                ${item.danger
-                  ? 'hover:border-red-200 dark:hover:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-950/20'
-                  : 'hover:border-maroon-200 dark:hover:border-maroon-800/50 hover:bg-maroon-50 dark:hover:bg-maroon-950/20'}`}>
-              <div className="text-left">
-                <p className={`text-sm font-semibold text-slate-800 dark:text-slate-200 ${item.danger ? 'group-hover:text-red-600 dark:group-hover:text-red-400' : 'group-hover:text-maroon-700 dark:group-hover:text-maroon-400'}`}>
-                  {item.title}
-                </p>
-                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{item.sub}</p>
-              </div>
-              <span className={`text-slate-300 dark:text-slate-600 text-lg ${item.danger ? 'group-hover:text-red-400' : 'group-hover:text-maroon-400'}`}>›</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {mode === 'remove' && (
-        <div className="space-y-2">
-          <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/40 rounded-xl p-3">
-            <p className="text-xs text-red-700 dark:text-red-400 leading-relaxed">
-              ⚠️ <strong>This will remove password protection.</strong> Enter your current password to confirm.
-            </p>
-          </div>
-          <input type="password" value={currentPw} onChange={(e) => { setCurrentPw(e.target.value); setError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleRemovePassword(); }}
-            placeholder="Current password" autoFocus className={inputCls} />
-          {error && <p className="text-xs text-red-500">{error}</p>}
-          <div className="flex gap-2 pt-1">
-            <button onClick={handleRemovePassword} disabled={saving || !currentPw}
-              className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2.5 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all">
-              {saving ? 'Removing…' : 'Remove Password'}
-            </button>
-            <button onClick={reset} className="px-4 py-2.5 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 min-h-[44px]">
-              Cancel
-            </button>
-          </div>
+          <button onClick={() => { setDone(false); setMode('change'); }}
+            className="w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors min-h-[52px] group
+              bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50
+              hover:border-maroon-200 dark:hover:border-maroon-800/50 hover:bg-maroon-50 dark:hover:bg-maroon-950/20">
+            <div className="text-left">
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 group-hover:text-maroon-700 dark:group-hover:text-maroon-400">
+                Change Password
+              </p>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Update your current password</p>
+            </div>
+            <span className="text-slate-300 dark:text-slate-600 text-lg group-hover:text-maroon-400">›</span>
+          </button>
         </div>
       )}
 
@@ -890,8 +886,14 @@ function PasswordCard({ member }: { member: Member }) {
           <input type="password" value={newPw} onChange={(e) => { setNewPw(e.target.value); setError(''); }}
             placeholder="New password (min 6 characters)" autoFocus className={inputCls} />
           <input type="password" value={confirmPw} onChange={(e) => { setConfirmPw(e.target.value); setError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+            onKeyDown={(e) => { if (mode === 'change' && e.key === 'Enter') handleSave(); }}
             placeholder="Confirm new password" className={inputCls} />
+          {mode === 'set' && codeRequired && (
+            <input type="text" inputMode="numeric" value={resetCode}
+              onChange={(e) => { setResetCode(e.target.value); setError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+              placeholder="Verification code" className={inputCls} />
+          )}
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex gap-2 pt-1">
             <button onClick={handleSave} disabled={saving} className={primaryBtnCls}>

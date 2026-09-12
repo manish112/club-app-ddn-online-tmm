@@ -589,6 +589,7 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [saving, setSaving] = useState(false);
   const [savingMentor, setSavingMentor] = useState(false);
   const [resettingPw, setResettingPw] = useState(false);
+  const [resetPwCode, setResetPwCode] = useState<string | null>(null);
   const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
@@ -699,8 +700,19 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   async function resetPassword() {
     if (!confirm(`Reset password for TM ${member.display_name}?`)) return;
     setResettingPw(true);
-    await supabase.from('members').update({ password_hash: null, password_salt: null }).eq('id', member.id);
-    setResettingPw(false); onUpdated();
+    setResetPwCode(null);
+    const res = await fetch('/api/admin/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminId: currentAdminId, targetMemberId: member.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setResettingPw(false);
+    if (!res.ok) { alert(`Failed: ${data.error ?? 'unknown error'}`); return; }
+    // They'll need this to set a new password — nothing else proves it's
+    // really them (see lib/password-reset.ts). Shown here, not just alerted,
+    // so the admin can keep it on screen while relaying it.
+    setResetPwCode(data.code);
+    onUpdated();
   }
 
   async function toggleLeadershipRole(role: LeadershipRole) {
@@ -951,6 +963,18 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
           )}
         </div>
       </div>
+
+      {resetPwCode && (
+        <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-amber-800 dark:text-amber-300">
+            Password cleared. Give TM {member.display_name} this code — they&apos;ll need it to set a new one:
+          </p>
+          <span className="text-sm font-black tracking-widest text-amber-900 dark:text-amber-200">{resetPwCode}</span>
+          <button onClick={() => setResetPwCode(null)} className="ml-auto text-[11px] text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {confirming && (
         <MemberActionConfirm
