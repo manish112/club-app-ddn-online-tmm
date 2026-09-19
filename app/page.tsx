@@ -5,6 +5,7 @@ import { useIdentity } from '@/hooks/useIdentity';
 import { MeetingCard } from '@/components/MeetingCard';
 import { MemberPicker } from '@/components/MemberPicker';
 import { TmodReminderModal } from '@/components/TmodReminderModal';
+import { GuestModeModal } from '@/components/GuestModeModal';
 import { ConsentGateModal, memberNeedsConsentGate } from '@/components/ConsentGateModal';
 import { TermsGateModal, memberNeedsTermsGate } from '@/components/TermsGateModal';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -137,6 +138,27 @@ export default function Home() {
 
   const isGuest = memberId === 'guest';
   const currentMember = isGuest ? null : members.find((m) => m.id === memberId);
+
+  // Shown on every page load while in guest mode — memberId stays 'guest' in
+  // localStorage indefinitely, so this is the only way a guest is reminded
+  // (and reoffered the login path) on their next visit, not just their first.
+  const [showGuestNotice, setShowGuestNotice] = useState(false);
+  useEffect(() => {
+    if (!loaded || !isGuest) return;
+    setShowGuestNotice(true);
+  }, [loaded, isGuest]);
+
+  function dismissGuestNotice() {
+    setShowGuestNotice(false);
+  }
+
+  // Sends a guest back through the identify step (MemberPicker), the same
+  // modal a first-time visitor sees — clearing identity is what makes
+  // `showPicker` true again.
+  function handleGuestLogin() {
+    dismissGuestNotice();
+    clearIdentity();
+  }
 
   // Checked on every load, not just at sign-in — memberId is restored straight
   // from localStorage on a refresh, which never goes back through
@@ -511,7 +533,9 @@ export default function Home() {
         />
       )}
 
-
+      {showGuestNotice && isGuest && (
+        <GuestModeModal onContinue={dismissGuestNotice} onLogin={handleGuestLogin} />
+      )}
 
       {needsConsent && currentMember ? (
         <ConsentGateModal member={currentMember} onDone={refetch} onLogout={clearIdentity} />
