@@ -67,8 +67,11 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
   useEffect(() => {
     if (isClosed) return;
     if (deviceId) {
-      supabase.rpc('has_voted', { p_ballot_id: ballot.id, p_device_uuid: deviceId })
-        .then(({ data }) => { if (data) setAlreadyVoted(true); });
+      supabase.rpc('has_voted', {
+        p_ballot_id: ballot.id,
+        p_device_uuid: deviceId,
+        p_member_id: memberId && memberId !== 'guest' ? memberId : null,
+      }).then(({ data }) => { if (data) setAlreadyVoted(true); });
     }
     if (ballot.voter_count) fetchVoteCount();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

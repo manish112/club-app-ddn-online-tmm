@@ -338,6 +338,14 @@ create table if not exists votes (
 alter table votes add column if not exists voted_for_name text;
 alter table votes alter column voted_for_member_id drop not null;
 
+-- A signed-in member could otherwise vote twice in the same category by
+-- voting again from a second device (each device has its own device_uuid).
+-- Guests have no member id (voter_member_id is null for them) so they stay
+-- deduped by device_uuid alone via votes_once_per_device_category above.
+create unique index if not exists votes_once_per_member_category
+  on votes (ballot_id, voter_member_id, category)
+  where voter_member_id is not null;
+
 -- 002 and 005 each added the same unique rule under a different name. Keep one.
 alter table votes drop constraint if exists votes_device_category_unique;
 
@@ -831,10 +839,14 @@ create table if not exists password_reset_codes (
 -- being able to read individual rows — which is what keeps the ballot secret.
 -- =============================================================================
 
-create or replace function has_voted(p_ballot_id uuid, p_device_uuid text)
+-- p_member_id catches a signed-in member re-opening the ballot on a second
+-- device; guests pass null and are matched on device_uuid alone.
+create or replace function has_voted(p_ballot_id uuid, p_device_uuid text, p_member_id uuid default null)
 returns boolean security definer language sql stable as $$
   select exists (
-    select 1 from votes where ballot_id = p_ballot_id and device_uuid = p_device_uuid
+    select 1 from votes
+    where ballot_id = p_ballot_id
+      and (device_uuid = p_device_uuid or (p_member_id is not null and voter_member_id = p_member_id))
   );
 $$;
 
