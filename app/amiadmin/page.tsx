@@ -2370,7 +2370,6 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [ttSpeakers, setTtSpeakers] = useState<TTSpeaker[]>(ballot?.table_topics_speakers ?? []);
-  const [addMemberId, setAddMemberId] = useState('');
   const [guestNameInput, setGuestNameInput] = useState('');
   const [savingTT, setSavingTT] = useState(false);
 
@@ -2410,17 +2409,19 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
     setSavingTT(false); onChanged();
   }
 
-  async function addTTMember() {
-    if (!addMemberId) return;
-    const member = allMembers.find(m => m.id === addMemberId);
-    if (!member || ttSpeakers.some(s => s.id === addMemberId)) return;
-    await saveTT([...ttSpeakers, { id: addMemberId, name: member.display_name, is_guest: false }]);
-    setAddMemberId('');
+  async function toggleTTMember(member: Member) {
+    if (savingTT) return;
+    const selected = ttSpeakers.some(s => s.id === member.id);
+    await saveTT(selected
+      ? ttSpeakers.filter(s => s.id !== member.id)
+      : [...ttSpeakers, { id: member.id, name: member.display_name, is_guest: false }]);
   }
 
   async function addTTGuest() {
-    const name = guestNameInput.trim(); if (!name) return;
-    await saveTT([...ttSpeakers, { id: `guest-${Date.now()}`, name, is_guest: true }]);
+    const names = guestNameInput.split(/[,\n]/).map(n => n.trim()).filter(Boolean);
+    if (!names.length) return;
+    const newGuests = names.map((name, i) => ({ id: `guest-${Date.now()}-${i}`, name, is_guest: true }));
+    await saveTT([...ttSpeakers, ...newGuests]);
     setGuestNameInput('');
   }
 
@@ -2460,7 +2461,6 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
   }
 
   const status = ballot?.status ?? 'not_started';
-  const availableMembers = allMembers.filter(m => !ttSpeakers.some(s => s.id === m.id));
   const CAT_LABELS: Record<string, string> = { speaker: '🎙️ Best Speaker', evaluator: '⚖️ Best Evaluator', table_topics: '💬 Best Table Topics Speaker', role_player: '🎤 Best Role Player', aux_role: '⏱️ Best Auxiliary Role Player' };
 
   return (
@@ -2488,27 +2488,43 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
         {(status === 'not_started' || status === 'open') && (
           <div>
             <p className={labelCls}>💬 Table Topics Speakers</p>
-            {ttSpeakers.length > 0 && (
-              <div className="space-y-1 mb-2">
-                {ttSpeakers.map(s => (
-                  <div key={s.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800/60">
-                    <span className="text-xs text-slate-700 dark:text-slate-300 flex-1 min-w-0 truncate">{s.is_guest ? `${s.name} (Guest)` : `TM ${s.name}`}</span>
-                    <button onClick={() => saveTT(ttSpeakers.filter(x => x.id !== s.id))} disabled={savingTT} className="text-xs text-slate-400 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 px-1 shrink-0">✕</button>
-                  </div>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-2 -mt-0.5">Tap everyone who spoke</p>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {allMembers.map(m => {
+                const selected = ttSpeakers.some(s => s.id === m.id);
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => toggleTTMember(m)}
+                    disabled={savingTT}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:opacity-40 ${
+                      selected
+                        ? 'bg-maroon-700 border-maroon-700 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-maroon-300 dark:hover:border-maroon-700'
+                    }`}
+                  >
+                    {selected ? '✓ ' : ''}{m.display_name}
+                  </button>
+                );
+              })}
+            </div>
+            {ttSpeakers.some(s => s.is_guest) && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {ttSpeakers.filter(s => s.is_guest).map(s => (
+                  <span key={s.id} className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-full text-xs font-medium bg-gold-300/25 dark:bg-gold-300/10 border border-gold-300/60 dark:border-gold-300/30 text-amber-800 dark:text-gold-300">
+                    {s.name} <span className="opacity-60">· Guest</span>
+                    <button onClick={() => saveTT(ttSpeakers.filter(x => x.id !== s.id))} disabled={savingTT} className="hover:text-red-500 dark:hover:text-red-400 px-0.5">✕</button>
+                  </span>
                 ))}
               </div>
             )}
-            <div className="flex gap-2 mb-2">
-              <select value={addMemberId} onChange={e => setAddMemberId(e.target.value)} className={`flex-1 min-w-0 ${selectCls}`}>
-                <option value="">Add a member…</option>
-                {availableMembers.map(m => <option key={m.id} value={m.id}>TM {m.display_name}</option>)}
-              </select>
-              <button onClick={addTTMember} disabled={!addMemberId || savingTT} className={`shrink-0 ${primaryBtn} !px-3 !py-2 !text-xs`}>Add</button>
-            </div>
             <div className="flex gap-2">
-              <input type="text" value={guestNameInput} onChange={e => setGuestNameInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTTGuest()} placeholder="Guest name…" className={`flex-1 min-w-0 ${inputCls}`} />
+              <input type="text" value={guestNameInput} onChange={e => setGuestNameInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTTGuest()} placeholder="Guest name(s), comma-separated…" className={`flex-1 min-w-0 ${inputCls}`} />
               <button onClick={addTTGuest} disabled={!guestNameInput.trim() || savingTT} className={`shrink-0 ${ghostBtn} !px-3 !py-2 !text-xs`}>+ Guest</button>
             </div>
+            {ttSpeakers.length > 0 && (
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1.5">{ttSpeakers.length} speaker{ttSpeakers.length !== 1 ? 's' : ''} selected</p>
+            )}
           </div>
         )}
 
