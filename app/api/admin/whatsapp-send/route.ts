@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/utils/supabase/server';
 import { isAdminMember } from '@/lib/admin-auth';
-import { pickUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
+import { nextUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
 import { openRoleSlots } from '@/lib/open-roles';
 import { getWhatsAppSettings, normalizePhone } from '@/lib/whatsapp/client';
 import { WA_MANUAL_SEND_KEYS, WA_MEETINGLESS_KEYS, type WaTemplateKey } from '@/lib/whatsapp/defaults';
@@ -15,7 +15,7 @@ async function upcomingMeeting(): Promise<MeetingRow | undefined> {
   const { data } = await supabase.from('meetings')
     .select('id, number, date, start_time, end_time, theme, meeting_link')
     .order('date', { ascending: true });
-  return pickUpcomingMeeting((data ?? []) as MeetingRow[]);
+  return nextUpcomingMeeting((data ?? []) as MeetingRow[]);
 }
 
 // GET: which meeting a manual send would use, and how many members it would

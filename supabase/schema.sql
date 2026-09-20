@@ -228,6 +228,9 @@ alter table meetings add column if not exists is_special_session   boolean not n
 alter table meetings add column if not exists special_session_note text;
 alter table meetings add column if not exists cancelled            boolean not null default false;
 alter table meetings add column if not exists cancellation_reason  text;
+-- Per-meeting override: skip the online/offline reservation windows entirely
+-- and open every role to everyone from the start (e.g. a Speakathon).
+alter table meetings add column if not exists reservation_open_to_all boolean not null default false;
 alter table meetings alter column speaker_slots set default 1;
 
 alter table meetings add column if not exists base_speaker_slots integer;

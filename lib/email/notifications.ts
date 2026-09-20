@@ -43,6 +43,18 @@ export function pickUpcomingMeeting<T extends MeetingRow>(list: T[]): T | undefi
   return sorted.find((m) => meetingEndUtcMs(m) > now) ?? sorted[sorted.length - 1];
 }
 
+// The meeting an actual send (email, WhatsApp broadcast, or the WhatsApp menu
+// bot's "meeting info" reply) should act on or message about — unlike
+// pickUpcomingMeeting, this never falls back to a meeting that already ended,
+// so "nothing is scheduled right now" reads as undefined instead of silently
+// reusing stale, past-meeting details. Preview/test-send vars are the one place
+// that fallback is wanted (realistic sample data even with a gap in the
+// calendar), which is why they keep calling pickUpcomingMeeting directly.
+export function nextUpcomingMeeting<T extends MeetingRow>(list: T[]): T | undefined {
+  const now = Date.now();
+  return [...list].sort((a, b) => meetingEndUtcMs(a) - meetingEndUtcMs(b)).find((m) => meetingEndUtcMs(m) > now);
+}
+
 function meetingLinkBlock(link: string | null | undefined): string {
   if (!link) return '';
   const safe = escapeHtml(link);

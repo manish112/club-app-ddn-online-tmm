@@ -37,6 +37,11 @@ import Image from 'next/image';
 
 const MEMBER_KEY = 'tm_member_id';
 
+// Email/WhatsApp sending run on TM Manish Singh's own SMTP/WhatsApp Business
+// credentials, not a club-owned account — so those two admin tabs are visible
+// only to that one member, regardless of anyone else's admin/officer status.
+const CREDENTIALS_OWNER_MEMBER_ID = 'ba431060-006a-445b-843c-ea9cc5569b78';
+
 function isAdminMember(m: Member): boolean {
   return m.is_admin || isClubOfficer(m);
 }
@@ -150,8 +155,9 @@ interface MeetingFormData {
   pair_groups: Record<string, string>;
   is_special_session: boolean;
   special_session_note: string;
+  reservation_open_to_all: boolean;
 }
-const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_link: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {}, is_special_session: false, special_session_note: '' };
+const EMPTY_FORM: MeetingFormData = { number: '', date: '', start_time: '19:30', end_time: '21:00', theme: '', meeting_link: '', meeting_type: 'regular', speaker_slots: '1', evaluator_slots: '1', disabled_roles: [], jury_slots: '0', speaker_groups: [], pair_groups: {}, is_special_session: false, special_session_note: '', reservation_open_to_all: false };
 
 const newGroupId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -171,6 +177,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
     meeting_link: initial?.meeting_link ?? '',
     is_special_session: initial?.is_special_session ?? false,
     special_session_note: initial?.special_session_note ?? '',
+    reservation_open_to_all: initial?.reservation_open_to_all ?? false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -188,6 +195,9 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   function set(field: keyof MeetingFormData, value: string) {
     setForm(f => {
       const next = { ...f, [field]: value };
+      // Every speaker gets an evaluator, so the counts always stay paired —
+      // including for a Speakathon. What's independent is whether the
+      // Evaluator *category* is on at all (see TOGGLEABLE_ROLES below).
       if (field === 'speaker_slots') next.evaluator_slots = value;
       return next;
     });
@@ -206,8 +216,17 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
   function applyPreset(preset: 'regular' | 'speakathon' | 'table_topics') {
     setForm(f => {
       if (preset === 'speakathon') return {
-        ...f, disabled_roles: ['ttm'], speaker_slots: '4', evaluator_slots: '4',
-        jury_slots: f.jury_slots === '0' ? '3' : f.jury_slots,
+        ...f,
+        // A Speakathon is just Speaker, Evaluator & Timer by default — every
+        // other role category starts off. The admin can still switch any of
+        // them back on individually with the role toggles below.
+        disabled_roles: TOGGLEABLE_ROLES.map(r => r.key).filter(k => k !== 'speaker' && k !== 'evaluator' && k !== 'timer'),
+        speaker_slots: '4', evaluator_slots: '4', jury_slots: '0',
+        // Speakathons tend to be open, come-one-come-all sessions — default to
+        // skipping the reservation windows so every role is open to all right
+        // away. Still just a starting point: the checkbox below can turn it
+        // back on for a particular meeting.
+        reservation_open_to_all: true,
         speaker_groups: f.speaker_groups.length ? f.speaker_groups : [
           { id: newGroupId(), name: 'Group A' },
           { id: newGroupId(), name: 'Group B' },
@@ -253,6 +272,7 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
       // The note only means anything while the flag is on — cleared otherwise so
       // un-ticking the box doesn't leave stale text behind.
       special_session_note: form.is_special_session ? (form.special_session_note.trim() || null) : null,
+      reservation_open_to_all: form.reservation_open_to_all,
     };
     if (initial?.id) {
       // Preserve occupied extra slots (from approved requests) that sit above the
@@ -385,6 +405,15 @@ function MeetingForm({ initial, onSave, onCancel }: { initial?: Partial<MeetingF
             );
           })}
         </div>
+        <label className="flex items-start gap-2.5 cursor-pointer select-none mt-3">
+          <input type="checkbox" checked={form.reservation_open_to_all}
+            onChange={e => setForm(f => ({ ...f, reservation_open_to_all: e.target.checked }))}
+            className="w-4 h-4 mt-0.5 accent-maroon-700 rounded shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">Open to all — skip reservation windows</span>
+            <span className="block text-xs text-slate-500">Ignores the club-wide online/offline reservation settings for this meeting only; every role is claimable by anyone from the moment it's created.</span>
+          </span>
+        </label>
       </div>
       <label>
         <span className={labelCls}>Speaker / Evaluator pairs</span>
@@ -2608,6 +2637,7 @@ type CaptureRow = DeviceCapture & { member?: { display_name: string } | null };
 function UsagePanel({ currentMemberId }: { currentMemberId: string }) {
   const [captures, setCaptures] = useState<CaptureRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/captures?memberId=${encodeURIComponent(currentMemberId)}`)
@@ -2639,6 +2669,27 @@ function UsagePanel({ currentMemberId }: { currentMemberId: string }) {
   const byLocation = tally((c) => [c.city, c.country].filter(Boolean).join(', ') || null).slice(0, 8);
   const byDevice   = tally((c) => c.device_type).slice(0, 5);
   const byBrowser  = tally((c) => c.browser).slice(0, 5);
+
+  // Per-user activity — grouped by member so an admin can drill into "TM Sara"
+  // and see just her sessions, instead of one long mixed feed. Anonymous
+  // visits (no signed-in member) are grouped by device identity instead.
+  const groups = new Map<string, { name: string; rows: CaptureRow[] }>();
+  for (const c of captures) {
+    const key = c.member_id ?? `anon:${c.visitor_id ?? c.ip ?? c.id}`;
+    const name = c.member?.display_name ? `TM ${c.member.display_name}` : 'Anonymous visitor';
+    const g = groups.get(key);
+    if (g) g.rows.push(c);
+    else groups.set(key, { name, rows: [c] });
+  }
+  const userGroups = [...groups.entries()]
+    .map(([key, g]) => ({
+      key, name: g.name,
+      count: g.rows.length,
+      lastActive: g.rows.reduce((max, r) => (r.created_at > max ? r.created_at : max), g.rows[0].created_at),
+      rows: g.rows.sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    }))
+    .sort((a, b) => b.lastActive.localeCompare(a.lastActive));
+  const selected = selectedKey ? userGroups.find((g) => g.key === selectedKey) : null;
 
   const fmtTime = (s: string) => new Date(s).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -2683,33 +2734,55 @@ function UsagePanel({ currentMemberId }: { currentMemberId: string }) {
         <BreakdownCard title="🌐 Browser" rows={byBrowser} />
       </div>
 
-      <div>
-        <p className={labelCls}>Recent sessions</p>
-        <div className="space-y-2 mt-1">
-          {captures.slice(0, 100).map((c) => (
-            <div key={c.id} className={`${cardCls} p-3`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                    {c.member?.display_name ? `TM ${c.member.display_name}` : 'Anonymous visitor'}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-                    {[c.browser, c.os, c.device_type].filter(Boolean).join(' · ') || 'Unknown device'}
-                  </p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
-                    {[c.city, c.region, c.country].filter(Boolean).join(', ') || 'Location unknown'}
-                    {c.ip ? ` · ${c.ip}` : ''}
-                  </p>
+      {selected ? (
+        <div>
+          <button type="button" onClick={() => setSelectedKey(null)}
+            className="text-xs font-semibold text-maroon-700 dark:text-maroon-400 mb-2">
+            ← All users
+          </button>
+          <p className={labelCls}>{selected.name} · {selected.count} open{selected.count === 1 ? '' : 's'}</p>
+          <div className="space-y-2 mt-1">
+            {selected.rows.slice(0, 100).map((c) => (
+              <div key={c.id} className={`${cardCls} p-3`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {[c.browser, c.os, c.device_type].filter(Boolean).join(' · ') || 'Unknown device'}
+                    </p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                      {[c.city, c.region, c.country].filter(Boolean).join(', ') || 'Location unknown'}
+                      {c.ip ? ` · ${c.ip}` : ''}
+                    </p>
+                  </div>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-600 shrink-0 text-right">{fmtTime(c.created_at)}</p>
                 </div>
-                <p className="text-[10px] text-slate-400 dark:text-slate-600 shrink-0 text-right">{fmtTime(c.created_at)}</p>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          {selected.rows.length > 100 && (
+            <p className="text-center text-xs text-slate-400 dark:text-slate-600 mt-3">Showing 100 of {selected.rows.length} most recent.</p>
+          )}
         </div>
-        {captures.length > 100 && (
-          <p className="text-center text-xs text-slate-400 dark:text-slate-600 mt-3">Showing 100 of {captures.length} most recent.</p>
-        )}
-      </div>
+      ) : (
+        <div>
+          <p className={labelCls}>Users</p>
+          <div className="space-y-2 mt-1">
+            {userGroups.map((g) => (
+              <button key={g.key} type="button" onClick={() => setSelectedKey(g.key)}
+                className={`${cardCls} p-3 w-full text-left flex items-center justify-between gap-2 hover:border-maroon-300 dark:hover:border-maroon-700 transition-colors`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{g.name}</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Last active {fmtTime(g.lastActive)}</p>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">{g.count} open{g.count === 1 ? '' : 's'}</span>
+                  <span className="text-slate-300 dark:text-slate-600">›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2919,6 +2992,8 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
   const displayedMembers    = clubMembers.filter(matchesMemberFilters);
   const displayedWicMembers = wicMembers.filter(matchesMemberFilters);
 
+  const isCredentialsOwner = currentMember.id === CREDENTIALS_OWNER_MEMBER_ID;
+
   const tabs = [
     { id: 'meetings'  as const, label: 'Meetings' },
     { id: 'members'   as const, label: 'Members' },
@@ -2927,8 +3002,11 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
     { id: 'announce'  as const, label: 'Announce' },
     { id: 'usage'     as const, label: 'Usage' },
     { id: 'surveys'   as const, label: 'Surveys' },
-    { id: 'email'     as const, label: 'Email' },
-    { id: 'whatsapp'  as const, label: 'WhatsApp' },
+    // Tied to one member's personal credentials — hidden from every other admin.
+    ...(isCredentialsOwner ? [
+      { id: 'email'    as const, label: 'Email' },
+      { id: 'whatsapp' as const, label: 'WhatsApp' },
+    ] : []),
     { id: 'settings'  as const, label: 'Settings' },
   ];
 
@@ -2987,9 +3065,9 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-slate-200 dark:bg-slate-900/60 rounded-2xl h-32 animate-pulse" />)}</div>
         ) : tab === 'settings' ? (
           <AgendaSettingsPanel meetings={meetings} onChanged={fetchAll} />
-        ) : tab === 'email' ? (
+        ) : tab === 'email' && isCredentialsOwner ? (
           <EmailSettingsPanel currentAdminId={currentMember.id} members={members} />
-        ) : tab === 'whatsapp' ? (
+        ) : tab === 'whatsapp' && isCredentialsOwner ? (
           <WhatsAppSettingsPanel currentAdminId={currentMember.id} />
         ) : tab === 'surveys' ? (
           <AdminSurveysPanel members={members} />

@@ -240,6 +240,9 @@ export function roleReservation(
   enabled: boolean,
   daysBefore: number = DEFAULT_RESERVATION_DAYS_BEFORE,
 ): RoleReservation | null {
+  // Per-meeting escape hatch — e.g. a Speakathon that should be open to
+  // everyone right away regardless of the club-wide reservation defaults.
+  if (meeting.reservation_open_to_all) return null;
   if (!enabled) return null;
   const [y, mo, d] = meeting.date.split('-').map(Number);
   const open = new Date(Date.UTC(y, mo - 1, d - Math.max(0, daysBefore)));
