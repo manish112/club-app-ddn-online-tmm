@@ -182,6 +182,11 @@ export interface Meeting {
   evaluator_slots: number;
   base_speaker_slots: number;   // admin-configured minimum; extra slots trim back to this
   disabled_roles: RoleKey[];   // role categories turned off for this meeting
+  // When true, this meeting skips the club-wide online/offline reservation
+  // windows entirely — every role is open to claim by anyone from the start,
+  // regardless of the agenda_config defaults. Optional: undefined until the
+  // column exists / is read (see roleReservation in lib/utils).
+  reservation_open_to_all?: boolean;
   // Speakathon extras (0 / empty for regular meetings)
   jury_slots: number;                    // admin-assigned judges; jury shown when > 0
   speaker_groups: SpeakerGroup[];        // named heats

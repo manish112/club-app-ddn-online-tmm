@@ -10,7 +10,7 @@ import { ROLE_META, type RoleKey } from '@/lib/types';
 import { openRoleSlots } from '@/lib/open-roles';
 import { formatDate, formatTime } from '@/lib/email/format';
 import { getAppUrl, getVpEducationName, getVpMembershipName } from '@/lib/email/mailer';
-import { pickUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
+import { pickUpcomingMeeting, nextUpcomingMeeting, type MeetingRow } from '@/lib/email/notifications';
 import { createResetCode } from '@/lib/password-reset';
 import {
   deliverWhatsApp, getWhatsAppSettings, normalizePhone, sendTextMessage, type WaSendResult,
@@ -759,7 +759,7 @@ async function upcomingMeetingRow(): Promise<MeetingRow | undefined> {
   const { data } = await supabase.from('meetings')
     .select('id, number, date, start_time, end_time, theme, meeting_link')
     .order('date', { ascending: true });
-  return pickUpcomingMeeting((data ?? []) as MeetingRow[]);
+  return nextUpcomingMeeting((data ?? []) as MeetingRow[]);
 }
 
 // The roles this member holds at a meeting, as (role, slot) pairs. Both

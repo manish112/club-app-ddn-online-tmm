@@ -4,16 +4,19 @@ import { isAdminMember } from '@/lib/admin-auth';
 import {
   notifyMeetingCreated, sendMeetingReminder, sendMeetingReminderDayBefore, sendRoleReminders,
   sendOpenRolesNudge, broadcastRoleAssigned, broadcastLeadershipAssigned, broadcastMentorAssigned,
-  broadcastWelcome, pickUpcomingMeeting, type MeetingRow,
+  broadcastWelcome, nextUpcomingMeeting, type MeetingRow,
 } from '@/lib/email/notifications';
 
-// The meeting every "next meeting" email (broadcast or 1:1) is built from.
+// The meeting every "next meeting" email (broadcast or 1:1) is built from. Only
+// a meeting that hasn't ended yet counts — never falls back to the last past
+// one, so a genuinely empty calendar correctly yields "No meeting to reference"
+// below instead of silently re-sending about a meeting that's already over.
 async function loadTargetMeeting(): Promise<MeetingRow | undefined> {
   const supabase = createServiceClient();
   const { data } = await supabase
     .from('meetings').select('id, number, date, start_time, end_time, theme, meeting_link')
     .order('date', { ascending: true });
-  return pickUpcomingMeeting((data ?? []) as MeetingRow[]);
+  return nextUpcomingMeeting((data ?? []) as MeetingRow[]);
 }
 
 // Lets the admin UI show which meeting a manual send will use *before* sending.
