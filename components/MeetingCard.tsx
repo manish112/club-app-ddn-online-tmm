@@ -209,9 +209,16 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
 
   // An evaluator slot is gated until its paired speaker slot (same index) is
   // claimed — but only when there's actually a paired speaker slot to wait for.
+  // Not for a Speakathon: evaluators there open right away, independent of
+  // whether the paired speaker slot has been claimed yet.
+  const isSpeakathonMeeting = meeting.meeting_type === 'speakathon';
   const speakerEnabled = isRoleEnabled(meeting, 'speaker');
   const awaitingSpeakerForEval = (slot: number): boolean =>
-    speakerEnabled && slot <= meeting.speaker_slots && !claimsMap.has(`speaker:${slot}`);
+    !isSpeakathonMeeting && speakerEnabled && slot <= meeting.speaker_slots && !claimsMap.has(`speaker:${slot}`);
+
+  // The back-to-back rotation rule doesn't apply to a Speakathon — it's a
+  // one-off, come-one-come-all format, not part of the normal weekly rotation.
+  const adjacentRoles = isSpeakathonMeeting ? [] : memberAdjacentRoles;
 
   // Members already spoken for as evaluators this meeting: those holding an
   // evaluator claim, plus anyone pending as a nominee. They're hidden from the
@@ -249,7 +256,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // a club norm officers routinely override, so a member may still ask and let
   // the approver weigh it up.
   const speakerHardBlock = roleClaimBlocked('speaker', memberExistingRoles);
-  const speakerRotationBlock = consecutiveRoleBlocked('speaker', memberAdjacentRoles);
+  const speakerRotationBlock = consecutiveRoleBlocked('speaker', adjacentRoles);
   const canRequestSlot = !past && !locked && !memberHasSpeakerSlot && isSignedInMember
     && speakerRoles.length > 0 && !speakerHardBlock
     && (belowSpeakerCap || hasFreeSpeakerSlot)
@@ -285,7 +292,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   // Same split as the speaker slot above: hard rules remove the option, the
   // rotation rule only flags it so the approver can decide.
   const roleHardBlock = (rk: RoleKey) => roleClaimBlocked(rk, memberExistingRoles);
-  const roleRotationBlock = (rk: RoleKey) => consecutiveRoleBlocked(rk, memberAdjacentRoles);
+  const roleRotationBlock = (rk: RoleKey) => consecutiveRoleBlocked(rk, adjacentRoles);
   const requestableRoles = openRoleKeys.filter((rk) => !roleHardBlock(rk));
 
   const livingRoleRequests = roleRequests.filter((r) => r.status !== 'cancelled');
@@ -374,7 +381,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     claim: claimsMap.get(`${roleKey}:${slot}`) ?? null,
     memberId,
     memberExistingRoles,
-    memberAdjacentRoles,
+    memberAdjacentRoles: adjacentRoles,
     reservation,
     offlineWindow,
     participationMode,
