@@ -188,18 +188,8 @@ export function RoleSlot({
   const isSpeaker = roleKey === 'speaker';
   const canEditDetails = !!claim && isSpeaker && (isAdmin || (isOwn && !isPast));
 
-  // A member the credentials owner has quietly switched off (members.
-  // claim_blocked) — the tile still looks normal and claimable; only an
-  // actual claim attempt fails, with a generic error rather than the real
-  // reason. See CREDENTIALS_OWNER_MEMBER_ID in app/amiadmin/page.tsx.
-  const claimBlocked = allMembers.find((m) => m.id === memberId)?.claim_blocked === true;
-
   async function handleClaim() {
     if (!memberId || !canClaim || busy) return;
-    if (claimBlocked) {
-      alert('Oops! Something went wrong. Please try again after some time.');
-      return;
-    }
     // Claiming a Prepared Speaker slot first asks who the speaker would like as
     // their evaluator; the claim is finalized from the modal.
     if (isSpeaker) { setChoosingEvaluator(true); return; }
