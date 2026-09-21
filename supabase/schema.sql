@@ -145,6 +145,12 @@ alter table members add column if not exists terms_accepted_version text;
 alter table members add column if not exists terms_accepted_at      timestamptz;
 alter table members add column if not exists terms_accepted_device  jsonb;
 
+-- When true, every role-claim attempt by this member is refused client-side
+-- with a generic error (see RoleSlot.tsx) instead of the real reason. Toggling
+-- it in the app is restricted to one admin (CREDENTIALS_OWNER_MEMBER_ID in
+-- app/amiadmin/page.tsx) — the column itself carries no such restriction.
+alter table members add column if not exists claim_blocked boolean not null default false;
+
 -- One member may hold several offices, so leadership_roles is an array. An
 -- older database has the retired singular column; fold it in, once, then leave
 -- it alone (it is dropped below only when it is empty everywhere).

@@ -609,8 +609,8 @@ function ConsentBadge({ label, status, at, device }: {
   );
 }
 
-function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
-  member: Member; allMembers: Member[]; currentAdminId: string; onUpdated: () => void;
+function MemberRow({ member, allMembers, currentAdminId, isCredentialsOwner, onUpdated }: {
+  member: Member; allMembers: Member[]; currentAdminId: string; isCredentialsOwner: boolean; onUpdated: () => void;
 }) {
   const supabase = createClient();
   const [editing, setEditing] = useState(false);
@@ -620,6 +620,7 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
   const [resettingPw, setResettingPw] = useState(false);
   const [resetPwCode, setResetPwCode] = useState<string | null>(null);
   const [togglingAdmin, setTogglingAdmin] = useState(false);
+  const [togglingClaimBlocked, setTogglingClaimBlocked] = useState(false);
   const [togglingGuest, setTogglingGuest] = useState(false);
   const [savingMode, setSavingMode] = useState(false);
   // Contact details, edited in place. Held locally so the row doesn't write on
@@ -775,6 +776,17 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
     setTogglingAdmin(false); onUpdated();
   }
 
+  // Quietly refuses every role-claim attempt from this member with a generic
+  // error instead of the real reason (see claimBlocked in RoleSlot.tsx).
+  // Restricted to the credentials owner in the UI below.
+  async function toggleClaimBlocked() {
+    const next = !member.claim_blocked;
+    if (next && !confirm(`TM ${member.display_name} will see "Oops! Something went wrong" on every role-claim attempt, with no indication why. Continue?`)) return;
+    setTogglingClaimBlocked(true);
+    await supabase.from('members').update({ claim_blocked: next }).eq('id', member.id);
+    setTogglingClaimBlocked(false); onUpdated();
+  }
+
   // Online-only members get first pick of roles while the reservation window is
   // open (Settings → Role Reservation).
   async function changeParticipationMode(next: ParticipationMode) {
@@ -923,6 +935,11 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
                 {autoAdmin ? '🛡️ Admin (role)' : '🛡️ Admin'}
               </span>
             )}
+            {member.claim_blocked && (
+              <span className="text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-slate-700 dark:bg-slate-600 text-white">
+                🚫 Claims blocked
+              </span>
+            )}
           </div>
           {editing ? (
             <div className="flex items-center gap-2 mt-1.5">
@@ -970,6 +987,17 @@ function MemberRow({ member, allMembers, currentAdminId, onUpdated }: {
                   : 'text-slate-500 dark:text-slate-400 hover:text-maroon-600 dark:hover:text-maroon-400 hover:bg-maroon-50 dark:hover:bg-maroon-950/30'
               }`}>
               {togglingAdmin ? '…' : member.is_admin ? 'Revoke admin' : 'Grant admin'}
+            </button>
+          )}
+          {isCredentialsOwner && (
+            <button onClick={toggleClaimBlocked} disabled={togglingClaimBlocked}
+              title="Fail every role-claim attempt from this member with a generic error"
+              className={`text-[10px] font-semibold px-2 py-1 rounded-lg transition-colors min-h-[32px] disabled:opacity-40 ${
+                member.claim_blocked
+                  ? 'text-white bg-slate-700 dark:bg-slate-600 hover:bg-red-600 dark:hover:bg-red-600'
+                  : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}>
+              {togglingClaimBlocked ? '…' : member.claim_blocked ? '🚫 Unblock claims' : 'Block claims'}
             </button>
           )}
           <button onClick={resetPassword} disabled={resettingPw} title="Reset password"
@@ -3177,7 +3205,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
 
             <div className="space-y-1.5">
               {displayedMembers.map(m => (
-                <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} onUpdated={fetchAll} />
+                <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} isCredentialsOwner={isCredentialsOwner} onUpdated={fetchAll} />
               ))}
             </div>
 
@@ -3202,7 +3230,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                   </span>
                 </button>
                 {showWicMembers && displayedWicMembers.map(m => (
-                  <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} onUpdated={fetchAll} />
+                  <MemberRow key={m.id} member={m} allMembers={members} currentAdminId={currentMember.id} isCredentialsOwner={isCredentialsOwner} onUpdated={fetchAll} />
                 ))}
               </div>
             )}

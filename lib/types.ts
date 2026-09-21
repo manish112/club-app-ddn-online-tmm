@@ -166,6 +166,12 @@ export interface Member {
   // Admin-set; undefined when the column hasn't been read (see participationMode).
   participation_mode?: ParticipationMode | null;
   theme_preference: 'dark' | 'light' | null;
+  // When true, any role-claim attempt by this member fails with a generic
+  // "something went wrong" message instead of the real reason — enforced
+  // client-side in RoleSlot.tsx. Settable only by the credentials owner (see
+  // CREDENTIALS_OWNER_MEMBER_ID in app/amiadmin/page.tsx). Optional: undefined
+  // until the column exists / is read.
+  claim_blocked?: boolean;
   created_at: string;
 }
 
