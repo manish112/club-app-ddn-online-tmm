@@ -907,7 +907,7 @@ function PasswordCard({ member }: { member: Member }) {
           <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-3 mt-1">
             {mode === 'set' ? (
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                🔒 <strong>Don&apos;t have a verification code?</strong> Contact <strong>TM Manish Singh</strong>
+                🔒 <strong>Don&apos;t have a verification code?</strong> Please contact a club officer
                 {' '}to get one{member.whatsapp_consent_status === 'granted' && (
                   <>, or send <strong>Hi</strong> to our club&apos;s WhatsApp number and pick &ldquo;Reset my
                   password&rdquo; from the menu</>
@@ -915,7 +915,7 @@ function PasswordCard({ member }: { member: Member }) {
               </p>
             ) : (
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                🔒 <strong>Forgot your current password?</strong> Contact <strong>TM Manish Singh</strong> to reset it.
+                🔒 <strong>Forgot your current password?</strong> Please contact a club officer to reset it.
               </p>
             )}
           </div>

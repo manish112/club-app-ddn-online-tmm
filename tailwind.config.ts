@@ -80,6 +80,16 @@ const config: Config = {
       },
     },
   },
+  future: {
+    // Scope every `hover:` variant to @media (hover: hover) — without it,
+    // tapping an element on a touchscreen can leave it permanently "hovered"
+    // (no mouseleave to clear it), which on MeetingCard's article applies
+    // hover:-translate-y-0.5 and stays applied. That transform then becomes
+    // the containing block for any position:fixed modal rendered inside the
+    // card, so the modal centers on the (possibly off-screen) card instead of
+    // the viewport — the mobile "invisible modal" bug this fixes.
+    hoverOnlyWhenSupported: true,
+  },
   plugins: [],
 };
 

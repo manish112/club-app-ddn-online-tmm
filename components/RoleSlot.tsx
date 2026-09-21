@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { createClient } from '@/utils/supabase/client';
 import type { Member, ParticipationMode, RoleClaim, RoleKey } from '@/lib/types';
 import { ASSIGN_ONLY_ROLES, LEVELS, PATHS, ROLE_META } from '@/lib/types';
@@ -939,7 +940,12 @@ function ReleaseConfirmModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  return (
+  // Portal to <body>: RoleSlot renders inside MeetingCard's <article>, whose
+  // hover transform (or a stuck :hover on some mobile browsers after a tap)
+  // becomes the containing block for position:fixed — without this the
+  // backdrop shows but the dialog centers on the card, off-screen, instead of
+  // the viewport. Same fix as MemberAvatar's lightbox.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
       // Stops here as well as cancelling: in the mini variant this modal is
@@ -992,7 +998,8 @@ function ReleaseConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1010,7 +1017,8 @@ function EvaluatorPreferenceModal({
   const unavailable = new Set(unavailableIds);
   const options = members.filter((m) => m.id !== excludeId && !unavailable.has(m.id));
 
-  return (
+  // Portal to <body> — same containing-block trap as ReleaseConfirmModal above.
+  return createPortal(
     <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
       <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark p-6">
         <div className="w-10 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto mb-6 sm:hidden" />
@@ -1055,6 +1063,7 @@ function EvaluatorPreferenceModal({
           Cancel
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
