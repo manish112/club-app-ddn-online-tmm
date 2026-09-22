@@ -97,30 +97,36 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
     guestName: c.guest_name,
   });
 
-  const speakerCandidates: Candidate[] = meeting.role_claims
+  // A signed-in voter never sees their own name as an option — nothing stops
+  // self-voting at the database level, so it's kept out of the list instead.
+  const isRealVoter = !!memberId && memberId !== 'guest';
+  const excludeSelf = (list: Candidate[]): Candidate[] =>
+    isRealVoter ? list.filter(c => c.memberId !== memberId) : list;
+
+  const speakerCandidates: Candidate[] = excludeSelf(meeting.role_claims
     .filter(c => c.role_key === 'speaker')
-    .map(c => claimCandidate(c));
+    .map(c => claimCandidate(c)));
 
-  const evaluatorCandidates: Candidate[] = meeting.role_claims
+  const evaluatorCandidates: Candidate[] = excludeSelf(meeting.role_claims
     .filter(c => c.role_key === 'evaluator')
-    .map(c => claimCandidate(c));
+    .map(c => claimCandidate(c)));
 
-  const ttCandidates: Candidate[] = ballot.table_topics_speakers.map(s => ({
+  const ttCandidates: Candidate[] = excludeSelf(ballot.table_topics_speakers.map(s => ({
     id: s.id,
     label: s.is_guest ? `${s.name} (Guest)` : `TM ${s.name}`,
     memberId: s.is_guest ? null : s.id,
     guestName: s.is_guest ? s.name : null,
-  }));
+  })));
 
-  const roleCandidates: Candidate[] = ROLE_PLAYER_KEYS.flatMap(roleKey =>
+  const roleCandidates: Candidate[] = excludeSelf(ROLE_PLAYER_KEYS.flatMap(roleKey =>
     meeting.role_claims.filter(c => c.role_key === roleKey)
       .map(c => claimCandidate(c, ` · ${ROLE_META[roleKey].label}`))
-  );
+  ));
 
-  const auxCandidates: Candidate[] = AUX_ROLE_KEYS.flatMap(roleKey =>
+  const auxCandidates: Candidate[] = excludeSelf(AUX_ROLE_KEYS.flatMap(roleKey =>
     meeting.role_claims.filter(c => c.role_key === roleKey)
       .map(c => claimCandidate(c, ` · ${ROLE_META[roleKey].label}`))
-  );
+  ));
 
   const categories: { key: VoteCategory; candidates: Candidate[] }[] = ([
     { key: 'speaker'      as VoteCategory, candidates: speakerCandidates },
@@ -132,8 +138,17 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
 
   const allSelected = categories.every(c => !!selections[c.key]);
 
+  // Two independent eligibility gates, set when the admin opened voting (see
+  // VotingControls in app/amiadmin/page.tsx). Missing values (an older
+  // database, or a ballot opened before this existed) read as "everyone's in".
+  const isGuestVoter = memberId === 'guest';
+  const guestVotingOff = isGuestVoter && ballot.allow_guest_voting === false;
+  const notOnVoterList = !isGuestVoter && ballot.voter_restriction === 'selected'
+    && !!memberId && !(ballot.allowed_voter_ids ?? []).includes(memberId);
+  const notEligible = guestVotingOff || notOnVoterList;
+
   async function handleSubmit() {
-    if (!allSelected || submitting || !memberId || !deviceId) return;
+    if (!allSelected || submitting || !memberId || !deviceId || notEligible) return;
     setSubmitting(true);
     setSubmitError('');
 
@@ -252,7 +267,19 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
           {/* Voting mode */}
           {!isClosed && (
             <>
-              {isFull && !submitted && !alreadyVoted && (
+              {notEligible && !submitted && !alreadyVoted && (
+                <div className="text-center py-8 space-y-2">
+                  <div className="text-4xl">🚫</div>
+                  <p className="font-semibold text-slate-800 dark:text-slate-200">You can&apos;t vote in this ballot</p>
+                  <p className="text-sm text-slate-400 dark:text-slate-500">
+                    {guestVotingOff
+                      ? 'Guest voting is switched off for this meeting — please sign in to vote.'
+                      : "You're not on the voter list for this ballot."}
+                  </p>
+                </div>
+              )}
+
+              {!notEligible && isFull && !submitted && !alreadyVoted && (
                 <div className="text-center py-8 space-y-2">
                   <div className="text-4xl">🚫</div>
                   <p className="font-semibold text-slate-800 dark:text-slate-200">Voting slots are full</p>
@@ -282,7 +309,7 @@ export function BallotModal({ ballot, meeting, allMembers, memberId, deviceId, i
                 </div>
               )}
 
-              {!isFull && !submitted && !alreadyVoted && (
+              {!notEligible && !isFull && !submitted && !alreadyVoted && (
                 <>
                   {categories.map(cat => {
                     const meta = CAT_META[cat.key];

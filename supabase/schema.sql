@@ -322,6 +322,16 @@ create table if not exists ballots (
 alter table ballots add column if not exists voter_count           integer;
 alter table ballots add column if not exists table_topics_speakers jsonb not null default '[]'::jsonb;
 
+-- Set when voting is opened (VotingControls in app/amiadmin/page.tsx).
+-- allow_guest_voting gates guest-mode (unsigned-in) voters only; voter_restriction
+-- + allowed_voter_ids gates which signed-in members may vote — independent of
+-- each other, so a ballot can restrict TMs to a shortlist while still (or not)
+-- letting guests vote.
+alter table ballots add column if not exists allow_guest_voting boolean not null default true;
+alter table ballots add column if not exists voter_restriction  text    not null default 'all'
+  check (voter_restriction in ('all', 'selected'));
+alter table ballots add column if not exists allowed_voter_ids  uuid[]  not null default '{}';
+
 
 create table if not exists votes (
   id                  uuid primary key default gen_random_uuid(),
