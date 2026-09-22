@@ -10,8 +10,6 @@ function WhatsAppIcon() {
   );
 }
 
-const CONTACT_ROLE_ORDER: LeadershipRole[] = ['president', 'vp_education', 'vp_membership', 'secretary', 'vp_pr'];
-
 function waLink(phone: string) {
   const digits = phone.replace(/\D/g, '');
   return `https://wa.me/${digits}`;
@@ -22,14 +20,14 @@ interface Props {
 }
 
 export function SiteFooter({ members }: Props) {
-  // Pair each contact role with the member who holds it, keeping the role so the
-  // label reflects the searched role (a member may hold several roles).
-  const contacts = CONTACT_ROLE_ORDER
-    .map((role) => {
-      const m = members.find((mm) => mm.active && hasLeadershipRole(mm, role));
-      return m ? { m, role } : null;
-    })
-    .filter((c): c is { m: Member; role: LeadershipRole } => !!c);
+  // Every leadership role, paired with whoever holds it — most roles are
+  // exclusive (one holder), but Club Mentor isn't, so a role can list more
+  // than one member. Order follows LEADERSHIP_ROLES.
+  const contacts = LEADERSHIP_ROLES.flatMap(({ value: role }) =>
+    members
+      .filter((m) => m.active && hasLeadershipRole(m, role))
+      .map((m) => ({ m, role }))
+  );
 
   const roleLabel = (role: LeadershipRole) =>
     LEADERSHIP_ROLES.find((r) => r.value === role)?.label ?? role;
@@ -50,7 +48,7 @@ export function SiteFooter({ members }: Props) {
         {/* Contacts */}
         {contacts.length > 0 && (
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Contact us</p>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">Club Leadership</p>
             <div className="space-y-3">
               {contacts.map(({ m, role }) => {
                 const showPhone = m.show_phone_in_contact && !!m.phone;
@@ -111,6 +109,11 @@ export function SiteFooter({ members }: Props) {
             />
           </a>
           <p className="text-xs text-white/30 text-center">further developed by TM Manish Singh</p>
+          <p className="text-[11px] text-white/25 text-center leading-relaxed max-w-md mx-auto">
+            © 2026 Manish Singh. All rights reserved. This app is provided by TM Manish Singh
+            on a pro bono basis to support Dehradun Online Toastmasters Club. Manish Singh
+            reserves the right to withdraw this service at any time without prior notice.
+          </p>
         </div>
 
       </div>

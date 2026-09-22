@@ -46,6 +46,11 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [requestNote, setRequestNote] = useState('');
   const [requestEvaluatorId, setRequestEvaluatorId] = useState('');
+  // A preferred evaluator isn't submitted straight away — same consent check
+  // as claiming a speaker slot directly (RoleSlot's EvaluatorPreferenceModal):
+  // confirm the speaker has actually asked that person first.
+  const [confirmingEvalConsent, setConfirmingEvalConsent] = useState(false);
+  const [evalConsentNote, setEvalConsentNote] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [roleRequests, setRoleRequests] = useState<RoleInterestRequest[]>([]);
   const [showInterestForm, setShowInterestForm] = useState(false);
@@ -158,6 +163,25 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
     setShowRequestForm(false);
     setRequestNote('');
     setRequestEvaluatorId('');
+    setEvalConsentNote(null);
+  }
+
+  // Same consent gate as RoleSlot's EvaluatorPreferenceModal: naming someone
+  // here holds an evaluator slot for them, so confirm the speaker actually
+  // asked before it's submitted.
+  function handleSendRequestClick() {
+    if (requestEvaluatorId) { setConfirmingEvalConsent(true); return; }
+    submitRequest();
+  }
+  function confirmEvalConsentYes() {
+    setConfirmingEvalConsent(false);
+    submitRequest();
+  }
+  function confirmEvalConsentNo() {
+    const name = allMembers.find(m => m.id === requestEvaluatorId)?.display_name;
+    setConfirmingEvalConsent(false);
+    setRequestEvaluatorId('');
+    setEvalConsentNote(`Please speak with TM ${name ?? 'them'} first, before requesting them as your preferred evaluator.`);
   }
   const isTMoD = !!memberId &&
     meeting.role_claims.some((c) => c.role_key === 'tmod' && c.member_id === memberId);
@@ -868,6 +892,27 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   <p className="mt-1 opacity-80">{slotRequest.review_comment}</p>
                 )}
               </div>
+            ) : showRequestForm && confirmingEvalConsent ? (
+              <div className="rounded-xl border border-maroon-200 dark:border-maroon-800/50 bg-maroon-50 dark:bg-maroon-950/20 p-3 space-y-2">
+                <p className="text-xs font-semibold text-maroon-700 dark:text-maroon-400">Quick check</p>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Have you already spoken to{' '}
+                  <strong className="text-slate-800 dark:text-slate-100">
+                    TM {allMembers.find(m => m.id === requestEvaluatorId)?.display_name ?? 'them'}
+                  </strong>{' '}
+                  and confirmed they&apos;re happy to be your evaluator?
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={confirmEvalConsentYes} disabled={submitting}
+                    className="flex-1 bg-maroon-700 hover:bg-maroon-800 text-white text-xs font-semibold rounded-lg py-2 disabled:opacity-40 active:scale-95 transition-all">
+                    {submitting ? 'Sending…' : 'Yes, I’ve asked them'}
+                  </button>
+                  <button onClick={confirmEvalConsentNo} disabled={submitting}
+                    className="flex-1 border border-maroon-200 dark:border-maroon-800/50 text-slate-600 dark:text-slate-300 text-xs font-medium rounded-lg py-2 hover:bg-white dark:hover:bg-slate-800 disabled:opacity-40 transition-colors">
+                    No, not yet
+                  </button>
+                </div>
+              </div>
             ) : showRequestForm ? (
               <div className="rounded-xl border border-maroon-200 dark:border-maroon-800/50 bg-maroon-50 dark:bg-maroon-950/20 p-3 space-y-2">
                 <p className="text-xs font-semibold text-maroon-700 dark:text-maroon-400">
@@ -887,6 +932,12 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                     the officers will decide whether to make an exception.
                   </p>
                 )}
+                {evalConsentNote && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30
+                                border border-amber-200 dark:border-amber-800/40 rounded-lg px-2.5 py-2 leading-relaxed">
+                    {evalConsentNote}
+                  </p>
+                )}
                 <textarea
                   value={requestNote}
                   onChange={e => setRequestNote(e.target.value)}
@@ -901,7 +952,7 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   </label>
                   <select
                     value={requestEvaluatorId}
-                    onChange={e => setRequestEvaluatorId(e.target.value)}
+                    onChange={e => { setRequestEvaluatorId(e.target.value); setEvalConsentNote(null); }}
                     className="w-full text-xs border border-maroon-200 dark:border-maroon-800/50 rounded-lg px-3 py-2 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-maroon-600"
                   >
                     <option value="">No preference — open to anyone</option>
@@ -911,11 +962,11 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
                   </select>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={submitRequest} disabled={submitting}
+                  <button onClick={handleSendRequestClick} disabled={submitting}
                     className="flex-1 bg-maroon-700 hover:bg-maroon-800 text-white text-xs font-semibold rounded-lg py-2 disabled:opacity-40 active:scale-95 transition-all">
                     {submitting ? 'Sending…' : 'Send Request'}
                   </button>
-                  <button onClick={() => { setShowRequestForm(false); setRequestNote(''); }}
+                  <button onClick={() => { setShowRequestForm(false); setRequestNote(''); setEvalConsentNote(null); }}
                     className="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">
                     Cancel
                   </button>

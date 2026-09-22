@@ -15,6 +15,13 @@ export interface Ballot {
   table_topics_speakers: TTSpeaker[];
   opened_at: string | null;
   closed_at: string | null;
+  // Set when voting is opened (see VotingControls in app/amiadmin/page.tsx).
+  // Optional: undefined until the columns exist / are read, in which case
+  // callers treat that as the original behaviour — guests allowed, everyone
+  // eligible.
+  allow_guest_voting?: boolean;
+  voter_restriction?: 'all' | 'selected';
+  allowed_voter_ids?: string[];
   created_at: string;
 }
 

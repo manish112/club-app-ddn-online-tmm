@@ -2385,7 +2385,7 @@ function AnnouncementPanel({ current, onChanged }: { current: Announcement | nul
 
 // ─── Voting controls ──────────────────────────────────────────────────────────
 
-function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: MeetingWithClaims; ballot: Ballot | null; allMembers: Member[]; onChanged: () => void }) {
+function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged }: { meeting: MeetingWithClaims; ballot: Ballot | null; allMembers: Member[]; currentAdminId: string; onChanged: () => void }) {
   const supabase = createClient();
   const [busy, setBusy] = useState(false);
   const [showOpen, setShowOpen] = useState(false);
@@ -2401,8 +2401,19 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
   const [ttSpeakers, setTtSpeakers] = useState<TTSpeaker[]>(ballot?.table_topics_speakers ?? []);
   const [guestNameInput, setGuestNameInput] = useState('');
   const [savingTT, setSavingTT] = useState(false);
+  const [allowGuestVoting, setAllowGuestVoting] = useState(ballot?.allow_guest_voting ?? true);
+  const [voterRestriction, setVoterRestriction] = useState<'all' | 'selected'>(ballot?.voter_restriction ?? 'all');
+  const [allowedVoterIds, setAllowedVoterIds] = useState<string[]>(ballot?.allowed_voter_ids ?? []);
+  const [showVoterDetail, setShowVoterDetail] = useState(false);
+  const [voterDetail, setVoterDetail] = useState<{ category: string; voterName: string; votedForName: string }[] | null>(null);
+  const [loadingVoterDetail, setLoadingVoterDetail] = useState(false);
 
   useEffect(() => { setTtSpeakers(ballot?.table_topics_speakers ?? []); }, [ballot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setAllowGuestVoting(ballot?.allow_guest_voting ?? true);
+    setVoterRestriction(ballot?.voter_restriction ?? 'all');
+    setAllowedVoterIds(ballot?.allowed_voter_ids ?? []);
+  }, [ballot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!ballot || ballot.status !== 'open') { setLiveCount(null); return; }
@@ -2456,10 +2467,27 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
 
   async function openVoting() {
     setBusy(true);
-    const payload = { status: 'open' as const, meeting_code: null, voter_count: voterCount ? parseInt(voterCount) : null, table_topics_speakers: ttSpeakers, opened_at: new Date().toISOString(), closed_at: null };
+    const payload = {
+      status: 'open' as const, meeting_code: null, voter_count: voterCount ? parseInt(voterCount) : null,
+      table_topics_speakers: ttSpeakers, opened_at: new Date().toISOString(), closed_at: null,
+      allow_guest_voting: allowGuestVoting,
+      voter_restriction: voterRestriction,
+      // Only meaningful when restricted — cleared otherwise so switching back to
+      // "All TMs" doesn't leave a stale shortlist sitting in the row.
+      allowed_voter_ids: voterRestriction === 'selected' ? allowedVoterIds : [],
+    };
     if (ballot) await supabase.from('ballots').update(payload).eq('id', ballot.id);
     else await supabase.from('ballots').insert({ meeting_id: meeting.id, ...payload });
     setBusy(false); setShowOpen(false); onChanged();
+  }
+
+  async function fetchVoterDetail() {
+    if (!ballot) return;
+    setLoadingVoterDetail(true);
+    const res = await fetch(`/api/admin/ballot-votes?ballotId=${ballot.id}&memberId=${currentAdminId}`);
+    const data = await res.json().catch(() => ({}));
+    setVoterDetail(res.ok ? data.entries : []);
+    setLoadingVoterDetail(false);
   }
 
   async function handleShare() {
@@ -2485,8 +2513,13 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
   async function resetBallot() {
     if (!ballot || resetInput !== String(meeting.number)) return; setBusy(true);
     await supabase.rpc('delete_ballot_votes', { p_ballot_id: ballot.id });
-    await supabase.from('ballots').update({ status: 'not_started', meeting_code: null, voter_count: null, table_topics_speakers: [], opened_at: null, closed_at: null }).eq('id', ballot.id);
-    setBusy(false); setShowReset(false); setResetInput(''); setShowShare(false); setQrDataUrl(''); setShowResults(false); setResults([]); setLiveCount(null); setTtSpeakers([]); setVoterCount(''); setShowOpen(false); onChanged();
+    await supabase.from('ballots').update({
+      status: 'not_started', meeting_code: null, voter_count: null, table_topics_speakers: [], opened_at: null, closed_at: null,
+      allow_guest_voting: true, voter_restriction: 'all', allowed_voter_ids: [],
+    }).eq('id', ballot.id);
+    setBusy(false); setShowReset(false); setResetInput(''); setShowShare(false); setQrDataUrl(''); setShowResults(false); setResults([]); setLiveCount(null); setTtSpeakers([]); setVoterCount(''); setShowOpen(false);
+    setAllowGuestVoting(true); setVoterRestriction('all'); setAllowedVoterIds([]); setShowVoterDetail(false); setVoterDetail(null);
+    onChanged();
   }
 
   const status = ballot?.status ?? 'not_started';
@@ -2557,6 +2590,54 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
           </div>
         )}
 
+        {status === 'not_started' && (
+          <div>
+            <p className={labelCls}>🗳️ Voting Settings</p>
+            <label className="flex items-center gap-2 cursor-pointer select-none mt-1.5 mb-3">
+              <input type="checkbox" checked={allowGuestVoting} onChange={e => setAllowGuestVoting(e.target.checked)}
+                className="w-4 h-4 accent-maroon-700 rounded" />
+              <span className="text-xs text-slate-600 dark:text-slate-300">Allow guest voting</span>
+            </label>
+
+            <p className="text-xs text-slate-500 mb-1.5">Who can vote?</p>
+            <div className="flex gap-1.5 mb-2">
+              {([['all', 'All TMs'], ['selected', 'Select TMs']] as const).map(([val, label]) => (
+                <button key={val} type="button" onClick={() => setVoterRestriction(val)}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all ${
+                    voterRestriction === val
+                      ? 'bg-maroon-700 border-maroon-700 text-white'
+                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {voterRestriction === 'selected' && (
+              <div>
+                <div className="flex flex-wrap gap-1.5">
+                  {allMembers.map(m => {
+                    const sel = allowedVoterIds.includes(m.id);
+                    return (
+                      <button key={m.id} type="button"
+                        onClick={() => setAllowedVoterIds(ids => sel ? ids.filter(id => id !== m.id) : [...ids, m.id])}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                          sel
+                            ? 'bg-maroon-700 border-maroon-700 text-white'
+                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                        }`}>
+                        {sel ? '✓ ' : ''}{m.display_name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1.5">
+                  {allowedVoterIds.length === 0 ? 'No one selected yet — nobody signed-in will be able to vote.' : `${allowedVoterIds.length} TM${allowedVoterIds.length !== 1 ? 's' : ''} selected`}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2">
           {status === 'not_started' && !showOpen && <button onClick={() => setShowOpen(true)} className={primaryBtn}>🗳️ Open voting</button>}
           {status === 'open' && <>
@@ -2568,8 +2649,42 @@ function VotingControls({ meeting, ballot, allMembers, onChanged }: { meeting: M
             <button onClick={reopenVoting} disabled={busy} className={ghostBtn}>↩ Re-open &amp; reset votes</button>
             <button onClick={() => setShowResults(!showResults)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">{showResults ? 'Hide results' : 'View results'}</button>
           </>}
+          {ballot && (
+            <button
+              onClick={() => { const next = !showVoterDetail; setShowVoterDetail(next); if (next && !voterDetail) fetchVoterDetail(); }}
+              className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">
+              {showVoterDetail ? 'Hide who voted for whom' : '🕵️ Who voted for whom'}
+            </button>
+          )}
           {ballot && <button onClick={() => setShowReset(!showReset)} className="text-xs text-red-400/60 dark:text-red-500/40 hover:text-red-500 dark:hover:text-red-400 px-3 py-2 ml-auto">Reset ballot</button>}
         </div>
+
+        {showVoterDetail && (
+          <div className="bg-slate-100 dark:bg-slate-800/50 rounded-xl p-3 space-y-2">
+            {loadingVoterDetail && <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">Loading…</p>}
+            {!loadingVoterDetail && voterDetail?.length === 0 && (
+              <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No votes cast yet.</p>
+            )}
+            {!loadingVoterDetail && voterDetail && voterDetail.length > 0 && Object.entries(CAT_LABELS).map(([cat, label]) => {
+              const rows = voterDetail.filter(v => v.category === cat);
+              if (!rows.length) return null;
+              return (
+                <div key={cat}>
+                  <p className={`${labelCls} mb-1`}>{label}</p>
+                  <div className="space-y-0.5">
+                    {rows.map((v, i) => (
+                      <div key={i} className="flex items-center gap-1.5 text-xs">
+                        <span className="text-slate-500 dark:text-slate-400">{v.voterName === 'Guest' ? 'Guest' : `TM ${v.voterName}`}</span>
+                        <span className="text-slate-300 dark:text-slate-600">→</span>
+                        <span className="text-slate-700 dark:text-slate-200 font-medium">{v.votedForName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {showOpen && (
           <div className="bg-slate-100 dark:bg-slate-800/60 rounded-xl p-4 space-y-3">
@@ -3143,7 +3258,7 @@ function AdminPanel({ currentMember }: { currentMember: Member }) {
                             </>
                           )}
                         </div>
-                        {showVoting && <VotingControls meeting={m} ballot={ballot} allMembers={members} onChanged={fetchAll} />}
+                        {showVoting && <VotingControls meeting={m} ballot={ballot} allMembers={members} currentAdminId={currentMember.id} onChanged={fetchAll} />}
                       </div>
                     )}
                   </div>

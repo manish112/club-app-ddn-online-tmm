@@ -1014,54 +1014,110 @@ function EvaluatorPreferenceModal({
   onCancel: () => void;
 }) {
   const [selected, setSelected] = useState('');
+  // A pick isn't submitted straight away — first we check the speaker has
+  // actually asked that person, so a name doesn't land on someone's plate
+  // (and hold their evaluator slot) without them knowing about it.
+  const [confirmingConsent, setConfirmingConsent] = useState(false);
+  const [consentNote, setConsentNote] = useState<string | null>(null);
   const unavailable = new Set(unavailableIds);
   const options = members.filter((m) => m.id !== excludeId && !unavailable.has(m.id));
+  const selectedMember = options.find((m) => m.id === selected);
+
+  function requestSelected() {
+    if (!selected) return;
+    setConsentNote(null);
+    setConfirmingConsent(true);
+  }
+  function confirmConsentYes() {
+    setConfirmingConsent(false);
+    onConfirm(selected);
+  }
+  function confirmConsentNo() {
+    setConfirmingConsent(false);
+    setConsentNote(`Please speak with TM ${selectedMember?.display_name ?? 'them'} first, before requesting them as your preferred evaluator.`);
+    setSelected('');
+  }
 
   // Portal to <body> — same containing-block trap as ReleaseConfirmModal above.
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
       <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl shadow-modal-dark p-6">
         <div className="w-10 h-1 bg-slate-200 dark:bg-slate-700 rounded-full mx-auto mb-6 sm:hidden" />
-        <p className="text-[10px] font-black uppercase tracking-widest text-maroon-600 dark:text-maroon-400 mb-1">Prepared Speech</p>
-        <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-1">Choose your evaluator</h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
-          Pick who you&apos;d like to evaluate your speech. Your request goes to the President &amp; VP
-          Education for approval, and the evaluator slot is held until they approve.
-        </p>
+        {confirmingConsent && selectedMember ? (
+          <>
+            <p className="text-[10px] font-black uppercase tracking-widest text-maroon-600 dark:text-maroon-400 mb-1">Prepared Speech</p>
+            <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-1">Quick check</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-5 leading-relaxed">
+              Have you already spoken to{' '}
+              <strong className="text-slate-700 dark:text-slate-200">TM {selectedMember.display_name}</strong>{' '}
+              and confirmed they&apos;re happy to be your evaluator?
+            </p>
+            <button
+              onClick={confirmConsentYes}
+              disabled={busy}
+              className="w-full bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700 text-white rounded-xl py-3 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all shadow-sm mb-2"
+            >
+              {busy ? 'Claiming…' : 'Yes, I’ve asked them'}
+            </button>
+            <button
+              onClick={confirmConsentNo}
+              disabled={busy}
+              className="w-full border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl py-3 text-sm font-medium min-h-[44px] hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors"
+            >
+              No, not yet
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-[10px] font-black uppercase tracking-widest text-maroon-600 dark:text-maroon-400 mb-1">Prepared Speech</p>
+            <h2 className="font-serif text-xl font-semibold text-slate-900 dark:text-white mb-1">Choose your evaluator</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+              Pick who you&apos;d like to evaluate your speech. Your request goes to the President &amp; VP
+              Education for approval, and the evaluator slot is held until they approve.
+            </p>
 
-        <select
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-          disabled={busy}
-          className="w-full border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-800 dark:text-slate-100 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500 mb-4"
-        >
-          <option value="">Select a member…</option>
-          {options.map((m) => (
-            <option key={m.id} value={m.id}>TM {m.display_name}</option>
-          ))}
-        </select>
+            {consentNote && (
+              <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30
+                            border border-amber-200 dark:border-amber-800/40 rounded-xl px-3 py-2 mb-4 leading-relaxed">
+                {consentNote}
+              </p>
+            )}
 
-        <button
-          onClick={() => selected && onConfirm(selected)}
-          disabled={busy || !selected}
-          className="w-full bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700 text-white rounded-xl py-3 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all shadow-sm mb-2"
-        >
-          {busy ? 'Claiming…' : 'Request this evaluator'}
-        </button>
-        <button
-          onClick={() => onConfirm(null)}
-          disabled={busy}
-          className="w-full border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl py-3 text-sm font-medium min-h-[44px] hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors mb-3"
-        >
-          I don&apos;t have a preference
-        </button>
-        <button
-          onClick={onCancel}
-          disabled={busy}
-          className="block w-full text-center text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[36px] disabled:opacity-40"
-        >
-          Cancel
-        </button>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              disabled={busy}
+              className="w-full border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-800 dark:text-slate-100 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-maroon-600 dark:focus:ring-maroon-500 mb-4"
+            >
+              <option value="">Select a member…</option>
+              {options.map((m) => (
+                <option key={m.id} value={m.id}>TM {m.display_name}</option>
+              ))}
+            </select>
+
+            <button
+              onClick={requestSelected}
+              disabled={busy || !selected}
+              className="w-full bg-gradient-to-r from-maroon-700 to-maroon-600 hover:from-maroon-800 hover:to-maroon-700 text-white rounded-xl py-3 text-sm font-semibold min-h-[44px] disabled:opacity-40 active:scale-95 transition-all shadow-sm mb-2"
+            >
+              Request this evaluator
+            </button>
+            <button
+              onClick={() => onConfirm(null)}
+              disabled={busy}
+              className="w-full border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl py-3 text-sm font-medium min-h-[44px] hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors mb-3"
+            >
+              I don&apos;t have a preference
+            </button>
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="block w-full text-center text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 min-h-[36px] disabled:opacity-40"
+            >
+              Cancel
+            </button>
+          </>
+        )}
       </div>
     </div>,
     document.body
