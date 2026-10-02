@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
     try {
       whatsapp = await waNotifyRoleChange({
         target, actor, actorIsAdmin: !!actorIsAdmin,
-        meeting: meeting as MeetingRow, roleKey, slotIndex, action,
+        meeting: meeting as MeetingRow, roleKey, slotIndex, action, speakerWithdrewName,
       });
     } catch (err) {
       console.error('[notify-role] WhatsApp send failed:', err);

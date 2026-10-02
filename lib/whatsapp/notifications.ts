@@ -600,12 +600,14 @@ export async function waNotifyRoleChange(params: {
   roleKey: RoleKey;
   slotIndex?: number;
   action: 'claimed' | 'released' | 'assigned' | 'removed';
+  // Evaluator removed because their paired speaker withdrew — see notifyRoleChange.
+  speakerWithdrewName?: string | null;
 }): Promise<{ ok: true } | { skipped: string } | { error: string }> {
   const settings = await getWhatsAppSettings();
   if (!settings?.enabled) return { skipped: 'whatsapp disabled' };
   if (!settings.role_change_enabled) return { skipped: 'role change messages off' };
 
-  const { target, actor, actorIsAdmin, meeting, roleKey, action } = params;
+  const { target, actor, actorIsAdmin, meeting, roleKey, action, speakerWithdrewName } = params;
   // Only an admin action from the admin panel triggers this message — a member
   // claiming or releasing their own role stays silent on WhatsApp, by decision.
   if (!actorIsAdmin) return { skipped: 'not an admin action' };
@@ -616,7 +618,11 @@ export async function waNotifyRoleChange(params: {
 
   // Never blank: Meta rejects an empty body parameter, and "who did this" is the
   // part a member actually wonders about when a role appears or disappears.
-  const actorLine = !actor || actor.id === target.id
+  // The evaluator didn't do anything here, and neither did the admin to them
+  // directly — name the real reason rather than "This was done by Admin …".
+  const actorLine = speakerWithdrewName
+    ? `${speakerWithdrewName} has withdrawn from their speaker slot, so the paired evaluator slot is removed too.`
+    : !actor || actor.id === target.id
     ? (isAssign ? 'You picked this up yourself.' : 'You released it yourself.')
     : `This was done by ${actorIsAdmin ? 'Admin ' : ''}TM ${actor.display_name}.`;
 
