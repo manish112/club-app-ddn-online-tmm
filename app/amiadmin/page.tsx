@@ -10,7 +10,7 @@ import { SiteFooter } from '@/components/SiteFooter';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import type {
   Member, MeetingWithClaims, MeetingType, Ballot,
-  VoteResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
+  VoteResult, SpeakerRatingResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
   EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup, ParticipationMode, RoleInterestRequest,
 } from '@/lib/types';
 import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, WIC_CLUB_SHORT, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
@@ -31,7 +31,7 @@ const TOGGLEABLE_ROLES: { key: RoleKey; label: string }[] = [
   { key: 'timer',      label: 'Timer' },
   { key: 'harkmaster', label: 'Harkmaster' },
 ];
-import { isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, offlineClaimWindow, normalizeMeetingLink, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { claimHolderName, speakerBuckets, rankSpeakerRatings, ordinalRank,isMeetingPast, formatMeetingDate, formatTime, roleClaimBlocked, roleReservation, offlineClaimWindow, normalizeMeetingLink, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -2407,6 +2407,18 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
   const [showVoterDetail, setShowVoterDetail] = useState(false);
   const [voterDetail, setVoterDetail] = useState<{ category: string; voterName: string; votedForName: string }[] | null>(null);
   const [loadingVoterDetail, setLoadingVoterDetail] = useState(false);
+  const [ratingDetail, setRatingDetail] = useState<{ speakerSlot: number; voterName: string; votedForName: string; score: number }[] | null>(null);
+  const [ratingResults, setRatingResults] = useState<SpeakerRatingResult[]>([]);
+
+  // A speakathon ballot rates each speaker 1–10, opened one speaker at a time.
+  // Before voting opens the meeting type decides; after, the ballot's own mode
+  // does, so a closed ballot keeps rendering the way it was run.
+  const ratingMode = ballot && ballot.status !== 'not_started'
+    ? ballot.ballot_mode === 'speaker_rating'
+    : meeting.meeting_type === 'speakathon';
+  const activeSlot = ballot?.active_speaker_slot ?? null;
+  const rankedRatings = rankSpeakerRatings(ratingResults);
+  const noShowIds = ballot?.no_show_claim_ids ?? [];
 
   useEffect(() => { setTtSpeakers(ballot?.table_topics_speakers ?? []); }, [ballot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -2415,8 +2427,22 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
     setAllowedVoterIds(ballot?.allowed_voter_ids ?? []);
   }, [ballot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Rating mode: per-speaker counts (and averages, for the admin) instead of a
+  // single turnout counter. Polled while open, fetched once when closed.
   useEffect(() => {
-    if (!ballot || ballot.status !== 'open') { setLiveCount(null); return; }
+    if (!ballot || !ratingMode || ballot.status === 'not_started') return;
+    async function fetchRatings() {
+      const { data } = await supabase.rpc('get_speaker_rating_results', { p_ballot_id: ballot!.id });
+      if (data) setRatingResults(data as SpeakerRatingResult[]);
+    }
+    fetchRatings();
+    if (ballot.status !== 'open') return;
+    const t = setInterval(fetchRatings, 5000);
+    return () => clearInterval(t);
+  }, [ballot?.id, ballot?.status, ratingMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!ballot || ballot.status !== 'open' || ratingMode) { setLiveCount(null); return; }
     async function fetchCount() {
       const { data } = await supabase.rpc('get_vote_count', { p_ballot_id: ballot!.id });
       if (data !== null) {
@@ -2430,7 +2456,7 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
     fetchCount();
     const t = setInterval(fetchCount, 5000);
     return () => clearInterval(t);
-  }, [ballot?.id, ballot?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ballot?.id, ballot?.status, ratingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!ballot || !showResults) return;
@@ -2468,8 +2494,13 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
   async function openVoting() {
     setBusy(true);
     const payload = {
-      status: 'open' as const, meeting_code: null, voter_count: voterCount ? parseInt(voterCount) : null,
-      table_topics_speakers: ttSpeakers, opened_at: new Date().toISOString(), closed_at: null,
+      status: 'open' as const, meeting_code: null,
+      // The turnout auto-close counts distinct voters across the whole ballot,
+      // which means nothing when each speaker is a separate round.
+      voter_count: !ratingMode && voterCount ? parseInt(voterCount) : null,
+      table_topics_speakers: ratingMode ? [] : ttSpeakers, opened_at: new Date().toISOString(), closed_at: null,
+      ballot_mode: ratingMode ? 'speaker_rating' as const : 'awards' as const,
+      active_speaker_slot: null,
       allow_guest_voting: allowGuestVoting,
       voter_restriction: voterRestriction,
       // Only meaningful when restricted — cleared otherwise so switching back to
@@ -2487,6 +2518,7 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
     const res = await fetch(`/api/admin/ballot-votes?ballotId=${ballot.id}&memberId=${currentAdminId}`);
     const data = await res.json().catch(() => ({}));
     setVoterDetail(res.ok ? data.entries : []);
+    setRatingDetail(res.ok ? (data.ratings ?? []) : []);
     setLoadingVoterDetail(false);
   }
 
@@ -2498,16 +2530,71 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
 
   async function closeVoting() {
     if (!ballot) return; setBusy(true);
-    await supabase.from('ballots').update({ status: 'closed', closed_at: new Date().toISOString() }).eq('id', ballot.id);
+    await supabase.from('ballots').update({
+      status: 'closed', closed_at: new Date().toISOString(),
+      ...(ratingMode ? { active_speaker_slot: null } : {}),
+    }).eq('id', ballot.id);
     setBusy(false); onChanged();
+  }
+
+  // Point the speakathon ballot at one speaker, or at nobody with null.
+  // Opening a new speaker implicitly ends the previous speaker's round.
+  async function setActiveSpeaker(slot: number | null) {
+    if (!ballot) return; setBusy(true);
+    await supabase.from('ballots').update({ active_speaker_slot: slot }).eq('id', ballot.id);
+    setBusy(false); onChanged();
+  }
+
+  // Speakathon: wipe every speaker's ratings and close voting, back to the
+  // "Open voting" state so the admin starts again when ready. Voter settings
+  // (guest voting, allowed TMs) are kept for that next open. "Reset ballot"
+  // below is the heavier option that also clears those settings.
+  async function resetAllRatings() {
+    if (!ballot || !window.confirm('Reset voting? Every rating for every speaker will be deleted and voting will be closed. You can open it again afterwards.')) return;
+    setBusy(true);
+    await supabase.rpc('delete_ballot_votes', { p_ballot_id: ballot.id });
+    await supabase.from('ballots').update({ status: 'not_started', opened_at: null, closed_at: null, active_speaker_slot: null, no_show_claim_ids: [] }).eq('id', ballot.id);
+    setRatingResults([]); setVoterDetail(null); setRatingDetail(null); setShowVoterDetail(false); setShowResults(false);
+    setBusy(false); onChanged();
+  }
+
+  // A speaker who didn't turn up: skipped in the rounds and left out of the
+  // ranking. Keyed by claim id, not slot, so it survives the speaker queue
+  // shifting. Any ratings already given to them are discarded.
+  async function toggleNoShow(claimId: string, slot: number, name: string, mark: boolean) {
+    if (!ballot) return;
+    const rated = ratingResults.some(r => r.speaker_slot === slot);
+    if (mark && !window.confirm(`Mark ${name} as a no-show? They won't be rated or ranked${rated ? ', and the ratings they already have will be deleted' : ''}.`)) return;
+    setBusy(true);
+    const ids = mark ? [...new Set([...noShowIds, claimId])] : noShowIds.filter(id => id !== claimId);
+    await supabase.from('ballots').update({
+      no_show_claim_ids: ids,
+      ...(mark && activeSlot === slot ? { active_speaker_slot: null } : {}),
+    }).eq('id', ballot.id);
+    if (mark && rated) {
+      await supabase.rpc('delete_speaker_ratings', { p_ballot_id: ballot.id, p_speaker_slot: slot });
+      const { data } = await supabase.rpc('get_speaker_rating_results', { p_ballot_id: ballot.id });
+      setRatingResults((data ?? []) as SpeakerRatingResult[]);
+    }
+    setBusy(false); onChanged();
+  }
+
+  async function clearSpeakerRatings(slot: number, name: string) {
+    if (!ballot || !window.confirm(`Clear every rating for ${name}? Voters will be able to rate them again.`)) return;
+    setBusy(true);
+    await supabase.rpc('delete_speaker_ratings', { p_ballot_id: ballot.id, p_speaker_slot: slot });
+    const { data } = await supabase.rpc('get_speaker_rating_results', { p_ballot_id: ballot.id });
+    setRatingResults((data ?? []) as SpeakerRatingResult[]);
+    setVoterDetail(null); setRatingDetail(null); setShowVoterDetail(false);
+    setBusy(false);
   }
 
   async function reopenVoting() {
     if (!ballot || !window.confirm('Re-opening will clear all existing votes. Continue?')) return;
     setBusy(true);
     await supabase.rpc('delete_ballot_votes', { p_ballot_id: ballot.id });
-    await supabase.from('ballots').update({ status: 'open', closed_at: null, voter_count: null }).eq('id', ballot.id);
-    setBusy(false); setShowResults(false); setLiveCount(null); setResults([]); onChanged();
+    await supabase.from('ballots').update({ status: 'open', closed_at: null, voter_count: null, active_speaker_slot: null }).eq('id', ballot.id);
+    setBusy(false); setShowResults(false); setLiveCount(null); setResults([]); setRatingResults([]); setVoterDetail(null); setRatingDetail(null); onChanged();
   }
 
   async function resetBallot() {
@@ -2516,9 +2603,11 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
     await supabase.from('ballots').update({
       status: 'not_started', meeting_code: null, voter_count: null, table_topics_speakers: [], opened_at: null, closed_at: null,
       allow_guest_voting: true, voter_restriction: 'all', allowed_voter_ids: [],
+      ballot_mode: 'awards', active_speaker_slot: null, no_show_claim_ids: [],
     }).eq('id', ballot.id);
     setBusy(false); setShowReset(false); setResetInput(''); setShowShare(false); setQrDataUrl(''); setShowResults(false); setResults([]); setLiveCount(null); setTtSpeakers([]); setVoterCount(''); setShowOpen(false);
     setAllowGuestVoting(true); setVoterRestriction('all'); setAllowedVoterIds([]); setShowVoterDetail(false); setVoterDetail(null);
+    setRatingDetail(null); setRatingResults([]);
     onChanged();
   }
 
@@ -2547,7 +2636,13 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
       </div>
 
       <div className="px-4 py-4 space-y-4">
-        {(status === 'not_started' || status === 'open') && (
+        {ratingMode && status === 'not_started' && (
+          <p className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 rounded-xl px-3 py-2.5">
+            🎤 Speakathon ballot — once voting is open, start a round for each speaker after their speech and every eligible voter rates them <strong>1–10</strong>.
+          </p>
+        )}
+
+        {!ratingMode && (status === 'not_started' || status === 'open') && (
           <div>
             <p className={labelCls}>💬 Table Topics Speakers</p>
             <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-2 -mt-0.5">Tap everyone who spoke</p>
@@ -2638,22 +2733,107 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
           </div>
         )}
 
+        {ratingMode && status !== 'not_started' && (
+          <div>
+            <p className={labelCls}>🎤 Speaker rounds</p>
+            {status === 'open' && (
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-2 -mt-0.5">
+                After each speech, open that speaker&apos;s round. Opening another speaker ends the current round.
+              </p>
+            )}
+            <div className="space-y-3">
+              {speakerBuckets(meeting).map((bucket, bi) => (
+                <div key={bucket.group?.id ?? `ungrouped-${bi}`}>
+                  {bucket.group && <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">{bucket.group.name}</p>}
+                  <div className="space-y-1.5">
+                    {bucket.slots.map(slot => {
+                      const claim = meeting.role_claims.find(c => c.role_key === 'speaker' && c.slot_index === slot);
+                      const name = claim ? (claimHolderName(claim, claim.member ?? null) ?? `Speaker ${slot}`) : `Speaker ${slot}`;
+                      // A slot can carry more than one row if its holder changed mid-ballot.
+                      const rows = ratingResults.filter(r => r.speaker_slot === slot);
+                      const count = rows.reduce((n, r) => n + Number(r.rating_count), 0);
+                      const total = rows.reduce((n, r) => n + Number(r.total_score), 0);
+                      const isLive = status === 'open' && activeSlot === slot;
+                      const isNoShow = !!claim && noShowIds.includes(claim.id);
+                      const slotRank = rankedRatings.find(r => r.speaker_slot === slot)?.rank;
+                      const showScore = (status === 'closed' || showResults) && count > 0;
+                      return (
+                        <div key={slot} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${
+                          isLive
+                            ? 'border-emerald-300 dark:border-emerald-500/40 bg-emerald-50 dark:bg-emerald-500/10'
+                            : isNoShow
+                            ? 'border-slate-200 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/20 opacity-70'
+                            : 'border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-800/40'
+                        }`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-sm font-medium truncate ${claim ? 'text-slate-800 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500 italic'}`}>
+                                {claim ? name : `Slot ${slot} — open`}
+                              </span>
+                              {isLive && <span className="shrink-0 text-[9px] font-black uppercase tracking-wider bg-emerald-600 text-white px-1.5 py-0.5 rounded-full">Live</span>}
+                              {isNoShow && <span className="shrink-0 text-[9px] font-black uppercase tracking-wider bg-slate-500 text-white px-1.5 py-0.5 rounded-full">No-show</span>}
+                              {showScore && slotRank !== undefined && (
+                                <span className={`shrink-0 text-[10px] font-black px-1.5 py-0.5 rounded-full ${
+                                  slotRank === 1 ? 'bg-gold-300 text-slate-900' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                }`}>{ordinalRank(slotRank)}</span>
+                              )}
+                            </div>
+                            {claim?.speech_title?.trim() && (
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">&ldquo;{claim.speech_title.trim()}&rdquo;</p>
+                            )}
+                            {!isNoShow && <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                              {count} rating{count !== 1 ? 's' : ''}
+                              {showScore && <> · avg <strong className="text-slate-600 dark:text-slate-300">{(total / count).toFixed(2)}</strong></>}
+                              {count > 0 && status === 'open' && (
+                                <button onClick={() => clearSpeakerRatings(slot, name)} disabled={busy} className="ml-2 text-red-400/70 hover:text-red-500 disabled:opacity-40">clear</button>
+                              )}
+                            </p>}
+                          </div>
+                          {status === 'open' && claim && (
+                            isNoShow
+                              ? <button onClick={() => toggleNoShow(claim.id, slot, name, false)} disabled={busy} className="shrink-0 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-2 py-1.5 disabled:opacity-50">↩ Undo no-show</button>
+                              : isLive
+                              ? <button onClick={() => setActiveSpeaker(null)} disabled={busy} className="shrink-0 text-xs font-semibold bg-gold-300 text-slate-900 px-3 py-1.5 rounded-lg disabled:opacity-50">End round</button>
+                              : <div className="shrink-0 flex items-center gap-1.5">
+                                  <button onClick={() => toggleNoShow(claim.id, slot, name, true)} disabled={busy} className="text-xs font-semibold text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 rounded-lg hover:border-red-300 hover:text-red-600 disabled:opacity-50">🚫 No-show</button>
+                                  <button onClick={() => setActiveSpeaker(slot)} disabled={busy} className="text-xs font-semibold bg-emerald-600 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">▶ Open rating</button>
+                                </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2">
-          {status === 'not_started' && !showOpen && <button onClick={() => setShowOpen(true)} className={primaryBtn}>🗳️ Open voting</button>}
+          {status === 'not_started' && !showOpen && (
+            ratingMode
+              ? <button onClick={openVoting} disabled={busy} className={primaryBtn}>{busy ? '…' : '🗳️ Open voting'}</button>
+              : <button onClick={() => setShowOpen(true)} className={primaryBtn}>🗳️ Open voting</button>
+          )}
           {status === 'open' && <>
             <button onClick={closeVoting} disabled={busy} className="text-sm font-semibold bg-gold-300 text-slate-900 px-4 py-2 rounded-xl disabled:opacity-50 active:scale-95 transition-transform">Close voting</button>
             <button onClick={() => setShowShare(!showShare)} className={ghostBtn}>📤 Share link</button>
-            <button onClick={() => setShowResults(!showResults)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">{showResults ? 'Hide tallies' : 'Preview tallies'}</button>
+            <button onClick={() => setShowResults(!showResults)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">{showResults ? 'Hide tallies' : ratingMode ? 'Preview averages' : 'Preview tallies'}</button>
           </>}
           {status === 'closed' && <>
-            <button onClick={reopenVoting} disabled={busy} className={ghostBtn}>↩ Re-open &amp; reset votes</button>
-            <button onClick={() => setShowResults(!showResults)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">{showResults ? 'Hide results' : 'View results'}</button>
+            {!ratingMode && <button onClick={reopenVoting} disabled={busy} className={ghostBtn}>↩ Re-open &amp; reset votes</button>}
+            {!ratingMode && <button onClick={() => setShowResults(!showResults)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">{showResults ? 'Hide results' : 'View results'}</button>}
           </>}
+          {ratingMode && status !== 'not_started' && (
+            <button onClick={resetAllRatings} disabled={busy} className={`${ghostBtn} !text-red-600 dark:!text-red-400`}>🔄 Reset voting</button>
+          )}
           {ballot && (
             <button
               onClick={() => { const next = !showVoterDetail; setShowVoterDetail(next); if (next && !voterDetail) fetchVoterDetail(); }}
               className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-2">
-              {showVoterDetail ? 'Hide who voted for whom' : '🕵️ Who voted for whom'}
+              {ratingMode
+                ? (showVoterDetail ? 'Hide who rated what' : '🕵️ Who rated what')
+                : (showVoterDetail ? 'Hide who voted for whom' : '🕵️ Who voted for whom')}
             </button>
           )}
           {ballot && <button onClick={() => setShowReset(!showReset)} className="text-xs text-red-400/60 dark:text-red-500/40 hover:text-red-500 dark:hover:text-red-400 px-3 py-2 ml-auto">Reset ballot</button>}
@@ -2662,10 +2842,31 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
         {showVoterDetail && (
           <div className="bg-slate-100 dark:bg-slate-800/50 rounded-xl p-3 space-y-2">
             {loadingVoterDetail && <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">Loading…</p>}
-            {!loadingVoterDetail && voterDetail?.length === 0 && (
+            {!loadingVoterDetail && ratingMode && ratingDetail?.length === 0 && (
+              <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No ratings cast yet.</p>
+            )}
+            {!loadingVoterDetail && ratingMode && ratingDetail && ratingDetail.length > 0 &&
+              [...new Set(ratingDetail.map(r => r.speakerSlot))].map(slot => {
+                const rows = ratingDetail.filter(r => r.speakerSlot === slot);
+                return (
+                  <div key={slot}>
+                    <p className={`${labelCls} mb-1`}>🎤 {rows[0].votedForName}</p>
+                    <div className="space-y-0.5">
+                      {rows.map((v, i) => (
+                        <div key={i} className="flex items-center gap-1.5 text-xs">
+                          <span className="text-slate-500 dark:text-slate-400">{v.voterName === 'Guest' ? 'Guest' : `TM ${v.voterName}`}</span>
+                          <span className="text-slate-300 dark:text-slate-600">→</span>
+                          <span className="text-slate-700 dark:text-slate-200 font-semibold">{v.score} / 10</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            {!loadingVoterDetail && !ratingMode && voterDetail?.length === 0 && (
               <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No votes cast yet.</p>
             )}
-            {!loadingVoterDetail && voterDetail && voterDetail.length > 0 && Object.entries(CAT_LABELS).map(([cat, label]) => {
+            {!loadingVoterDetail && !ratingMode && voterDetail && voterDetail.length > 0 && Object.entries(CAT_LABELS).map(([cat, label]) => {
               const rows = voterDetail.filter(v => v.category === cat);
               if (!rows.length) return null;
               return (
@@ -2707,7 +2908,36 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
           </div>
         )}
 
-        {showResults && (
+        {/* Rating mode: the final ranking is the point of closing, so it shows
+            on its own once closed; while open it's an opt-in preview. */}
+        {ratingMode && (showResults || status === 'closed') && (
+          <div className="bg-slate-100 dark:bg-slate-800/50 rounded-xl p-3">
+            <p className={`${labelCls} mb-2`}>🏆 {status === 'closed' ? 'Final ranking' : 'Ranking so far'} · average score</p>
+            {rankedRatings.length === 0 && <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No ratings yet.</p>}
+            {rankedRatings.length > 0 && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 pb-1 border-b border-slate-200 dark:border-slate-700/50">
+                  <span className="w-9">Rank</span>
+                  <span className="flex-1">Speaker</span>
+                  <span className="w-14 text-right">Avg</span>
+                  <span className="w-16 text-right">Ratings</span>
+                </div>
+                {rankedRatings.map(r => (
+                  <div key={`${r.speaker_slot}-${r.voted_for_member_id ?? r.voted_for_display_name}`} className="flex items-center gap-2 py-1">
+                    <span className={`w-9 text-xs font-black ${r.rank === 1 ? 'text-amber-600 dark:text-gold-300' : 'text-slate-500 dark:text-slate-400'}`}>
+                      {r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : ordinalRank(r.rank)}
+                    </span>
+                    <span className={`flex-1 min-w-0 truncate text-sm ${r.rank === 1 ? 'text-amber-700 dark:text-gold-200 font-semibold' : 'text-slate-700 dark:text-slate-200'}`}>{r.voted_for_display_name}</span>
+                    <span className="w-14 text-right text-sm font-bold tabular-nums text-slate-800 dark:text-slate-100">{Number(r.average_score).toFixed(2)}</span>
+                    <span className="w-16 text-right text-[11px] text-slate-400 dark:text-slate-500">{r.rating_count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {showResults && !ratingMode && (
           <div className="bg-slate-100 dark:bg-slate-800/50 rounded-xl p-3 space-y-3">
             {results.length === 0 && <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No votes yet.</p>}
             {Object.entries(CAT_LABELS).map(([cat, label]) => {

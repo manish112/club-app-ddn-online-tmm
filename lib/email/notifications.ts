@@ -187,15 +187,20 @@ export async function notifyRoleChange(params: {
   meeting: MeetingRow;
   roleKey: RoleKey;
   action: 'claimed' | 'released' | 'assigned' | 'removed';
+  // An evaluator whose paired speaker withdrew: replaces the actor line with
+  // the reason, since nobody removed the evaluator directly.
+  speakerWithdrewName?: string | null;
 }) {
-  const { target, actor, actorIsAdmin, meeting, roleKey, action } = params;
+  const { target, actor, actorIsAdmin, meeting, roleKey, action, speakerWithdrewName } = params;
   if (!target.email) return { skipped: 'no email' };
 
   const meta = ROLE_META[roleKey];
   const isAssign = action === 'claimed' || action === 'assigned';
 
   let actorLine = '';
-  if (actor && actor.id !== target.id) {
+  if (speakerWithdrewName) {
+    actorLine = ` ${escapeHtml(speakerWithdrewName)} has withdrawn from their speaker slot, so the evaluator slot paired with their speech has been removed as well. You no longer need to evaluate this speech.`;
+  } else if (actor && actor.id !== target.id) {
     actorLine = ` This was done by ${actorIsAdmin ? 'Admin ' : ''}TM ${escapeHtml(actor.display_name)}.`;
   }
 

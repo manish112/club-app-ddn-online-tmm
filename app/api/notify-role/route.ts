@@ -6,7 +6,7 @@ import type { RoleKey } from '@/lib/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { meetingId, targetMemberId, roleKey, slotIndex, action, actorId, actorIsAdmin } = await req.json() as {
+    const { meetingId, targetMemberId, roleKey, slotIndex, action, actorId, actorIsAdmin, pairedSpeaker } = await req.json() as {
       meetingId: string;
       targetMemberId: string;
       roleKey: RoleKey;
@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
       action: 'claimed' | 'released' | 'assigned' | 'removed';
       actorId?: string | null;
       actorIsAdmin?: boolean;
+      pairedSpeaker?: { memberId?: string | null; guestName?: string | null };
     };
 
     if (!meetingId || !targetMemberId || !roleKey || !action) {
@@ -39,13 +40,25 @@ export async function POST(req: NextRequest) {
       actor = data ?? null;
     }
 
+    // An evaluator removed because their speaker withdrew. The name is looked
+    // up here rather than trusted from the request, since it lands in the email.
+    let speakerWithdrewName: string | null = null;
+    if (pairedSpeaker) {
+      if (pairedSpeaker.memberId) {
+        const { data } = await supabase.from('members').select('display_name').eq('id', pairedSpeaker.memberId).single();
+        speakerWithdrewName = data ? `TM ${data.display_name}` : 'The speaker';
+      } else {
+        speakerWithdrewName = pairedSpeaker.guestName?.trim() ? `${pairedSpeaker.guestName.trim()} (Guest)` : 'The speaker';
+      }
+    }
+
     // Email and WhatsApp are configured separately, so a member with only one of
     // the two must still hear about it. The old code bailed out on a missing
     // email address before either could run.
     const result = target.email
       ? await notifyRoleChange({
           target, actor, actorIsAdmin: !!actorIsAdmin,
-          meeting: meeting as MeetingRow, roleKey, action,
+          meeting: meeting as MeetingRow, roleKey, action, speakerWithdrewName,
         })
       : { skipped: 'no email' as const };
 

@@ -2,13 +2,13 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
-import type { ContestResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
+import type { ContestResult, SpeakerRatingResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
 import { ROLE_META, LEADERSHIP_ROLES, HOME_CLUB_NAME, WIC_CLUB_NAME, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
 import { SurveyLinks } from '@/components/SurveyLinks';
 import { useWicMemberIds } from '@/hooks/useWicMemberIds';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
 import Link from 'next/link';
-import { getMemberRecentRoles, formatMeetingDate, formatTime, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
+import { rankSpeakerRatings, getMemberRecentRoles, formatMeetingDate, formatTime, isMeetingPast, groupIdForSlot, roleReservation, offlineClaimWindow, reservationCountdown, DEFAULT_RESERVATION_DAYS_BEFORE, DEFAULT_OFFLINE_RESERVATION_DAYS_BEFORE } from '@/lib/utils';
 import { MemberAvatar } from '@/components/MemberAvatar';
 import { AvatarCropModal } from '@/components/AvatarCropModal';
 import { ConsentGateModal } from '@/components/ConsentGateModal';
@@ -1070,6 +1070,36 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
       });
   }, [member.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Speakathon per-speaker ratings (1–10) — shown to the speaker once the
+  // admin closes that meeting's ballot. Rank is among every rated speaker in
+  // the meeting, with ties sharing a place.
+  const [myRatings, setMyRatings] = useState<{ ballotId: string; meetingNumber: number; average: number; count: number; rank: number; of: number }[]>([]);
+  useEffect(() => {
+    const spokeAt = meetings.filter((m) => m.role_claims.some((c) => c.role_key === 'speaker' && c.member_id === member.id));
+    if (!spokeAt.length) { setMyRatings([]); return; }
+    supabase.from('ballots').select('id, meeting_id')
+      .in('meeting_id', spokeAt.map((m) => m.id))
+      .eq('status', 'closed').eq('ballot_mode', 'speaker_rating')
+      .then(async ({ data, error }) => {
+        if (error || !data?.length) { setMyRatings([]); return; }
+        const rows = await Promise.all(data.map(async (b) => {
+          const { data: res } = await supabase.rpc('get_speaker_rating_results', { p_ballot_id: b.id });
+          const results = rankSpeakerRatings((res ?? []) as SpeakerRatingResult[]);
+          const mine = results.find((r) => r.voted_for_member_id === member.id);
+          if (!mine) return null;
+          return {
+            ballotId: b.id as string,
+            meetingNumber: meetings.find((m) => m.id === b.meeting_id)?.number ?? 0,
+            average: Number(mine.average_score),
+            count: Number(mine.rating_count),
+            rank: mine.rank,
+            of: results.length,
+          };
+        }));
+        setMyRatings(rows.filter((r): r is NonNullable<typeof r> => r !== null).sort((a, b) => b.meetingNumber - a.meetingNumber));
+      });
+  }, [member.id, meetings.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const allActivity = getMemberRecentRoles(meetings.filter(isMeetingPast), member.id, 50);
   const recentActivity = allActivity.slice(0, 8);
   const totalRoles = allActivity.reduce((sum, { roles }) => sum + roles.length, 0);
@@ -1147,6 +1177,25 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Speakathon audience ratings, once voting has closed */}
+      {myRatings.map((r) => (
+        <div key={r.ballotId} className={cardCls}>
+          {sectionLabel('🎤 Your Speakathon Rating')}
+          <div className="flex items-end justify-between">
+            <div>
+              {r.meetingNumber > 0 && <p className="text-xs text-slate-400 dark:text-slate-500">Meeting #{r.meetingNumber}</p>}
+              <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">
+                {ordinal(r.rank)} <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">of {r.of} speaker{r.of !== 1 ? 's' : ''}</span>
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Rated by {r.count} {r.count === 1 ? 'person' : 'people'}</p>
+            </div>
+            <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">
+              {r.average.toFixed(1)}<span className="text-base font-medium text-slate-400"> / 10</span>
+            </p>
           </div>
         </div>
       ))}
