@@ -13,7 +13,7 @@ import type {
   VoteResult, SpeakerRatingResult, TTSpeaker, GuestRegistration, Announcement, LeadershipRole, SpeakerSlotRequest,
   EvaluatorRequest, DeviceCapture, RoleKey, SpeakerGroup, ParticipationMode, RoleInterestRequest,
 } from '@/lib/types';
-import { LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, WIC_CLUB_SHORT, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
+import { speakerScore, LEADERSHIP_ROLES, PARTICIPATION_MODES, ROLE_META, HOME_CLUB_NAME, WIC_CLUB_NAME, WIC_CLUB_SHORT, getMeetingRoles, memberLeadershipRoles, hasLeadershipRole, isClubOfficer, participationMode } from '@/lib/types';
 import {
   DEFAULT_TIMER_MODES, TIMER_MODE_META, normalizeModes,
   type TimerModes, type TimerModeKey, type TimerThresholds,
@@ -2419,6 +2419,18 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
   const activeSlot = ballot?.active_speaker_slot ?? null;
   const rankedRatings = rankSpeakerRatings(ratingResults);
   const noShowIds = ballot?.no_show_claim_ids ?? [];
+  const [showLateVoters, setShowLateVoters] = useState(false);
+
+  // Mid-session eligibility change (someone arrives late). Saved immediately;
+  // voters' screens pick it up through the realtime ballot subscription.
+  async function updateLiveVoters(patch: { allow_guest_voting?: boolean; allowed_voter_ids?: string[] }) {
+    if (!ballot) return;
+    setBusy(true);
+    if (patch.allow_guest_voting !== undefined) setAllowGuestVoting(patch.allow_guest_voting);
+    if (patch.allowed_voter_ids) setAllowedVoterIds(patch.allowed_voter_ids);
+    await supabase.from('ballots').update(patch).eq('id', ballot.id);
+    setBusy(false); onChanged();
+  }
 
   useEffect(() => { setTtSpeakers(ballot?.table_topics_speakers ?? []); }, [ballot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -2685,6 +2697,53 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
           </div>
         )}
 
+        {status === 'open' && (
+          <div>
+            <button type="button" onClick={() => setShowLateVoters(v => !v)} className={`${labelCls} flex items-center gap-1 hover:text-slate-700 dark:hover:text-slate-300`}>
+              👥 Late arrivals — let someone vote {showLateVoters ? '▾' : '▸'}
+            </button>
+            {showLateVoters && (
+              <div className="mt-1.5 space-y-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={allowGuestVoting} disabled={busy}
+                    onChange={e => updateLiveVoters({ allow_guest_voting: e.target.checked })}
+                    className="w-4 h-4 accent-maroon-700 rounded" />
+                  <span className="text-xs text-slate-600 dark:text-slate-300">Guests can vote <span className="text-slate-400">(turns on for every guest device)</span></span>
+                </label>
+                {voterRestriction === 'all' ? (
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500">Every signed-in TM can already vote — a late TM just opens the app.</p>
+                ) : (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Tap a TM to add them to the voter list (tap again to remove):</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {allMembers.map(m => {
+                        const sel = allowedVoterIds.includes(m.id);
+                        return (
+                          <button key={m.id} type="button" disabled={busy}
+                            onClick={() => updateLiveVoters({ allowed_voter_ids: sel ? allowedVoterIds.filter(id => id !== m.id) : [...allowedVoterIds, m.id] })}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:opacity-50 ${
+                              sel
+                                ? 'bg-maroon-700 border-maroon-700 text-white'
+                                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                            }`}>
+                            {sel ? '✓ ' : ''}{m.display_name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1.5">{allowedVoterIds.length} TM{allowedVoterIds.length !== 1 ? 's' : ''} can vote</p>
+                  </div>
+                )}
+                {ratingMode && (
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                    Speakers they missed get an estimated vote when results are calculated, so arriving late doesn&apos;t tilt the ranking.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {status === 'not_started' && (
           <div>
             <p className={labelCls}>🗳️ Voting Settings</p>
@@ -2752,7 +2811,7 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
                       // A slot can carry more than one row if its holder changed mid-ballot.
                       const rows = ratingResults.filter(r => r.speaker_slot === slot);
                       const count = rows.reduce((n, r) => n + Number(r.rating_count), 0);
-                      const total = rows.reduce((n, r) => n + Number(r.total_score), 0);
+                      const finalScore = rows.length ? speakerScore(rows[0]) : 0;
                       const isLive = status === 'open' && activeSlot === slot;
                       const isNoShow = !!claim && noShowIds.includes(claim.id);
                       const slotRank = rankedRatings.find(r => r.speaker_slot === slot)?.rank;
@@ -2783,7 +2842,7 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
                             )}
                             {!isNoShow && <p className="text-[11px] text-slate-400 dark:text-slate-500">
                               {count} rating{count !== 1 ? 's' : ''}
-                              {showScore && <> · avg <strong className="text-slate-600 dark:text-slate-300">{(total / count).toFixed(2)}</strong></>}
+                              {showScore && <> · score <strong className="text-slate-600 dark:text-slate-300">{finalScore.toFixed(2)}</strong></>}
                               {count > 0 && status === 'open' && (
                                 <button onClick={() => clearSpeakerRatings(slot, name)} disabled={busy} className="ml-2 text-red-400/70 hover:text-red-500 disabled:opacity-40">clear</button>
                               )}
@@ -2914,13 +2973,19 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
           <div className="bg-slate-100 dark:bg-slate-800/50 rounded-xl p-3">
             <p className={`${labelCls} mb-2`}>🏆 {status === 'closed' ? 'Final ranking' : 'Ranking so far'} · average score</p>
             {rankedRatings.length === 0 && <p className="text-xs text-slate-400 dark:text-slate-600 text-center py-2">No ratings yet.</p>}
+            {rankedRatings.some(r => Number(r.estimated_count) > 0) && (
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-2">
+                <strong>Final</strong> fills each missed vote with an estimate from that voter&apos;s own scoring habits, so every speaker faces the same panel. <strong>Raw</strong> is the plain average of real votes.
+              </p>
+            )}
             {rankedRatings.length > 0 && (
               <div className="space-y-1">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 pb-1 border-b border-slate-200 dark:border-slate-700/50">
                   <span className="w-9">Rank</span>
                   <span className="flex-1">Speaker</span>
-                  <span className="w-14 text-right">Avg</span>
-                  <span className="w-16 text-right">Ratings</span>
+                  <span className="w-12 text-right">Final</span>
+                  <span className="w-10 text-right">Raw</span>
+                  <span className="w-16 text-right">Votes</span>
                 </div>
                 {rankedRatings.map(r => (
                   <div key={`${r.speaker_slot}-${r.voted_for_member_id ?? r.voted_for_display_name}`} className="flex items-center gap-2 py-1">
@@ -2928,8 +2993,9 @@ function VotingControls({ meeting, ballot, allMembers, currentAdminId, onChanged
                       {r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : ordinalRank(r.rank)}
                     </span>
                     <span className={`flex-1 min-w-0 truncate text-sm ${r.rank === 1 ? 'text-amber-700 dark:text-gold-200 font-semibold' : 'text-slate-700 dark:text-slate-200'}`}>{r.voted_for_display_name}</span>
-                    <span className="w-14 text-right text-sm font-bold tabular-nums text-slate-800 dark:text-slate-100">{Number(r.average_score).toFixed(2)}</span>
-                    <span className="w-16 text-right text-[11px] text-slate-400 dark:text-slate-500">{r.rating_count}</span>
+                    <span className="w-12 text-right text-sm font-bold tabular-nums text-slate-800 dark:text-slate-100">{speakerScore(r).toFixed(2)}</span>
+                    <span className="w-10 text-right text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{Number(r.average_score).toFixed(1)}</span>
+                    <span className="w-16 text-right text-[11px] text-slate-400 dark:text-slate-500">{r.rating_count}{Number(r.estimated_count) > 0 ? ` + ${r.estimated_count} est.` : ''}</span>
                   </div>
                 ))}
               </div>

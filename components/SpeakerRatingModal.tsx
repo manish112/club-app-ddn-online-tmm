@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { Ballot, MeetingWithClaims, SpeakerRatingResult } from '@/lib/types';
-import { SPEAKER_RATING_SCALE } from '@/lib/types';
+import { SPEAKER_RATING_SCALE, speakerScore } from '@/lib/types';
 import { claimHolderName, ordinalRank, rankSpeakerRatings } from '@/lib/utils';
 
 interface Props {
@@ -141,8 +141,13 @@ export function SpeakerRatingModal({ ballot, meeting, memberId, deviceId, isAdmi
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-white/70">Your rank</p>
                     <p className="text-xl font-black">{ordinalRank(myResult.rank)} <span className="text-sm font-medium text-white/70">of {ranked.length}</span></p>
                   </div>
-                  <p className="text-2xl font-black tabular-nums">{Number(myResult.average_score).toFixed(1)}<span className="text-sm font-medium text-white/70"> / 10</span></p>
+                  <p className="text-2xl font-black tabular-nums">{speakerScore(myResult).toFixed(1)}<span className="text-sm font-medium text-white/70"> / 10</span></p>
                 </div>
+              )}
+              {!loadingResults && ranked.some(r => Number(r.estimated_count) > 0) && (
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 -mt-2">
+                  Scores are adjusted for missed votes, so every speaker is judged by the same panel.
+                </p>
               )}
               {!loadingResults && ranked.length > 0 && (
                 <div className="space-y-1.5">
@@ -159,10 +164,10 @@ export function SpeakerRatingModal({ ballot, meeting, memberId, deviceId, isAdmi
                       <span className={`text-sm flex-1 font-medium ${r.rank === 1 ? 'text-amber-800 dark:text-gold-300' : 'text-slate-600 dark:text-slate-300'}`}>
                         {r.voted_for_display_name}{isMe && <span className="ml-1.5 text-[10px] font-bold uppercase text-maroon-600 dark:text-maroon-400">You</span>}
                       </span>
-                      <span className="text-sm font-bold text-slate-700 dark:text-slate-200 shrink-0 tabular-nums">{Number(r.average_score).toFixed(1)}<span className="text-[10px] font-medium text-slate-400"> /10</span></span>
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-200 shrink-0 tabular-nums">{speakerScore(r).toFixed(1)}<span className="text-[10px] font-medium text-slate-400"> /10</span></span>
                       {isAdmin && (
                         <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">
-                          {r.rating_count} rating{r.rating_count !== 1 ? 's' : ''}
+                          {r.rating_count}{Number(r.estimated_count) > 0 ? ` + ${r.estimated_count} est.` : ''}
                         </span>
                       )}
                     </div>

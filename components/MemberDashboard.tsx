@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 
 import type { ContestResult, SpeakerRatingResult, EvaluatorRequest, Member, MeetingWithClaims, ParticipationMode, RoleInterestRequest, RoleKey, SpeakerSlotRequest } from '@/lib/types';
-import { ROLE_META, LEADERSHIP_ROLES, HOME_CLUB_NAME, WIC_CLUB_NAME, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
+import { speakerScore, ROLE_META, LEADERSHIP_ROLES, HOME_CLUB_NAME, WIC_CLUB_NAME, memberLeadershipRoles, isClubOfficer, participationMode, participationModeMeta } from '@/lib/types';
 import { SurveyLinks } from '@/components/SurveyLinks';
 import { useWicMemberIds } from '@/hooks/useWicMemberIds';
 import { CONTEST_RUBRIC, RUBRIC_TOTAL } from '@/lib/contest';
@@ -1073,7 +1073,7 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
   // Speakathon per-speaker ratings (1–10) — shown to the speaker once the
   // admin closes that meeting's ballot. Rank is among every rated speaker in
   // the meeting, with ties sharing a place.
-  const [myRatings, setMyRatings] = useState<{ ballotId: string; meetingNumber: number; average: number; count: number; rank: number; of: number }[]>([]);
+  const [myRatings, setMyRatings] = useState<{ ballotId: string; meetingNumber: number; average: number; count: number; estimated: number; rank: number; of: number }[]>([]);
   useEffect(() => {
     const spokeAt = meetings.filter((m) => m.role_claims.some((c) => c.role_key === 'speaker' && c.member_id === member.id));
     if (!spokeAt.length) { setMyRatings([]); return; }
@@ -1090,8 +1090,9 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
           return {
             ballotId: b.id as string,
             meetingNumber: meetings.find((m) => m.id === b.meeting_id)?.number ?? 0,
-            average: Number(mine.average_score),
+            average: speakerScore(mine),
             count: Number(mine.rating_count),
+            estimated: Number(mine.estimated_count ?? 0),
             rank: mine.rank,
             of: results.length,
           };
@@ -1191,7 +1192,10 @@ export function MemberDashboard({ member, allMembers, meetings, onUpdated }: Pro
               <p className="text-lg font-black text-maroon-700 dark:text-maroon-400">
                 {ordinal(r.rank)} <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">of {r.of} speaker{r.of !== 1 ? 's' : ''}</span>
               </p>
-              <p className="text-xs text-slate-400 dark:text-slate-500">Rated by {r.count} {r.count === 1 ? 'person' : 'people'}</p>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                Rated by {r.count} {r.count === 1 ? 'person' : 'people'}
+                {r.estimated > 0 && <> · adjusted for {r.estimated} missed vote{r.estimated !== 1 ? 's' : ''}</>}
+              </p>
             </div>
             <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">
               {r.average.toFixed(1)}<span className="text-base font-medium text-slate-400"> / 10</span>

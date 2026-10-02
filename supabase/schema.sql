@@ -946,6 +946,23 @@ returns boolean security definer language sql stable as $$
   );
 $$;
 
+-- Results, with every missed vote filled in by an ESTIMATE, so each speaker is
+-- judged by the same panel. Voters skip speakers (arrived late, stepped away,
+-- chose not to, can't rate themselves) and a plain average then depends on
+-- WHO skipped: lose two generous voters and you lose two high marks.
+--
+-- Additive model, per ballot:
+--   room   = average of every real rating
+--   habit  = a voter's average, pulled toward the room by one phantom rating
+--            at the room average (so a voter with one rating isn't fully
+--            trusted, and their vote still counts against the room)
+--   effect = a speaker's average of (score − that voter's habit)
+--   estimate(voter, speaker) = habit + effect, clamped to 1–10
+-- final_score averages real ratings plus estimates across every voter who
+-- rated at least one speaker; nobody who never voted is estimated. Real votes
+-- are never altered, and rating_count / total_score / average_score stay the
+-- real-only figures. No-show speakers have no ratings, so never appear.
+drop function if exists get_speaker_rating_results(uuid);
 create or replace function get_speaker_rating_results(p_ballot_id uuid)
 returns table (
   speaker_slot           integer,
@@ -953,20 +970,55 @@ returns table (
   voted_for_display_name text,
   rating_count           bigint,
   total_score            bigint,
-  average_score          numeric
+  average_score          numeric,
+  final_score            numeric,
+  estimated_count        bigint
 ) security definer language sql stable as $$
-  select
-    r.speaker_slot,
-    r.voted_for_member_id,
-    coalesce(m.display_name, r.voted_for_name, 'Unknown') as voted_for_display_name,
-    count(*)                      as rating_count,
-    sum(r.score)                  as total_score,
-    round(avg(r.score)::numeric, 2) as average_score
-  from speaker_ratings r
-  left join members m on m.id = r.voted_for_member_id
-  where r.ballot_id = p_ballot_id
-  group by r.speaker_slot, r.voted_for_member_id, r.voted_for_name, m.display_name
-  order by avg(r.score) desc, count(*) desc;
+  with r as (
+    select sr.speaker_slot,
+           coalesce(sr.voter_member_id::text, 'device:' || sr.device_uuid) as voter,
+           sr.score::numeric as score,
+           sr.voted_for_member_id, sr.voted_for_name, sr.submitted_at
+      from speaker_ratings sr
+     where sr.ballot_id = p_ballot_id
+  ),
+  room as (select avg(score) as mean from r),
+  voters as (
+    select voter, (sum(score) + (select mean from room)) / (count(*) + 1) as habit
+      from r group by voter
+  ),
+  speakers as (
+    select r.speaker_slot,
+           (array_agg(r.voted_for_member_id order by r.submitted_at desc))[1] as member_id,
+           (array_agg(r.voted_for_name      order by r.submitted_at desc))[1] as guest_name,
+           count(*)                as n,
+           sum(r.score)            as total,
+           avg(r.score)            as raw_avg,
+           avg(r.score - v.habit)  as effect
+      from r join voters v on v.voter = r.voter
+     group by r.speaker_slot
+  ),
+  grid as (
+    select s.speaker_slot,
+           coalesce(rr.score, least(10, greatest(1, v.habit + s.effect))) as val,
+           rr.score is null as estimated
+      from speakers s
+      cross join voters v
+      left join r rr on rr.speaker_slot = s.speaker_slot and rr.voter = v.voter
+  )
+  select s.speaker_slot,
+         s.member_id,
+         coalesce(m.display_name, s.guest_name, 'Unknown'),
+         s.n,
+         s.total::bigint,
+         round(s.raw_avg, 2),
+         round(avg(g.val), 2),
+         count(*) filter (where g.estimated)
+    from speakers s
+    join grid g on g.speaker_slot = s.speaker_slot
+    left join members m on m.id = s.member_id
+   group by s.speaker_slot, s.member_id, s.guest_name, m.display_name, s.n, s.total, s.raw_avg
+   order by avg(g.val) desc, s.n desc;
 $$;
 
 -- A speaker giving up their slot (or an admin removing them) closes the gap:
