@@ -57,6 +57,9 @@ function notifyRole(payload: {
   action: 'claimed' | 'released' | 'assigned' | 'removed';
   actorId: string | null;
   actorIsAdmin: boolean;
+  // Set when an evaluator loses their slot because the speaker they were
+  // paired with withdrew — the email then says so instead of a bare "removed".
+  pairedSpeaker?: { memberId: string | null; guestName: string | null };
 }) {
   fetch('/api/notify-role', {
     method: 'POST',
@@ -188,6 +191,15 @@ export function RoleSlot({
   const isSpeaker = roleKey === 'speaker';
   const canEditDetails = !!claim && isSpeaker && (isAdmin || (isOwn && !isPast));
 
+  // Speaker slots are a queue: filled pairs on top, open slots at the bottom.
+  // After anything that changes a speaker/evaluator slot, close any gap left
+  // above a filled speaker (see compact_speaker_slots in supabase/schema.sql).
+  // A database without the function yet just keeps its gaps.
+  async function compactSpeakerQueue() {
+    if (roleKey !== 'speaker' && roleKey !== 'evaluator') return;
+    await supabase.rpc('compact_speaker_slots', { p_meeting_id: meetingId });
+  }
+
   async function handleClaim() {
     if (!memberId || !canClaim || busy) return;
     // Claiming a Prepared Speaker slot first asks who the speaker would like as
@@ -248,6 +260,7 @@ export function RoleSlot({
         }).catch(() => {});
       }
     }
+    await compactSpeakerQueue();
     setBusy(false);
     setChoosingEvaluator(false);
     setJustClaimed(true);
@@ -260,21 +273,36 @@ export function RoleSlot({
     if (!claim || !canRelease || busy) return;
     setBusy(true);
     setConfirmingRelease(false);
-    await supabase.from('role_claims').delete().eq('id', claim.id);
-    // Releasing a speaker vacates the whole pair: drop the paired evaluator (there's
-    // no one to evaluate) and cancel any pending evaluator request, then trim any
-    // now-empty extra slots back toward the meeting's configured base count.
+    // Releasing a speaker vacates the whole pair. Who held the paired evaluator
+    // slot is read first: that evaluator is told why their role disappeared.
+    let pairedEvaluatorId: string | null = null;
     if (roleKey === 'speaker') {
-      await supabase.from('role_claims').delete()
-        .eq('meeting_id', meetingId)
-        .eq('role_key', 'evaluator')
-        .eq('slot_index', slotIndex);
-      await supabase.from('evaluator_requests')
-        .update({ status: 'cancelled' })
-        .eq('meeting_id', meetingId)
-        .eq('speaker_slot_index', slotIndex)
-        .eq('status', 'pending');
+      const { data: evalClaim } = await supabase.from('role_claims').select('member_id')
+        .eq('meeting_id', meetingId).eq('role_key', 'evaluator').eq('slot_index', slotIndex)
+        .maybeSingle();
+      pairedEvaluatorId = evalClaim?.member_id ?? null;
+      // remove_speaker_slot drops the pair and moves every pair below up one
+      // place so no gap is left between speakers (see supabase/schema.sql).
+      const { error: shiftError } = await supabase.rpc('remove_speaker_slot', { p_meeting_id: meetingId, p_slot: slotIndex });
+      if (shiftError) {
+        // Database without the function yet: the old behaviour — vacate the
+        // pair in place, cancel any pending nomination, trim trailing extras.
+        await supabase.from('role_claims').delete().eq('id', claim.id);
+        await supabase.from('role_claims').delete()
+          .eq('meeting_id', meetingId)
+          .eq('role_key', 'evaluator')
+          .eq('slot_index', slotIndex);
+        await supabase.from('evaluator_requests')
+          .update({ status: 'cancelled' })
+          .eq('meeting_id', meetingId)
+          .eq('speaker_slot_index', slotIndex)
+          .eq('status', 'pending');
+      }
       await trimTrailingSpeakerSlots();
+    } else {
+      await supabase.from('role_claims').delete().eq('id', claim.id);
+      // An evaluator leaving a slot whose speaker never signed up empties it.
+      await compactSpeakerQueue();
     }
     // The theme belongs to the Toastmaster of the Day — when that role is given
     // up (or removed by an admin), reset the theme to TBD so it isn't left
@@ -286,6 +314,13 @@ export function RoleSlot({
     // A guest holder has no member row and no inbox — nothing to notify.
     if (claim.member_id) {
       notifyRole({ meetingId, targetMemberId: claim.member_id, roleKey, slotIndex, action: 'released', actorId: memberId, actorIsAdmin: isAdmin });
+    }
+    if (pairedEvaluatorId) {
+      notifyRole({
+        meetingId, targetMemberId: pairedEvaluatorId, roleKey: 'evaluator', slotIndex, action: 'removed',
+        actorId: memberId, actorIsAdmin: isAdmin,
+        pairedSpeaker: { memberId: claim.member_id, guestName: claim.guest_name },
+      });
     }
     onChanged();
   }
@@ -337,6 +372,7 @@ export function RoleSlot({
       member_id: selectedId,
       admin_override: true,
     });
+    await compactSpeakerQueue();
     setBusy(false);
     setAssigning(false);
     notifyRole({ meetingId, targetMemberId: selectedId, roleKey, slotIndex, action: 'assigned', actorId: memberId, actorIsAdmin: isAdmin });
@@ -357,6 +393,7 @@ export function RoleSlot({
       guest_name: guestName,
       admin_override: true,
     });
+    await compactSpeakerQueue();
     setBusy(false);
     setAssigning(false);
     onChanged();

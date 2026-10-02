@@ -8,6 +8,7 @@ import { formatTime, isMeetingLocked, isMeetingPast, getMeetingLockTimeIST, spea
 import { RoleSlot } from './RoleSlot';
 import { WhatsAppCopyButton } from './WhatsAppCopyButton';
 import { BallotModal } from './BallotModal';
+import { SpeakerRatingModal } from './SpeakerRatingModal';
 import { AgendaModal } from './AgendaModal';
 
 interface Props {
@@ -618,13 +619,25 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
           {/* Action buttons */}
           <div className="flex flex-col items-end gap-1.5 shrink-0">
             {ballot?.status === 'open' && memberId && deviceId && (
-              <button
-                onClick={() => setShowBallot(true)}
-                className="pulse-vote bg-gold-300 hover:bg-gold-400 text-slate-900 font-black text-[10px] uppercase tracking-wide
-                           px-3 py-1.5 rounded-full transition-colors shadow-sm"
-              >
-                Vote Now
-              </button>
+              // A speakathon rating ballot sits open between speakers; it only
+              // pulses while a speaker's round is actually live.
+              ballot.ballot_mode === 'speaker_rating' && ballot.active_speaker_slot == null ? (
+                <button
+                  onClick={() => setShowBallot(true)}
+                  className="bg-gold-300/40 hover:bg-gold-300/60 text-slate-700 dark:text-gold-200 font-bold text-[10px] uppercase tracking-wide
+                             px-3 py-1.5 rounded-full transition-colors"
+                >
+                  Voting open
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowBallot(true)}
+                  className="pulse-vote bg-gold-300 hover:bg-gold-400 text-slate-900 font-black text-[10px] uppercase tracking-wide
+                             px-3 py-1.5 rounded-full transition-colors shadow-sm"
+                >
+                  {ballot.ballot_mode === 'speaker_rating' ? 'Rate Speaker' : 'Vote Now'}
+                </button>
+              )
             )}
             {ballot?.status === 'closed' && (
               <button
@@ -1149,7 +1162,17 @@ export function MeetingCard({ meeting, allMembers, memberId, memberAdjacentRoles
         onClose={() => setShowAgenda(false)}
       />
     )}
-    {showBallot && ballot && (ballot.status === 'closed' || (memberId && deviceId)) && (
+    {showBallot && ballot && ballot.ballot_mode === 'speaker_rating' && (ballot.status === 'closed' || (memberId && deviceId)) && (
+      <SpeakerRatingModal
+        ballot={ballot}
+        meeting={meeting}
+        memberId={memberId ?? null}
+        deviceId={deviceId ?? null}
+        isAdmin={isAdmin}
+        onClose={() => setShowBallot(false)}
+      />
+    )}
+    {showBallot && ballot && ballot.ballot_mode !== 'speaker_rating' && (ballot.status === 'closed' || (memberId && deviceId)) && (
       <BallotModal
         ballot={ballot}
         meeting={meeting}

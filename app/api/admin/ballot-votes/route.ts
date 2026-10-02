@@ -30,8 +30,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Speakathon per-speaker ratings — same secrecy model as votes. A missing
+  // table (patch not yet run) just means no ratings, not a failed audit.
+  const { data: ratingRows } = await supabase
+    .from('speaker_ratings')
+    .select('speaker_slot, voter_member_id, voted_for_member_id, voted_for_name, score, submitted_at')
+    .eq('ballot_id', ballotId)
+    .order('speaker_slot')
+    .order('submitted_at');
+
   const memberIds = new Set<string>();
-  for (const r of rows ?? []) {
+  for (const r of [...(rows ?? []), ...(ratingRows ?? [])]) {
     if (r.voter_member_id) memberIds.add(r.voter_member_id as string);
     if (r.voted_for_member_id) memberIds.add(r.voted_for_member_id as string);
   }
@@ -54,5 +63,15 @@ export async function GET(req: NextRequest) {
     submittedAt: r.submitted_at as string,
   }));
 
-  return NextResponse.json({ entries });
+  const ratings = (ratingRows ?? []).map((r) => ({
+    speakerSlot: r.speaker_slot as number,
+    voterName: r.voter_member_id ? (nameById.get(r.voter_member_id as string) ?? 'Member') : 'Guest',
+    votedForName: r.voted_for_member_id
+      ? (nameById.get(r.voted_for_member_id as string) ?? 'Member')
+      : ((r.voted_for_name as string | null) ?? 'Unknown'),
+    score: r.score as number,
+    submittedAt: r.submitted_at as string,
+  }));
+
+  return NextResponse.json({ entries, ratings });
 }

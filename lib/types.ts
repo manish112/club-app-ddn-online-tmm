@@ -22,8 +22,16 @@ export interface Ballot {
   allow_guest_voting?: boolean;
   voter_restriction?: 'all' | 'selected';
   allowed_voter_ids?: string[];
+  // 'speaker_rating' = speakathon per-speaker 1–10 rating, opened one speaker
+  // at a time via active_speaker_slot (null = no speaker being rated right now).
+  ballot_mode?: BallotMode;
+  active_speaker_slot?: number | null;
+  // Speakers the admin marked as a no-show (role_claims ids): never rated or ranked.
+  no_show_claim_ids?: string[];
   created_at: string;
 }
+
+export type BallotMode = 'awards' | 'speaker_rating';
 
 export interface VoteResult {
   category: string;
@@ -31,6 +39,18 @@ export interface VoteResult {
   voted_for_display_name: string;
   vote_count: number;
 }
+
+// One row per rated speaker slot, from get_speaker_rating_results().
+export interface SpeakerRatingResult {
+  speaker_slot: number;
+  voted_for_member_id: string | null;
+  voted_for_display_name: string;
+  rating_count: number;
+  total_score: number;
+  average_score: number;
+}
+
+export const SPEAKER_RATING_SCALE = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
 export type RoleKey =
   | 'speaker'

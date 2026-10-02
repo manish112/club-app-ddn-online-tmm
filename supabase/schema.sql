@@ -366,6 +366,39 @@ alter table votes drop constraint if exists votes_category_check;
 alter table votes add  constraint votes_category_check
   check (category in ('speaker', 'evaluator', 'table_topics', 'role_player', 'aux_role'));
 
+-- Speakathon per-speaker rating. Instead of one awards ballot at the end, a
+-- speakathon ballot (ballot_mode = 'speaker_rating') stays open for the whole
+-- session and the admin points it at one speaker slot at a time: after speaker
+-- 2 finishes, active_speaker_slot = 2, every eligible voter rates them 1–10,
+-- and the admin moves on. NULL means "open, but no speaker is being rated
+-- right now". The mode is fixed when voting opens so a closed ballot's results
+-- still render correctly if the meeting type is later changed.
+alter table ballots add column if not exists ballot_mode text not null default 'awards'
+  check (ballot_mode in ('awards', 'speaker_rating'));
+alter table ballots add column if not exists active_speaker_slot integer;
+-- Speakers marked as a no-show when their turn came — role_claims ids, so the
+-- mark follows the person even if the speaker queue shifts their slot number.
+alter table ballots add column if not exists no_show_claim_ids uuid[] not null default '{}';
+
+create table if not exists speaker_ratings (
+  id                  uuid primary key default gen_random_uuid(),
+  ballot_id           uuid not null references ballots(id) on delete cascade,
+  speaker_slot        integer not null,
+  device_uuid         text not null,
+  -- Same secrecy rules as votes: no select policy, read back only as aggregates.
+  voter_member_id     uuid references members(id),
+  -- Snapshot of who held the slot when they were rated (member or guest name).
+  voted_for_member_id uuid references members(id),
+  voted_for_name      text,
+  score               smallint not null check (score between 1 and 10),
+  submitted_at        timestamptz not null default now(),
+  constraint speaker_ratings_once_per_device unique (ballot_id, speaker_slot, device_uuid)
+);
+
+create unique index if not exists speaker_ratings_once_per_member
+  on speaker_ratings (ballot_id, speaker_slot, voter_member_id)
+  where voter_member_id is not null;
+
 
 -- =============================================================================
 -- 3. CONTEST SCORING (speakathon — Item 1172 ballot)
@@ -900,6 +933,149 @@ $$;
 create or replace function delete_ballot_votes(p_ballot_id uuid)
 returns void security definer language sql as $$
   delete from votes where ballot_id = p_ballot_id;
+  delete from speaker_ratings where ballot_id = p_ballot_id;
+$$;
+
+-- Speakathon per-speaker rating — the same pattern as the votes functions above.
+create or replace function has_rated_speaker(p_ballot_id uuid, p_speaker_slot integer, p_device_uuid text, p_member_id uuid default null)
+returns boolean security definer language sql stable as $$
+  select exists (
+    select 1 from speaker_ratings
+    where ballot_id = p_ballot_id and speaker_slot = p_speaker_slot
+      and (device_uuid = p_device_uuid or (p_member_id is not null and voter_member_id = p_member_id))
+  );
+$$;
+
+create or replace function get_speaker_rating_results(p_ballot_id uuid)
+returns table (
+  speaker_slot           integer,
+  voted_for_member_id    uuid,
+  voted_for_display_name text,
+  rating_count           bigint,
+  total_score            bigint,
+  average_score          numeric
+) security definer language sql stable as $$
+  select
+    r.speaker_slot,
+    r.voted_for_member_id,
+    coalesce(m.display_name, r.voted_for_name, 'Unknown') as voted_for_display_name,
+    count(*)                      as rating_count,
+    sum(r.score)                  as total_score,
+    round(avg(r.score)::numeric, 2) as average_score
+  from speaker_ratings r
+  left join members m on m.id = r.voted_for_member_id
+  where r.ballot_id = p_ballot_id
+  group by r.speaker_slot, r.voted_for_member_id, r.voted_for_name, m.display_name
+  order by avg(r.score) desc, count(*) desc;
+$$;
+
+-- A speaker giving up their slot (or an admin removing them) closes the gap:
+-- their speaker + paired evaluator claims go, and every pair below moves up
+-- one place, so the agenda never shows a hole between two speakers. Done here,
+-- in one transaction, because speaker/evaluator pairing is positional and
+-- several tables key on the slot number — a half-applied shift from the
+-- browser would pair evaluators with the wrong speakers.
+--
+-- The slot count shrinks by one but never below base_speaker_slots (nor 1):
+-- at the configured minimum, the freed slot reappears empty at the bottom for
+-- someone else to claim, exactly as trimming extra slots already behaves.
+create or replace function remove_speaker_slot(p_meeting_id uuid, p_slot integer)
+returns void security definer language plpgsql as $$
+declare
+  v_slots  integer;
+  v_base   integer;
+  v_order  jsonb;
+  v_groups jsonb;
+  v_new    integer;
+begin
+  select speaker_slots, base_speaker_slots, pair_order, pair_groups
+    into v_slots, v_base, v_order, v_groups
+    from meetings where id = p_meeting_id
+    for update;
+  if not found or p_slot < 1 or p_slot > v_slots then return; end if;
+
+  delete from role_claims
+   where meeting_id = p_meeting_id and role_key in ('speaker', 'evaluator') and slot_index = p_slot;
+  update evaluator_requests set status = 'cancelled'
+   where meeting_id = p_meeting_id and speaker_slot_index = p_slot and status = 'pending';
+  delete from speaker_ratings
+   where speaker_slot = p_slot and ballot_id in (select id from ballots where meeting_id = p_meeting_id);
+
+  -- Shift through negatives: a plain "slot_index - 1" can trip the unique
+  -- (meeting_id, role_key, slot_index) mid-statement, row order not guaranteed.
+  update role_claims set slot_index = -slot_index
+   where meeting_id = p_meeting_id and role_key in ('speaker', 'evaluator') and slot_index > p_slot;
+  update role_claims set slot_index = -slot_index - 1
+   where meeting_id = p_meeting_id and role_key in ('speaker', 'evaluator') and slot_index < 0;
+
+  update evaluator_requests set speaker_slot_index = speaker_slot_index - 1
+   where meeting_id = p_meeting_id and speaker_slot_index > p_slot;
+
+  update speaker_ratings set speaker_slot = -speaker_slot
+   where speaker_slot > p_slot and ballot_id in (select id from ballots where meeting_id = p_meeting_id);
+  update speaker_ratings set speaker_slot = -speaker_slot - 1
+   where speaker_slot < 0 and ballot_id in (select id from ballots where meeting_id = p_meeting_id);
+
+  update ballots set active_speaker_slot = case
+      when active_speaker_slot = p_slot then null
+      when active_speaker_slot > p_slot then active_speaker_slot - 1
+      else active_speaker_slot end
+   where meeting_id = p_meeting_id and active_speaker_slot is not null;
+
+  -- Speaking order and heat assignment are keyed by slot number too.
+  v_order := coalesce((
+    select jsonb_agg(case when e::int > p_slot then e::int - 1 else e::int end order by ord)
+      from jsonb_array_elements_text(coalesce(v_order, '[]'::jsonb)) with ordinality as t(e, ord)
+     where e::int <> p_slot), '[]'::jsonb);
+  v_groups := coalesce((
+    select jsonb_object_agg(case when k::int > p_slot then (k::int - 1)::text else k end, v)
+      from jsonb_each(coalesce(v_groups, '{}'::jsonb)) as t(k, v)
+     where k::int <> p_slot), '{}'::jsonb);
+
+  v_new := greatest(coalesce(v_base, 1), v_slots - 1, 1);
+  update meetings set
+    pair_order  = v_order,
+    pair_groups = v_groups,
+    speaker_slots   = v_new,
+    evaluator_slots = case when v_new <> v_slots then v_new else evaluator_slots end
+   where id = p_meeting_id;
+end;
+$$;
+
+-- Speaker slots behave as a QUEUE: filled pairs always sit at the top in
+-- order, open slots collect at the bottom. This closes every gap — a slot
+-- with neither a speaker nor an evaluator, sitting above a filled speaker —
+-- by removing it through remove_speaker_slot, which moves the pairs below up.
+-- A slot whose evaluator is already signed up (waiting for a speaker) is left
+-- alone: removing it would silently drop that evaluator. Called after every
+-- speaker sign-up, since a member can pick any open slot.
+create or replace function compact_speaker_slots(p_meeting_id uuid)
+returns void security definer language plpgsql as $$
+declare
+  v_slot integer;
+begin
+  loop
+    v_slot := null;
+    select s into v_slot
+      from generate_series(1, (select speaker_slots from meetings where id = p_meeting_id)) as s
+     where not exists (
+             select 1 from role_claims
+              where meeting_id = p_meeting_id and role_key in ('speaker', 'evaluator') and slot_index = s)
+       and exists (
+             select 1 from role_claims
+              where meeting_id = p_meeting_id and role_key = 'speaker' and slot_index > s)
+     order by s
+     limit 1;
+    exit when v_slot is null;
+    perform remove_speaker_slot(p_meeting_id, v_slot);
+  end loop;
+end;
+$$;
+
+-- Lets the admin re-run one speaker's round without touching anyone else's.
+create or replace function delete_speaker_ratings(p_ballot_id uuid, p_speaker_slot integer)
+returns void security definer language sql as $$
+  delete from speaker_ratings where ballot_id = p_ballot_id and speaker_slot = p_speaker_slot;
 $$;
 
 
@@ -916,7 +1092,8 @@ alter table role_claims             enable row level security;
 alter table meeting_attendees       enable row level security;
 alter table ballots                 enable row level security;
 alter table votes                   enable row level security;
-alter table jury_scores             enable row level security;
+alter table speaker_ratings         enable row level security;
+alter table jury_scores            enable row level security;
 alter table contest_results         enable row level security;
 alter table speaker_slot_requests   enable row level security;
 alter table evaluator_requests      enable row level security;
@@ -954,7 +1131,7 @@ begin
       'members', 'meetings', 'role_claims', 'meeting_attendees', 'ballots',
       'jury_scores', 'contest_results', 'guest_registrations', 'announcements',
       'member_interest_surveys', 'club_surveys', 'club_survey_responses',
-      'agenda_config', 'votes',
+      'agenda_config', 'votes', 'speaker_ratings',
       'speaker_slot_requests', 'evaluator_requests', 'role_interest_requests'
     ]) as tbl
   loop
@@ -1026,6 +1203,20 @@ end $$;
 -- get_ballot_results(), which is SECURITY DEFINER and returns totals alone.
 create policy "anon insert votes" on votes for insert
   with check (exists (select 1 from ballots where id = ballot_id and status = 'open'));
+
+-- speaker_ratings is stricter still: a rating only lands for the speaker the
+-- admin currently has the ballot pointed at, so nobody can rate ahead or go
+-- back to a speaker whose round is over, and a member can't rate themselves.
+create policy "anon insert speaker_ratings" on speaker_ratings for insert
+  with check (
+    exists (
+      select 1 from ballots b
+      where b.id = ballot_id and b.status = 'open'
+        and b.ballot_mode = 'speaker_rating'
+        and b.active_speaker_slot = speaker_slot
+    )
+    and (voter_member_id is null or voted_for_member_id is null or voter_member_id <> voted_for_member_id)
+  );
 
 
 -- =============================================================================
