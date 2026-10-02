@@ -41,6 +41,9 @@ export interface VoteResult {
 }
 
 // One row per rated speaker slot, from get_speaker_rating_results().
+// rating_count / total_score / average_score are REAL votes only. final_score
+// also counts an estimate for every voter who skipped this speaker (see the
+// function in supabase/schema.sql) and is what speakers are ranked on.
 export interface SpeakerRatingResult {
   speaker_slot: number;
   voted_for_member_id: string | null;
@@ -48,6 +51,14 @@ export interface SpeakerRatingResult {
   rating_count: number;
   total_score: number;
   average_score: number;
+  final_score?: number;      // absent until the database function is updated
+  estimated_count?: number;
+}
+
+// The score speakers are ranked and shown on — falls back to the plain average
+// on a database whose results function predates estimated votes.
+export function speakerScore(r: Pick<SpeakerRatingResult, 'average_score' | 'final_score'>): number {
+  return Number(r.final_score ?? r.average_score);
 }
 
 export const SPEAKER_RATING_SCALE = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;

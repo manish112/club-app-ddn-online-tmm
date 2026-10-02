@@ -852,14 +852,15 @@ export function buildAgendaSections(
 }
 
 // ── Speakathon speaker ratings ───────────────────────────────────────────────
-// Ranks get_speaker_rating_results() rows by average score, highest first.
-// Ties share a place ("1, 2, 2, 4"), so two speakers on the same average are
-// never split by an arbitrary tiebreak.
-export function rankSpeakerRatings<T extends { average_score: number | string }>(rows: T[]): (T & { rank: number })[] {
-  const sorted = [...rows].sort((a, b) => Number(b.average_score) - Number(a.average_score));
+// Ranks get_speaker_rating_results() rows by final score (estimates for missed
+// votes included), highest first. Ties share a place ("1, 2, 2, 4"), so two
+// speakers on the same score are never split by an arbitrary tiebreak.
+export function rankSpeakerRatings<T extends { average_score: number | string; final_score?: number | string | null }>(rows: T[]): (T & { rank: number })[] {
+  const score = (r: T) => Number(r.final_score ?? r.average_score);
+  const sorted = [...rows].sort((a, b) => score(b) - score(a));
   return sorted.map((r) => ({
     ...r,
-    rank: 1 + sorted.filter((o) => Number(o.average_score) > Number(r.average_score)).length,
+    rank: 1 + sorted.filter((o) => score(o) > score(r)).length,
   }));
 }
 
